@@ -115,5 +115,115 @@
       "source": "Clair",
       "note": "Gym reward after Clair/Dragon's Den progression."
     }
+  ],
+  "purchasableMachines": [
+    {
+      "machine": "TM70",
+      "move": "Flash",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 1000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM17",
+      "move": "Protect",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 2000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM54",
+      "move": "False Swipe",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 2000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM83",
+      "move": "Natural Gift",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 2000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM16",
+      "move": "Light Screen",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 2000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM33",
+      "move": "Reflect",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 2000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM22",
+      "move": "Solar Beam",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 3000,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM52",
+      "move": "Focus Blast",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 5500,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM38",
+      "move": "Fire Blast",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 5500,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM25",
+      "move": "Thunder",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 5500,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM14",
+      "move": "Blizzard",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 5500,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM15",
+      "move": "Hyper Beam",
+      "availableFrom": 2,
+      "currency": "money",
+      "unitCost": 7500,
+      "source": "Goldenrod Department Store 5F",
+      "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    }
   ]
 }
