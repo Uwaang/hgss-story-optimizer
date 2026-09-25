@@ -290,6 +290,7 @@ async function cmdPool() {
       species: mon.species,
       availableFrom: mon.availableFrom,
       familyId: mon.familyId,
+      growthRate: mon.growthRate ?? null,
       entryLevelMin: mon.entryLevelMin ?? null,
       entryLevelMax: mon.entryLevelMax ?? null,
       speciesByStage: mon.speciesByStage,
