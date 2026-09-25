@@ -477,7 +477,15 @@ async function runBeamSearch({
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns);
 
-  let screened = screenRows.slice(0, Math.min(candidateCap, screenRows.length)).map(row => row.candidate);
+  const eligibleScreenRows = requiredCandidate
+    ? screenRows.filter(row =>
+        row.candidate.exclusiveGroup !== 'starter' ||
+        candidateIdentity(row.candidate) === candidateIdentity(requiredCandidate)
+      )
+    : screenRows;
+  let screened = eligibleScreenRows
+    .slice(0, Math.min(candidateCap, eligibleScreenRows.length))
+    .map(row => row.candidate);
   if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
     screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
   }
