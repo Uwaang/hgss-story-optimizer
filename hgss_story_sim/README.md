@@ -83,7 +83,7 @@ EXP supply profiles:
 - `normal-route`: canonical-route map envelope plus the 21 major battles; this intentionally excludes the extra Gym/Rocket maps used only by the upper envelope
 - `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
 
-Late-joining Pokémon never receive EXP from earlier stages. Same-stage timing now defaults to **map order**: the canonical route's newly opened maps are processed in order, and a source-mapped Pokémon joins when its acquisition map is reached. It can receive trainer EXP from that map and later maps, but not from earlier maps in the same stage. Gifts/statics without a reliable map remain conservative and join after the stage's map EXP.
+Late-joining Pokémon never receive EXP from earlier stages. Same-stage timing now defaults to **boss-windowed map order**. `config/exp-timing.json` assigns route/Gym/Rocket maps to the scored boss they occur before, then those maps are processed in route order inside that window. A source-mapped Pokémon joins when its acquisition map is reached, so it can receive trainer EXP from that point forward without inheriting earlier same-stage EXP. Manual gifts/statics can provide a conservative `beforeBoss` hint; anything still unresolved falls back to the final scored boss of that stage.
 
 Natural EXP supports two deterministic allocation policies:
 
@@ -291,7 +291,7 @@ This is not yet a bit-perfect HGSS story emulator.
 
 - trainer bag-item use is not modeled;
 - battle policy is heuristic rather than a globally optimal controller or exact HGSS AI;
-- reachability stages and within-stage map order are curated checkpoints, not a complete event-graph proof;
+- reachability stages and boss-window/map ordering are curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
 - `normal-route` is a canonical-map envelope, not yet a trainer-by-trainer proof of the exact mandatory/on-route subset;
@@ -310,6 +310,7 @@ GitHub Actions currently checks:
 - exact growth-curve smoke
 - source-backed natural EXP supply and real per-Pokémon battle levels
 - balanced vs boss-aware EXP allocation
+- map-level acquisition timing and boss-window ordering
 - paid-grind EXP / expected-wild-battle accounting
 - starter-specific 21-battle route selection
 - real battle completion
