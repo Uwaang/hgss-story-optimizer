@@ -156,7 +156,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        expAllocator: [balanced, boss-aware]
+        expAllocator: [balanced, boss-aware-soft, boss-aware]
     defaults:
       run:
         working-directory: hgss_story_sim
