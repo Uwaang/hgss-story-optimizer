@@ -43,5 +43,77 @@
       "availableFrom": 7,
       "note": "Ice Path pickup before Clair."
     }
+  ],
+  "singleUseMachines": [
+    {
+      "machine": "TM70",
+      "move": "Flash",
+      "availableFrom": 0,
+      "source": "Sprout Tower",
+      "note": "Gift before Falkner."
+    },
+    {
+      "machine": "TM51",
+      "move": "Roost",
+      "availableFrom": 1,
+      "source": "Falkner",
+      "note": "Gym reward after Falkner."
+    },
+    {
+      "machine": "TM05",
+      "move": "Roar",
+      "availableFrom": 1,
+      "source": "Route 32",
+      "note": "Gift on Route 32 before Bugsy."
+    },
+    {
+      "machine": "TM89",
+      "move": "U-turn",
+      "availableFrom": 2,
+      "source": "Bugsy",
+      "note": "Gym reward after Bugsy."
+    },
+    {
+      "machine": "TM45",
+      "move": "Attract",
+      "availableFrom": 3,
+      "source": "Whitney",
+      "note": "Gym reward after Whitney."
+    },
+    {
+      "machine": "TM30",
+      "move": "Shadow Ball",
+      "availableFrom": 4,
+      "source": "Morty",
+      "note": "Gym reward after Morty."
+    },
+    {
+      "machine": "TM01",
+      "move": "Focus Punch",
+      "availableFrom": 5,
+      "source": "Chuck",
+      "note": "Gym reward after Chuck."
+    },
+    {
+      "machine": "TM23",
+      "move": "Iron Tail",
+      "availableFrom": 6,
+      "source": "Jasmine",
+      "note": "Gym reward after Jasmine."
+    },
+    {
+      "machine": "TM07",
+      "move": "Hail",
+      "availableFrom": 7,
+      "source": "Pryce",
+      "note": "Gym reward after Pryce."
+    },
+    {
+      "machine": "TM59",
+      "move": "Dragon Pulse",
+      "availableFrom": 8,
+      "source": "Clair",
+      "note": "Gym reward after Clair/Dragon's Den progression."
+    }
   ]
 }
