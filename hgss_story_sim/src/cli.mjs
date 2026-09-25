@@ -113,11 +113,16 @@ async function cmdSmoke() {
   const bosses = await loadBosses();
   const falkner = bosses[0];
   const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer);
+  const pool = await readJson('config/candidates.example.json');
+  const playerTeam = materializeCandidateTeam(pool.candidates, falkner.stage, falkner.aceLevel);
+  const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
   console.log(JSON.stringify({
     source: falkner.key,
     trainerId: falkner.trainerId,
     aceLevel: falkner.aceLevel,
+    playerTeam: playerTeam.map(mon => mon.species),
     showdownTeam: enemyTeam,
+    battle,
   }, null, 2));
 }
 
