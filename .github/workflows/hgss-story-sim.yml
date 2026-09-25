@@ -149,6 +149,35 @@ jobs:
           path: hgss_story_sim/results/exp-ace-paid.json
           if-no-files-found: error
 
+
+  allocator_compare:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[allocator-compare]')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        expAllocator: [balanced, boss-aware]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize ${{ matrix.expAllocator }} allocator
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=${{ matrix.expAllocator }} --runs=1 --screen-runs=1 --final-runs=10 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/allocator-${{ matrix.expAllocator }}.json
+      - name: Upload ${{ matrix.expAllocator }} result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-${{ matrix.expAllocator }}-hg-cyndaquil
+          path: hgss_story_sim/results/allocator-${{ matrix.expAllocator }}.json
+          if-no-files-found: error
+
   convergence:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
     runs-on: ubuntu-latest
