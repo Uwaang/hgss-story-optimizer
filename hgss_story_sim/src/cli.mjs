@@ -406,7 +406,7 @@ async function cmdSimulate() {
     throw new Error('baselineTeam violates team constraints');
   }
 
-  const moveAccess = await loadMoveAccess();
+  const moveAccess = await loadMoveAccess(resourceProfile);
   const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess);
   console.log(JSON.stringify({
     pool: poolPath,
