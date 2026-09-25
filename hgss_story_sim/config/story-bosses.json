@@ -1,18 +1,127 @@
 {
   "sourceCommit": "9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "notes": "Stage is the acquisition checkpoint, not the array index. Multiple story battles may share one stage without shifting availability data.",
   "bosses": [
-    {"key": "TRAINER_LEADER_FALKNER_FALKNER", "label": "Falkner"},
-    {"key": "TRAINER_LEADER_BUGSY_BUGSY", "label": "Bugsy"},
-    {"key": "TRAINER_LEADER_WHITNEY", "label": "Whitney"},
-    {"key": "TRAINER_LEADER_MORTY_MORTY", "label": "Morty"},
-    {"key": "TRAINER_LEADER_CHUCK_CHUCK", "label": "Chuck"},
-    {"key": "TRAINER_LEADER_JASMINE_JASMINE", "label": "Jasmine"},
-    {"key": "TRAINER_LEADER_PRYCE_PRYCE", "label": "Pryce"},
-    {"key": "TRAINER_LEADER_CLAIR_CLAIR", "label": "Clair"},
-    {"key": "TRAINER_ELITE_FOUR_WILL_WILL", "label": "Will"},
-    {"key": "TRAINER_ELITE_FOUR_KOGA_KOGA", "label": "Koga"},
-    {"key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO", "label": "Bruno"},
-    {"key": "TRAINER_ELITE_FOUR_KAREN_KAREN", "label": "Karen"},
-    {"key": "TRAINER_CHAMPION_LANCE", "label": "Lance"}
+    {
+      "stage": 0,
+      "key": "TRAINER_LEADER_FALKNER_FALKNER",
+      "label": "Falkner",
+      "kind": "gym"
+    },
+    {
+      "stage": 1,
+      "key": "TRAINER_EXECUTIVE_PROTON_PROTON",
+      "label": "Proton (Slowpoke Well)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0060_D26R0102.s"
+    },
+    {
+      "stage": 1,
+      "key": "TRAINER_LEADER_BUGSY_BUGSY",
+      "label": "Bugsy",
+      "kind": "gym"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_LEADER_WHITNEY",
+      "label": "Whitney",
+      "kind": "gym"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_LEADER_MORTY_MORTY",
+      "label": "Morty",
+      "kind": "gym"
+    },
+    {
+      "stage": 4,
+      "key": "TRAINER_LEADER_CHUCK_CHUCK",
+      "label": "Chuck",
+      "kind": "gym"
+    },
+    {
+      "stage": 5,
+      "key": "TRAINER_LEADER_JASMINE_JASMINE",
+      "label": "Jasmine",
+      "kind": "gym"
+    },
+    {
+      "stage": 6,
+      "key": "TRAINER_EXECUTIVE_PETREL_PETREL_2",
+      "label": "Petrel (Mahogany Hideout)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0091_D35R0104.s"
+    },
+    {
+      "stage": 6,
+      "key": "TRAINER_LEADER_PRYCE_PRYCE",
+      "label": "Pryce",
+      "kind": "gym"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_EXECUTIVE_PETREL_PETREL",
+      "label": "Petrel (Radio Tower)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0033_D23R0105.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_EXECUTIVE_ARCHER_ARCHER",
+      "label": "Archer (Radio Tower)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0034_D23R0106.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_LEADER_CLAIR_CLAIR",
+      "label": "Clair",
+      "kind": "gym"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_ELITE_FOUR_WILL_WILL",
+      "label": "Will",
+      "kind": "elite4"
+    },
+    {
+      "stage": 9,
+      "key": "TRAINER_ELITE_FOUR_KOGA_KOGA",
+      "label": "Koga",
+      "kind": "elite4"
+    },
+    {
+      "stage": 10,
+      "key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO",
+      "label": "Bruno",
+      "kind": "elite4"
+    },
+    {
+      "stage": 11,
+      "key": "TRAINER_ELITE_FOUR_KAREN_KAREN",
+      "label": "Karen",
+      "kind": "elite4"
+    },
+    {
+      "stage": 12,
+      "key": "TRAINER_CHAMPION_LANCE",
+      "label": "Lance",
+      "kind": "champion"
+    }
+  ],
+  "deferred": [
+    {
+      "label": "Ariana + Grunt (Mahogany Hideout)",
+      "reason": "This is a MultiBattle with Lance as ally; single-battle modeling would distort difficulty.",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0090_D35R0103.s"
+    },
+    {
+      "label": "Radio Tower event-trainer Proton/Ariana",
+      "reason": "Presence is confirmed in event data; mandatory-route reachability still needs verification before weighting them."
+    },
+    {
+      "label": "Rival Silver",
+      "reason": "Trainer variant depends on the player's starter; requires starter-aware route selection rather than counting all variants."
+    }
   ]
 }
