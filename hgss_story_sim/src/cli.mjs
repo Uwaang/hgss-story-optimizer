@@ -657,7 +657,6 @@ async function cmdSimulate() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
-  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -1113,7 +1112,6 @@ async function cmdSearch() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
-  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const story = await loadStory();
 
   let candidates;
@@ -1224,7 +1222,6 @@ async function cmdOptimize() {
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
-  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
 
   const story = await loadStory();
