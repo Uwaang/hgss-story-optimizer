@@ -42,6 +42,8 @@ jobs:
         run: npm run exp-budget-smoke
       - name: EXP envelope comparison smoke test
         run: npm run exp-envelope-smoke
+      - name: Legacy top-team EXP envelope probe
+        run: npm run exp-envelope -- --version=HEARTGOLD --team=Cyndaquil,Slowpoke,Tauros,Goldeen,Dunsparce,Lapras --resources=all --spend-policy=natural --runs=1
       - name: Capture-search cost smoke test
         run: npm run capture-smoke
       - name: EXP-aware real-battle smoke test
