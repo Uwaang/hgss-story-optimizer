@@ -145,6 +145,27 @@ npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --final-runs=10
 ```
 
+### EXP envelope comparison
+
+Because `major` is a hard lower bound and `all-accessible` is an accessible-trainer upper envelope rather than a proven normal route, a fixed party can be cross-evaluated under all three EXP assumptions:
+
+```bash
+npm run exp-envelope -- \
+  --version=HEARTGOLD \
+  --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Tentacool \
+  --resources=all \
+  --spend-policy=natural \
+  --runs=3
+```
+
+This reports the same team under:
+
+- `major + none`: low-EXP lower bound;
+- `all-accessible + none`: natural-EXP upper envelope;
+- `all-accessible + ace-paid`: explicit grind-to-ace reference with extra EXP and expected wild battles charged instead of free levels.
+
+A team that only performs well at one envelope endpoint should not be treated as a robust story-party result.
+
 ## Search
 
 `prefix` exists mainly as a deterministic regression path.
