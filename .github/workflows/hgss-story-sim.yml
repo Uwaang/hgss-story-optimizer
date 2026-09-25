@@ -51,3 +51,12 @@ jobs:
         run: npm run search -- --pool=canonical --version=HEARTGOLD --runs=1 --limit=2 --team-size=6
       - name: Beam-search smoke test
         run: npm run search -- --strategy=beam --starter=Cyndaquil --runs=1 --screen-runs=1 --beam-width=2 --candidate-cap=5 --team-size=3
+      - name: Preliminary starter optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize]')
+        run: |
+          for version in HEARTGOLD SOULSILVER; do
+            for starter in Chikorita Cyndaquil Totodile; do
+              echo "===== $version / $starter ====="
+              npm run search -- --pool=canonical --version=$version --strategy=beam --starter=$starter --runs=1 --screen-runs=1 --beam-width=3 --candidate-cap=12 --team-size=6
+            done
+          done
