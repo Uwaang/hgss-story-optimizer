@@ -937,6 +937,40 @@ async function cmdOptimize() {
   console.log(serialized);
 }
 
+async function cmdResourceMonotonicSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const wanted = ['Cyndaquil', 'Dunsparce', 'Geodude'];
+  const team = wanted.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing monotonic-smoke candidate: ${name}`);
+    return candidate;
+  });
+  const shortRoute = story.bosses.filter(battle => Number(battle.stage) <= 2);
+
+  const results = {};
+  for (const profile of ['core', 'money', 'all']) {
+    const moveAccess = await loadMoveAccess(profile);
+    results[profile] = await evaluateCandidates(team, shortRoute, 1, moveAccess);
+  }
+
+  if (results.money.score < results.core.score) {
+    throw new Error(`money profile regressed below core: ${results.money.score} < ${results.core.score}`);
+  }
+  if (results.all.score < results.money.score) {
+    throw new Error(`all profile regressed below money: ${results.all.score} < ${results.money.score}`);
+  }
+
+  console.log(JSON.stringify(Object.fromEntries(
+    Object.entries(results).map(([profile, result]) => [profile, {
+      score: result.score,
+      worstBossWinRate: result.worstBossWinRate,
+      effectiveResourceProfile: result.effectiveResourceProfile,
+      purchaseCosts: result.purchaseCosts,
+    }])
+  ), null, 2));
+}
+
 async function cmdMoveScoreSmoke() {
   const aerialAce = candidateMoveUtility('Pidgeot', 'Aerial Ace');
   const hyperBeam = candidateMoveUtility('Pidgeot', 'Hyper Beam');
@@ -1259,6 +1293,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'resource-monotonic-smoke': cmdResourceMonotonicSmoke,
   'move-score-smoke': cmdMoveScoreSmoke,
   'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
@@ -1273,7 +1308,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, move-score-smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
