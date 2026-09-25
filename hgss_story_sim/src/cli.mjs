@@ -18,7 +18,15 @@ async function readJson(relativePath) {
   return JSON.parse(await fs.readFile(path.join(ROOT, relativePath), 'utf8'));
 }
 
-async function loadMoveAccess() {
+function normalizeResourceProfile(value) {
+  const profile = String(value || 'all').toLowerCase();
+  if (!['core', 'money', 'all'].includes(profile)) {
+    throw new Error(`Unknown resource profile: ${value}. Use core, money, or all.`);
+  }
+  return profile;
+}
+
+async function loadMoveAccess(resourceProfile = 'all') {
   const config = await readJson('config/move-access.json');
   if (!Array.isArray(config.reusableMachines)) {
     throw new Error('move-access.json must contain reusableMachines[]');
@@ -26,7 +34,23 @@ async function loadMoveAccess() {
   if (!Array.isArray(config.singleUseMachines)) {
     throw new Error('move-access.json must contain singleUseMachines[]');
   }
-  return config;
+  if (!Array.isArray(config.purchasableMachines)) {
+    throw new Error('move-access.json must contain purchasableMachines[]');
+  }
+
+  const profile = normalizeResourceProfile(resourceProfile);
+  let purchasableMachines = [];
+  if (profile === 'money') {
+    purchasableMachines = config.purchasableMachines.filter(machine => machine.currency === 'money');
+  } else if (profile === 'all') {
+    purchasableMachines = config.purchasableMachines;
+  }
+
+  return {
+    ...config,
+    resourceProfile: profile,
+    purchasableMachines,
+  };
 }
 
 function arg(name, fallback) {
@@ -361,6 +385,7 @@ async function cmdValidate() {
 async function cmdSimulate() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -376,6 +401,7 @@ async function cmdSimulate() {
   console.log(JSON.stringify({
     pool: poolPath,
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
+    resourceProfile,
     runsPerBoss: runs,
     ...result,
   }, null, 2));
@@ -677,6 +703,7 @@ async function cmdSearch() {
   const candidateCap = Number(arg('candidate-cap', '24'));
   const screenRuns = Number(arg('screen-runs', '1'));
   const finalRuns = Number(arg('final-runs', String(runs)));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const story = await loadStory();
 
   let candidates;
@@ -688,7 +715,7 @@ async function cmdSearch() {
 
   if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
   const requiredCandidate = findStarterCandidate(candidates, starterName);
-  const moveAccess = await loadMoveAccess();
+  const moveAccess = await loadMoveAccess(resourceProfile);
 
   if (strategy === 'beam') {
     const result = await runBeamSearch({
@@ -708,6 +735,7 @@ async function cmdSearch() {
       version: poolPath === 'canonical' ? version : undefined,
       strategy,
       starter: requiredCandidate?.species || 'any',
+      resourceProfile,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -748,6 +776,7 @@ async function cmdSearch() {
     version: poolPath === 'canonical' ? version : undefined,
     strategy,
     starter: requiredCandidate?.species || 'any',
+    resourceProfile,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -771,14 +800,16 @@ async function cmdOptimize() {
   const beamWidth = Number(arg('beam-width', '3'));
   const candidateCap = Number(arg('candidate-cap', '12'));
   const teamSize = Number(arg('team-size', '6'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
 
   const story = await loadStory();
-  const moveAccess = await loadMoveAccess();
+  const moveAccess = await loadMoveAccess(resourceProfile);
   const output = {
     schemaVersion: 1,
     sourceCommit: story.config.sourceCommit,
     battleEngine: 'pokemon-showdown@0.11.11/gen4customgame',
     policy: 'greedy-moves+conservative-player-switching',
+    resourceProfile,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -831,6 +862,31 @@ async function cmdOptimize() {
     console.error(`wrote optimization result: ${absolutePath}`);
   }
   console.log(serialized);
+}
+
+async function cmdResourceSmoke() {
+  const [core, money, all] = await Promise.all([
+    loadMoveAccess('core'),
+    loadMoveAccess('money'),
+    loadMoveAccess('all'),
+  ]);
+
+  if (core.purchasableMachines.length !== 0) {
+    throw new Error('core profile must not contain purchasable machines');
+  }
+  if (!money.purchasableMachines.length || money.purchasableMachines.some(machine => machine.currency !== 'money')) {
+    throw new Error('money profile must contain only money-purchasable machines');
+  }
+  if (all.purchasableMachines.length <= money.purchasableMachines.length ||
+      !all.purchasableMachines.some(machine => machine.currency === 'coins')) {
+    throw new Error('all profile must include Game Corner coin machines');
+  }
+
+  console.log(JSON.stringify({
+    core: core.purchasableMachines.length,
+    money: money.purchasableMachines.length,
+    all: all.purchasableMachines.length,
+  }, null, 2));
 }
 
 async function cmdRouteSmoke() {
@@ -1111,6 +1167,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
@@ -1123,7 +1180,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
