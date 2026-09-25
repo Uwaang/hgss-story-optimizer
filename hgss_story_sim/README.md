@@ -222,6 +222,8 @@ The current CI optimization profile uses beam width 4, candidate cap 16, and 10-
 
 Final comparison runs are executed on the same commit for both `all` and `core` resource profiles so move-selection changes do not contaminate the comparison.
 
+The current comparison also penalizes recharge, charge-turn, recoil, crash and self-KO move drawbacks in the move-selection heuristic.
+
 ## Next milestones
 
 1. Verify and add remaining mandatory Rocket/event encounters.
