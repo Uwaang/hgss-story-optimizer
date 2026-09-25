@@ -90,7 +90,7 @@ jobs:
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
         run: |
           mkdir -p results
-          npm run convergence -- --version=HEARTGOLD --starter=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --exp-allocator=balanced --runs=1 --screen-runs=1 --final-runs=2 --beam-widths=4,8,16 --candidate-caps=16,24 --team-size=6 > results/convergence-hg-cyndaquil.json
+          npm run convergence -- --version=HEARTGOLD --starter=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --exp-allocator=balanced --runs=1 --screen-runs=1 --final-runs=2 --pairs=4:16,8:24 --team-size=6 > results/convergence-hg-cyndaquil.json
       - name: Upload convergence benchmark
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
         uses: actions/upload-artifact@v4
