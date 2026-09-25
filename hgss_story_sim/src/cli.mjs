@@ -573,6 +573,10 @@ async function cmdOptimize() {
   const story = await loadStory();
   const moveAccess = await loadMoveAccess();
   const output = {
+    schemaVersion: 1,
+    sourceCommit: story.config.sourceCommit,
+    battleEngine: 'pokemon-showdown@0.11.11/gen4customgame',
+    policy: 'greedy-moves+conservative-player-switching',
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -586,7 +590,10 @@ async function cmdOptimize() {
     const pool = await loadCanonicalPool(version, story);
     const candidates = pool.candidates;
     const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns);
-    output.versions[version] = {};
+    output.versions[version] = {
+      candidateCount: candidates.length,
+      starters: {},
+    };
 
     for (const starterName of starters) {
       const requiredCandidate = findStarterCandidate(candidates, starterName);
@@ -603,7 +610,7 @@ async function cmdOptimize() {
         requiredCandidate,
         screenRowsOverride: screenRows,
       });
-      output.versions[version][requiredCandidate.species] = {
+      output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
         screenedCandidates: result.screenedCandidates,
         evaluatedTeams: result.evaluatedTeams,
