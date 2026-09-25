@@ -197,20 +197,46 @@ export function trainerBattleExp(trainer, expYieldBySpecies) {
   return { total, details };
 }
 
-function collectTrainerKeys(value, out = new Set()) {
+function collectTrainerRefs(value, out = new Map()) {
   if (typeof value === 'string') {
-    const regex = /std_trainer(?:_2)?\((TRAINER_[A-Z0-9_]+)\)/g;
-    for (const match of value.matchAll(regex)) out.add(match[1]);
+    const regex = /std_trainer(_2)?\((TRAINER_[A-Z0-9_]+)\)/g;
+    for (const match of value.matchAll(regex)) {
+      const key = match[2];
+      const existing = out.get(key) || { key, isDouble: false };
+      if (match[1]) existing.isDouble = true;
+      out.set(key, existing);
+    }
     return out;
   }
   if (Array.isArray(value)) {
-    for (const item of value) collectTrainerKeys(item, out);
+    for (const item of value) collectTrainerRefs(item, out);
     return out;
   }
   if (value && typeof value === 'object') {
-    for (const item of Object.values(value)) collectTrainerKeys(item, out);
+    for (const item of Object.values(value)) collectTrainerRefs(item, out);
   }
   return out;
+}
+
+function parsePrizeMoneyTable(text) {
+  const result = new Map();
+  const start = text.indexOf('sPrizeMoneyTbl:');
+  if (start < 0) return result;
+  const block = text.slice(start, text.indexOf('.public sBattleScriptCommandTable', start));
+  const row = /\.short\s+(TRAINERCLASS_[A-Z0-9_]+),\s*(\d+)/g;
+  for (const match of block.matchAll(row)) {
+    result.set(match[1], Number(match[2]));
+  }
+  return result;
+}
+
+export function trainerPrizeMoney(trainer, prizeMultiplierByClass, isDouble = false) {
+  const party = trainer?.party || [];
+  if (!party.length) return 0;
+  const lastLevel = Number(party[party.length - 1].level || 0);
+  const multiplier = Number(prizeMultiplierByClass.get(trainer.class) || 0);
+  const doubleMultiplier = isDouble ? 2 : 1;
+  return lastLevel * 4 * multiplier * doubleMultiplier;
 }
 
 async function loadZoneEventPaths(commit) {
@@ -236,9 +262,10 @@ function earliestMapStages(access) {
 }
 
 export async function buildExpWorld({ commit, access, trainerSource, version = 'HEARTGOLD' }) {
-  const [personalJson, encounterJson, eventPaths] = await Promise.all([
+  const [personalJson, encounterJson, prizeMoneySource, eventPaths] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
+    fetchText(`${PRET_RAW_ROOT}/${commit}/asm/overlay_12_battle_command.s`),
     loadZoneEventPaths(commit),
   ]);
 
@@ -249,6 +276,7 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
     ])
   );
 
+  const prizeMultiplierByClass = parsePrizeMoneyTable(prizeMoneySource);
   const mapStages = earliestMapStages(access);
   const mapRows = [...mapStages.entries()]
     .map(([map, stage]) => ({ map, stage, path: eventPaths.get(map) || null }))
@@ -260,13 +288,14 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
 
   const seenTrainerKeys = new Set();
   const stageTrainerRewards = new Map();
+  const stageMoneyRewards = new Map();
   const trainerRows = [];
 
   for (let index = 0; index < mapRows.length; index += 1) {
     const row = mapRows[index];
-    const keys = collectTrainerKeys(eventJsons[index]);
+    const refs = collectTrainerRefs(eventJsons[index]);
 
-    for (const key of keys) {
+    for (const { key, isDouble } of refs.values()) {
       if (seenTrainerKeys.has(key)) continue;
       seenTrainerKeys.add(key);
 
@@ -276,12 +305,15 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
       if (!trainer) continue;
 
       const reward = trainerBattleExp(trainer, expYieldBySpecies);
+      const prizeMoney = trainerPrizeMoney(trainer, prizeMultiplierByClass, isDouble);
       const trainerRow = {
         key,
         trainerId,
         map: row.map,
         stage: row.stage,
+        isDouble,
         totalExp: reward.total,
+        prizeMoney,
         party: reward.details,
       };
       trainerRows.push(trainerRow);
@@ -294,6 +326,15 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
       stageBucket.totalExp += reward.total;
       stageBucket.trainers.push(trainerRow);
       stageTrainerRewards.set(row.stage, stageBucket);
+
+      const moneyBucket = stageMoneyRewards.get(row.stage) || {
+        stage: row.stage,
+        totalMoney: 0,
+        trainers: [],
+      };
+      moneyBucket.totalMoney += prizeMoney;
+      moneyBucket.trainers.push(trainerRow);
+      stageMoneyRewards.set(row.stage, moneyBucket);
     }
   }
 
@@ -303,8 +344,10 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
     commit,
     version,
     expYieldBySpecies,
+    prizeMultiplierByClass,
     bestWildByStage,
     stageTrainerRewards,
+    stageMoneyRewards,
     mapTrainerRows: trainerRows,
     mapCount: mapRows.length,
     unresolvedMaps: [...mapStages.entries()]
@@ -379,12 +422,13 @@ export function allocateBalancedExp(states, amount) {
   return { allocated, unallocated: remaining };
 }
 
-function stageMapExp(expWorld, stage, excludedKeys) {
+function stageMapResources(expWorld, stage, excludedKeys) {
   const bucket = expWorld.stageTrainerRewards.get(Number(stage));
-  if (!bucket) return { total: 0, trainers: [] };
+  if (!bucket) return { totalExp: 0, totalMoney: 0, trainers: [] };
   const trainers = bucket.trainers.filter(row => !excludedKeys.has(row.key));
   return {
-    total: trainers.reduce((sum, row) => sum + row.totalExp, 0),
+    totalExp: trainers.reduce((sum, row) => sum + row.totalExp, 0),
+    totalMoney: trainers.reduce((sum, row) => sum + Number(row.prizeMoney || 0), 0),
     trainers,
   };
 }
@@ -448,6 +492,10 @@ export function buildTeamExpSchedule({
   let totalUnallocatedExp = 0;
   let totalGrindExp = 0;
   let totalExpectedGrindBattles = 0;
+  const startingMoney = 3000;
+  let totalMapMoney = 0;
+  let totalMajorMoney = 0;
+  let currentMoney = startingMoney;
 
   function addAvailable(stage) {
     for (const state of pending) {
@@ -462,15 +510,19 @@ export function buildTeamExpSchedule({
     addAvailable(stage);
 
     let mapExpBefore = 0;
+    let mapMoneyBefore = 0;
     let mapTrainerCount = 0;
     if (!stageStarted.has(stage)) {
       stageStarted.add(stage);
       if (profile === 'all-accessible') {
-        const source = stageMapExp(expWorld, stage, excludedMapTrainerKeys);
-        mapExpBefore = source.total;
+        const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
+        mapExpBefore = source.totalExp;
+        mapMoneyBefore = source.totalMoney;
         mapTrainerCount = source.trainers.length;
         const allocation = allocateBalancedExp(states, mapExpBefore);
         totalMapExp += mapExpBefore;
+        totalMapMoney += mapMoneyBefore;
+        currentMoney += mapMoneyBefore;
         totalAllocatedExp += allocation.allocated;
         totalUnallocatedExp += allocation.unallocated;
       }
@@ -495,7 +547,13 @@ export function buildTeamExpSchedule({
     }
 
     const levelsBefore = snapshotLevels(states);
+    const moneyBefore = currentMoney;
     const majorReward = trainerBattleExp(boss.trainer, expWorld.expYieldBySpecies);
+    const majorPrizeMoney = trainerPrizeMoney(
+      boss.trainer,
+      expWorld.prizeMultiplierByClass,
+      false,
+    );
     battles.push({
       battleIndex,
       key: boss.key,
@@ -503,7 +561,9 @@ export function buildTeamExpSchedule({
       stage,
       aceLevel: boss.aceLevel,
       mapExpBefore,
+      mapMoneyBefore,
       mapTrainerCount,
+      moneyBefore,
       bestWildGrind: wild,
       aceGapExpBefore: aceGapBefore.total,
       expectedAceGapBattles,
@@ -511,10 +571,13 @@ export function buildTeamExpSchedule({
       expectedGrindBattles,
       levelsBefore,
       rewardAfter: majorReward.total,
+      prizeMoneyAfter: majorPrizeMoney,
     });
 
     const allocation = allocateBalancedExp(states, majorReward.total);
     totalMajorExp += majorReward.total;
+    totalMajorMoney += majorPrizeMoney;
+    currentMoney += majorPrizeMoney;
     totalAllocatedExp += allocation.allocated;
     totalUnallocatedExp += allocation.unallocated;
   }
@@ -527,6 +590,11 @@ export function buildTeamExpSchedule({
     totalMapExp,
     totalMajorExp,
     totalNaturalExp: totalMapExp + totalMajorExp,
+    startingMoney,
+    totalMapMoney,
+    totalMajorMoney,
+    totalNaturalMoney: startingMoney + totalMapMoney + totalMajorMoney,
+    finalMoneyBeforePurchases: currentMoney,
     totalGrindExp,
     totalExpectedGrindBattles,
     totalAllocatedExp,
