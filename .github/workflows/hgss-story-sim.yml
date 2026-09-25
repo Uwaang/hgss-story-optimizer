@@ -1,0 +1,35 @@
+name: HGSS story simulator
+
+on:
+  push:
+    branches:
+      - feature/hgss-story-sim
+    paths:
+      - 'hgss_story_sim/**'
+      - '.github/workflows/hgss-story-sim.yml'
+  pull_request:
+    paths:
+      - 'hgss_story_sim/**'
+      - '.github/workflows/hgss-story-sim.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/hgss-data.mjs
+          node --check src/battle.mjs
+          node --check src/cli.mjs
+      - name: HGSS data smoke test
+        run: npm run smoke
