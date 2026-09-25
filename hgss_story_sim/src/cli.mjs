@@ -4,6 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { hgssTrainerToShowdownTeam, materializeCandidateTeam, simulateMatchup } from './battle.mjs';
+import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -17,10 +18,25 @@ function arg(name, fallback) {
   return found ? found.slice(prefix.length) : fallback;
 }
 
-async function loadBosses() {
+async function loadStory() {
   const config = await readJson('config/story-bosses.json');
   const source = await loadPretTrainerData(config.sourceCommit);
-  return extractBosses(source, config);
+  return { config, source, bosses: extractBosses(source, config) };
+}
+
+async function loadBosses() {
+  return (await loadStory()).bosses;
+}
+
+async function loadCanonicalPool(version) {
+  const { config, bosses } = await loadStory();
+  const access = await readJson('config/story-access.canonical.json');
+  return buildCanonicalCandidatePool({
+    commit: config.sourceCommit,
+    bosses,
+    access,
+    version,
+  });
 }
 
 async function cmdExtract() {
@@ -63,6 +79,34 @@ async function evaluateCandidates(candidates, bosses, runs) {
   };
 }
 
+async function cmdPool() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const full = arg('full', 'false') === 'true';
+  const pool = await loadCanonicalPool(version);
+  if (full) {
+    console.log(JSON.stringify(pool, null, 2));
+    return;
+  }
+  const byStage = {};
+  for (const mon of pool.candidates) {
+    byStage[mon.availableFrom] = (byStage[mon.availableFrom] || 0) + 1;
+  }
+  console.log(JSON.stringify({
+    version: pool.version,
+    sourceCommit: pool.sourceCommit,
+    accessMode: pool.accessMode,
+    candidateCount: pool.candidates.length,
+    newCandidatesByStage: byStage,
+    firstTwenty: pool.candidates.slice(0, 20).map(mon => ({
+      species: mon.species,
+      availableFrom: mon.availableFrom,
+      familyId: mon.familyId,
+      speciesByStage: mon.speciesByStage,
+      sourceTypes: [...new Set(mon.sources.map(x => x.type))],
+    })),
+  }, null, 2));
+}
+
 async function cmdSimulate() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const runs = Number(arg('runs', '20'));
@@ -87,15 +131,17 @@ function * combinations(values, choose, start = 0, prefix = []) {
 
 async function cmdSearch() {
   const poolPath = arg('pool', 'config/candidates.example.json');
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const runs = Number(arg('runs', '5'));
   const teamSize = Number(arg('team-size', '6'));
   const limit = Number(arg('limit', '100'));
-  const pool = await readJson(poolPath);
+  const pool = poolPath === 'canonical' ? await loadCanonicalPool(version) : await readJson(poolPath);
   const bosses = await loadBosses();
   if (pool.candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
   const results = [];
   let tested = 0;
   for (const team of combinations(pool.candidates, teamSize)) {
+    if (!validateCandidateTeam(team)) continue;
     const evaluation = await evaluateCandidates(team, bosses, runs);
     results.push({
       score: evaluation.score,
@@ -129,13 +175,14 @@ async function cmdSmoke() {
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
+  pool: cmdPool,
   simulate: cmdSimulate,
   search: cmdSearch,
   smoke: cmdSmoke,
 };
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, extract, simulate, search');
+  console.error('Use one of: smoke, extract, pool, simulate, search');
   process.exitCode = 2;
 } else {
   await commands[command]();
