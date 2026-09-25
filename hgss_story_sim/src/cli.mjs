@@ -28,6 +28,14 @@ function normalizeResourceProfile(value) {
   return profile;
 }
 
+function normalizeSpendPolicy(value) {
+  const policy = String(value || 'unbounded').toLowerCase();
+  if (!['unbounded', 'natural'].includes(policy)) {
+    throw new Error(`Unknown spend policy: ${value}. Use unbounded or natural.`);
+  }
+  return policy;
+}
+
 function normalizeExpProfile(value) {
   const profile = String(value || 'ace').toLowerCase();
   if (!['ace', 'major', 'all-accessible'].includes(profile)) {
@@ -81,7 +89,7 @@ async function loadExpContext(story, expProfile, version = 'HEARTGOLD', grindPol
   return { profile, grindPolicy: normalizedGrindPolicy, world };
 }
 
-async function loadMoveAccess(resourceProfile = 'all') {
+async function loadMoveAccess(resourceProfile = 'all', spendPolicy = 'unbounded') {
   const config = await readJson('config/move-access.json');
   if (!Array.isArray(config.reusableMachines)) {
     throw new Error('move-access.json must contain reusableMachines[]');
@@ -104,6 +112,7 @@ async function loadMoveAccess(resourceProfile = 'all') {
   return {
     ...config,
     resourceProfile: profile,
+    spendPolicy: normalizeSpendPolicy(spendPolicy),
     purchasableMachines,
   };
 }
@@ -330,7 +339,14 @@ function summarizeCaptureSearch(candidates) {
   };
 }
 
-function summarizeResourceBudget(purchaseCosts, expSchedule = null) {
+function naturalPurchaseBudget(expSchedule) {
+  if (!expSchedule?.battles?.length) return null;
+  const goldenrodStage = expSchedule.battles.filter(battle => Number(battle.stage) === 2);
+  if (!goldenrodStage.length) return Number(expSchedule.startingMoney || 0);
+  return Math.max(...goldenrodStage.map(battle => Number(battle.moneyBefore || 0)));
+}
+
+function summarizeResourceBudget(purchaseCosts, expSchedule = null, purchasePlanBudget = null) {
   const money = Number(purchaseCosts?.money || 0);
   const coins = Number(purchaseCosts?.coins || 0);
   const coinMoneyEquivalent = coins * MONEY_PER_COIN;
@@ -347,6 +363,8 @@ function summarizeResourceBudget(purchaseCosts, expSchedule = null) {
     coinMoneyEquivalent,
     directPurchaseMoneyEquivalent,
     naturalMoney,
+    naturalPurchaseBudget: naturalPurchaseBudget(expSchedule),
+    plannerBudget: purchasePlanBudget,
     moneyShortfall,
     interpretation: 'coin cost converted using the source-backed Game Corner desk rate',
   };
@@ -385,10 +403,27 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
   const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
-  const purchasable = planPurchasableMachines(candidates, routeBosses, moveAccess, singleUsePlan);
+  const spendPolicy = normalizeSpendPolicy(moveAccess?.spendPolicy || 'unbounded');
+  const naturalBudget = naturalPurchaseBudget(expSchedule);
+  if (spendPolicy === 'natural' && naturalBudget === null) {
+    throw new Error('spend-policy=natural requires a non-ace EXP profile');
+  }
+  const purchasable = planPurchasableMachines(
+    candidates,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    spendPolicy === 'natural'
+      ? { maxMoneyEquivalent: naturalBudget, moneyPerCoin: MONEY_PER_COIN }
+      : {},
+  );
   const purchasablePlan = purchasable.assignments;
   const purchaseCosts = purchasable.costs;
-  const resourceBudget = summarizeResourceBudget(purchaseCosts, expSchedule);
+  const resourceBudget = summarizeResourceBudget(
+    purchaseCosts,
+    expSchedule,
+    purchasable.budget || null,
+  );
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const [battleIndex, boss] of routeBosses.entries()) {
@@ -607,6 +642,7 @@ async function cmdSimulate() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const runs = Number(arg('runs', '20'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   if (poolPath === 'canonical') {
@@ -628,6 +664,7 @@ async function cmdSimulate() {
     pool: poolPath,
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
     resourceProfile,
+    spendPolicy,
     expProfile,
     grindPolicy,
     runsPerBoss: runs,
@@ -758,6 +795,7 @@ function searchResultRow(team, evaluation) {
     routeBattleCount: evaluation.routeBattleCount,
     requestedResourceProfile: evaluation.requestedResourceProfile,
     effectiveResourceProfile: evaluation.effectiveResourceProfile,
+    spendPolicy: evaluation.spendPolicy,
     singleUsePlan: evaluation.singleUsePlan,
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
@@ -1058,6 +1096,7 @@ async function cmdSearch() {
   const screenRuns = Number(arg('screen-runs', '1'));
   const finalRuns = Number(arg('final-runs', String(runs)));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const story = await loadStory();
@@ -1072,7 +1111,7 @@ async function cmdSearch() {
   if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
   const requiredCandidate = findStarterCandidate(candidates, starterName);
   const [moveAccess, expContext] = await Promise.all([
-    loadMoveAccess(resourceProfile),
+    loadMoveAccess(resourceProfile, spendPolicy),
     loadExpContext(story, expProfile, version, grindPolicy),
   ]);
 
@@ -1096,6 +1135,7 @@ async function cmdSearch() {
       strategy,
       starter: requiredCandidate?.species || 'any',
       resourceProfile,
+      spendPolicy,
       expProfile,
       grindPolicy,
       runsPerBoss: runs,
@@ -1139,6 +1179,7 @@ async function cmdSearch() {
     strategy,
     starter: requiredCandidate?.species || 'any',
     resourceProfile,
+    spendPolicy,
     expProfile,
     grindPolicy,
     tested,
@@ -1165,17 +1206,19 @@ async function cmdOptimize() {
   const candidateCap = Number(arg('candidate-cap', '12'));
   const teamSize = Number(arg('team-size', '6'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
 
   const story = await loadStory();
-  const moveAccess = await loadMoveAccess(resourceProfile);
+  const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
   const output = {
     schemaVersion: 1,
     sourceCommit: story.config.sourceCommit,
     battleEngine: 'pokemon-showdown@0.11.11/gen4customgame',
     policy: 'greedy-moves+conservative-player-switching',
     resourceProfile,
+    spendPolicy,
     expProfile,
     grindPolicy,
     runsPerBoss: runs,
@@ -1321,6 +1364,22 @@ async function cmdResourceBudgetSmoke() {
     );
   }
 
+  const moveAccess = await loadMoveAccess('all', 'natural');
+  const singleUsePlan = planSingleUseMachines(team, route, moveAccess);
+  const budget = naturalPurchaseBudget(schedule);
+  const budgeted = planPurchasableMachines(
+    team,
+    route,
+    moveAccess,
+    singleUsePlan,
+    { maxMoneyEquivalent: budget, moneyPerCoin: MONEY_PER_COIN },
+  );
+  if (Number(budgeted.budget?.spentMoneyEquivalent || 0) > budget) {
+    throw new Error(
+      `Budgeted TM planner overspent: ${budgeted.budget?.spentMoneyEquivalent} > ${budget}`
+    );
+  }
+
   console.log(JSON.stringify({
     conversion: {
       money1000: moneyOnly.directPurchaseMoneyEquivalent,
@@ -1332,7 +1391,10 @@ async function cmdResourceBudgetSmoke() {
       totalMapMoney: schedule.totalMapMoney,
       totalMajorMoney: schedule.totalMajorMoney,
       totalNaturalMoney: schedule.totalNaturalMoney,
+      goldenrodPurchaseBudget: budget,
     },
+    budgetedTMPlan: budgeted.budget,
+    budgetedTMCosts: budgeted.costs,
   }, null, 2));
 }
 
