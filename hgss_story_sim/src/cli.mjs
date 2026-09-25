@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { hgssTrainerToShowdownTeam, materializeCandidateTeam, simulateMatchup } from './battle.mjs';
+import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planSingleUseMachines, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -108,6 +108,7 @@ async function cmdExtract() {
 
 async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const rows = [];
+  const singleUsePlan = planSingleUseMachines(candidates, bosses, moveAccess);
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const boss of bosses) {
@@ -115,7 +116,7 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
       candidates,
       boss.stage,
       boss.aceLevel,
-      { moveAccess },
+      { moveAccess, singleUsePlan },
     );
     if (!playerTeam.length) {
       rows.push({ boss: boss.label, skipped: true, reason: 'no available candidates' });
@@ -134,6 +135,7 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   }
   return {
     score: weightedRuns ? weightedWins / weightedRuns : 0,
+    singleUsePlan,
     rows,
   };
 }
@@ -268,6 +270,7 @@ async function cmdSearch() {
     results.push({
       score: evaluation.score,
       team: team.map(x => x.species),
+      singleUsePlan: evaluation.singleUsePlan,
       bosses: evaluation.rows.map(row => ({
         boss: row.boss,
         winRate: row.winRate,
@@ -298,8 +301,9 @@ async function cmdHmSmoke() {
   const magikarp = pool.candidates.find(candidate => candidate.species === 'Magikarp');
   if (!magikarp) throw new Error('Magikarp not found in canonical pool');
 
-  const beforeSurf = materializeCandidateTeam([magikarp], 2, 19, { moveAccess })[0];
-  const afterSurf = materializeCandidateTeam([magikarp], 3, 25, { moveAccess })[0];
+  const singleUsePlan = planSingleUseMachines([magikarp], story.bosses, moveAccess);
+  const beforeSurf = materializeCandidateTeam([magikarp], 2, 19, { moveAccess, singleUsePlan })[0];
+  const afterSurf = materializeCandidateTeam([magikarp], 3, 25, { moveAccess, singleUsePlan })[0];
 
   if (beforeSurf.moves.includes('Surf')) {
     throw new Error('Surf became available before its acquisition stage');
@@ -333,11 +337,12 @@ async function cmdSmoke() {
     loadCuratedPool('config/candidates.example.json', story),
     loadMoveAccess(),
   ]);
+  const singleUsePlan = planSingleUseMachines(resolved.baseline, story.bosses, moveAccess);
   const playerTeam = materializeCandidateTeam(
     resolved.baseline,
     falkner.stage,
     falkner.aceLevel,
-    { moveAccess },
+    { moveAccess, singleUsePlan },
   );
   const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
   console.log(JSON.stringify({
