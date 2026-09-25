@@ -39,6 +39,8 @@ jobs:
         run: npm run exp-smoke
       - name: Resource profile smoke test
         run: npm run resource-smoke
+      - name: Move scoring penalty smoke test
+        run: npm run move-score-smoke
       - name: Starter-specific story route smoke test
         run: npm run route-smoke
       - name: HGSS battle smoke test
