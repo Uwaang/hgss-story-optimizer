@@ -46,6 +46,8 @@ jobs:
         run: npm run exp-route-smoke
       - name: Resource profile smoke test
         run: npm run resource-smoke
+      - name: Natural money and coin budget smoke test
+        run: npm run resource-budget-smoke
       - name: Move scoring penalty smoke test
         run: npm run move-score-smoke
       - name: Resource monotonicity smoke test
@@ -93,6 +95,16 @@ jobs:
         with:
           name: hgss-core-optimization
           path: hgss_story_sim/results/core.json
+          if-no-files-found: error
+      - name: Major-only EXP lower-bound optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        run: npm run optimize -- --resources=all --exp-profile=major --grind-policy=none --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/exp-major.json
+      - name: Upload major-only EXP optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-exp-major-optimization
+          path: hgss_story_sim/results/exp-major.json
           if-no-files-found: error
       - name: Natural-EXP starter optimization
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
