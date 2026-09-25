@@ -29,6 +29,7 @@ jobs:
       - name: Syntax check
         run: |
           node --check src/hgss-data.mjs
+          node --check src/exp-budget.mjs
           node --check src/acquisition.mjs
           node --check src/availability.mjs
           node --check src/battle.mjs
@@ -37,6 +38,8 @@ jobs:
         run: npm run validate
       - name: Growth EXP table smoke test
         run: npm run exp-smoke
+      - name: Natural EXP budget smoke test
+        run: npm run exp-budget-smoke
       - name: Resource profile smoke test
         run: npm run resource-smoke
       - name: Move scoring penalty smoke test
