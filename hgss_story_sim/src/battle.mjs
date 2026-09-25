@@ -251,6 +251,79 @@ export function planSingleUseMachines(candidates, bosses, moveAccess = null) {
   return assignments;
 }
 
+
+export function planPurchasableMachines(candidates, bosses, moveAccess = null, singleUsePlan = {}) {
+  const assignments = {};
+  const costs = {};
+  const machines = [...(moveAccess?.purchasableMachines || [])]
+    .sort((a, b) =>
+      Number(a.availableFrom) - Number(b.availableFrom) ||
+      Number(a.unitCost || 0) - Number(b.unitCost || 0) ||
+      String(a.machine).localeCompare(String(b.machine))
+    );
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate.moves) && candidate.moves.length) continue;
+    const key = candidateKey(candidate);
+    const owned = [...(singleUsePlan[key] || [])];
+    const purchased = [];
+    const remaining = machines.filter(machine =>
+      !owned.some(existing => existing.machine === machine.machine || existing.move === machine.move)
+    );
+
+    for (;;) {
+      let best = null;
+
+      for (const machine of remaining) {
+        if (purchased.some(existing => existing.machine === machine.machine)) continue;
+        let totalGain = 0;
+        let legalSomewhere = false;
+
+        for (const boss of bosses) {
+          if (boss.stage < Number(candidate.availableFrom || 0)) continue;
+          if (boss.stage < Number(machine.availableFrom || 0)) continue;
+
+          const speciesName = candidateSpeciesAtStage(candidate, boss.stage);
+          const species = dex.species.get(speciesName);
+          if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
+          legalSomewhere = true;
+
+          const current = [...owned, ...purchased];
+          const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, current);
+          const after = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, [...current, machine]);
+          totalGain += Math.max(0, moveSetScore(speciesName, after) - moveSetScore(speciesName, before));
+        }
+
+        if (!legalSomewhere || totalGain <= 0) continue;
+        const unitCost = Number(machine.unitCost || 0);
+        const efficiency = totalGain / Math.max(1, unitCost);
+        if (
+          !best ||
+          totalGain > best.totalGain ||
+          (totalGain === best.totalGain && efficiency > best.efficiency) ||
+          (totalGain === best.totalGain && efficiency === best.efficiency &&
+            String(machine.machine).localeCompare(String(best.machine.machine)) < 0)
+        ) {
+          best = { machine, totalGain, efficiency };
+        }
+      }
+
+      if (!best) break;
+      purchased.push(best.machine);
+    }
+
+    if (purchased.length) {
+      assignments[key] = purchased;
+      for (const machine of purchased) {
+        const currency = machine.currency || 'money';
+        costs[currency] = (costs[currency] || 0) + Number(machine.unitCost || 0);
+      }
+    }
+  }
+
+  return { assignments, costs };
+}
+
 export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
   return trainer.party.map(mon => {
     const speciesName = constantToName(mon.species, 'SPECIES_');
@@ -289,6 +362,7 @@ function candidateSpeciesAtStage(mon, stage) {
 export function materializeCandidateTeam(candidates, stage, level, options = {}) {
   const moveAccess = options.moveAccess || null;
   const singleUsePlan = options.singleUsePlan || {};
+  const purchasablePlan = options.purchasablePlan || {};
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
@@ -296,7 +370,11 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       const speciesName = candidateSpeciesAtStage(mon, stage);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
-      const assignedMachines = singleUsePlan[candidateKey(mon)] || [];
+      const key = candidateKey(mon);
+      const assignedMachines = [
+        ...(singleUsePlan[key] || []),
+        ...(purchasablePlan[key] || []),
+      ];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
         : selectCandidateMoves(species.name, level, stage, moveAccess, assignedMachines);
