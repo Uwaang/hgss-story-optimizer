@@ -169,7 +169,8 @@
       "species": "Spearow",
       "availableFrom": 2,
       "source": "gift",
-      "note": "Kenya from the Route 35/Goldenrod gate delivery quest."
+      "note": "Kenya from the Route 35/Goldenrod gate delivery quest.",
+      "level": 20
     },
     {
       "species": "Eevee",
@@ -189,7 +190,8 @@
       "species": "Shuckle",
       "availableFrom": 4,
       "source": "gift",
-      "note": "Shuckie loan in Cianwood."
+      "note": "Shuckie loan in Cianwood.",
+      "level": 20
     },
     {
       "species": "Lapras",
