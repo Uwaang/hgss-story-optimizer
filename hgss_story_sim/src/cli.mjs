@@ -377,6 +377,7 @@ async function runBeamSearch({
   beamWidth,
   candidateCap,
   screenRuns,
+  finalRuns,
   requiredCandidate,
   screenRowsOverride = null,
 }) {
@@ -430,7 +431,20 @@ async function runBeamSearch({
     if (!beam.length) break;
   }
 
-  const top = beam.map(state => searchResultRow(state.team, state.evaluation));
+  const finalStates = [];
+  for (const state of beam) {
+    const evaluation = Number(finalRuns) === Number(runs)
+      ? state.evaluation
+      : await evaluateCandidates(state.team, story.bosses, finalRuns, moveAccess);
+    finalStates.push({ team: state.team, evaluation });
+  }
+  finalStates.sort((a, b) =>
+    b.evaluation.score - a.evaluation.score ||
+    a.evaluation.catchUpLevels - b.evaluation.catchUpLevels ||
+    a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
+  );
+
+  const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
@@ -442,6 +456,8 @@ async function runBeamSearch({
       catchUpUnknown: row.evaluation.catchUpUnknown,
     })),
     evaluatedTeams: cache.size,
+    finalRescoredTeams: finalStates.length,
+    finalRunsPerBoss: finalRuns,
     paretoFront: paretoFront(top),
     top,
   };
@@ -458,6 +474,7 @@ async function cmdSearch() {
   const beamWidth = Number(arg('beam-width', '8'));
   const candidateCap = Number(arg('candidate-cap', '24'));
   const screenRuns = Number(arg('screen-runs', '1'));
+  const finalRuns = Number(arg('final-runs', String(runs)));
   const story = await loadStory();
 
   let candidates;
@@ -481,6 +498,7 @@ async function cmdSearch() {
       beamWidth,
       candidateCap,
       screenRuns,
+      finalRuns,
       requiredCandidate,
     });
     console.log(JSON.stringify({
@@ -490,6 +508,7 @@ async function cmdSearch() {
       starter: requiredCandidate?.species || 'any',
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
+      finalRunsPerBoss: finalRuns,
       beamWidth,
       candidateCap,
       ...result,
@@ -546,6 +565,7 @@ async function cmdOptimize() {
     .filter(Boolean);
   const runs = Number(arg('runs', '1'));
   const screenRuns = Number(arg('screen-runs', '1'));
+  const finalRuns = Number(arg('final-runs', '10'));
   const beamWidth = Number(arg('beam-width', '3'));
   const candidateCap = Number(arg('candidate-cap', '12'));
   const teamSize = Number(arg('team-size', '6'));
@@ -555,6 +575,7 @@ async function cmdOptimize() {
   const output = {
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
+    finalRunsPerBoss: finalRuns,
     beamWidth,
     candidateCap,
     teamSize,
@@ -578,6 +599,7 @@ async function cmdOptimize() {
         beamWidth,
         candidateCap,
         screenRuns,
+        finalRuns,
         requiredCandidate,
         screenRowsOverride: screenRows,
       });
