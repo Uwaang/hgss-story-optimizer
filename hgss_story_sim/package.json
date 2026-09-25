@@ -19,7 +19,8 @@
     "tutor-smoke": "node src/cli.mjs tutor-smoke",
     "exp-smoke": "node src/cli.mjs exp-smoke",
     "route-smoke": "node src/cli.mjs route-smoke",
-    "resource-smoke": "node src/cli.mjs resource-smoke"
+    "resource-smoke": "node src/cli.mjs resource-smoke",
+    "move-score-smoke": "node src/cli.mjs move-score-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
