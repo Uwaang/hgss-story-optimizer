@@ -23,9 +23,57 @@
     },
     {
       "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER_7",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER_10",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
       "key": "TRAINER_LEADER_WHITNEY",
       "label": "Whitney",
       "kind": "gym"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_8",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_11",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_4",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
     },
     {
       "stage": 3,
@@ -67,6 +115,30 @@
     },
     {
       "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_18",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_12",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_17",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
       "key": "TRAINER_EXECUTIVE_ARCHER_ARCHER",
       "label": "Archer (Radio Tower)",
       "kind": "rocket",
@@ -77,6 +149,30 @@
       "key": "TRAINER_LEADER_CLAIR_CLAIR",
       "label": "Clair",
       "kind": "gym"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_9",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_13",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_5",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
     },
     {
       "stage": 8,
@@ -120,8 +216,8 @@
       "reason": "Presence is confirmed in event data; mandatory-route reachability still needs verification before weighting them."
     },
     {
-      "label": "Rival Silver",
-      "reason": "Trainer variant depends on the player's starter; requires starter-aware route selection rather than counting all variants."
+      "label": "Opening Silver battle",
+      "reason": "Occurs before normal catching access, so including stage-0 catches would be anachronistic. It is omitted from party-composition scoring."
     }
   ]
 }
