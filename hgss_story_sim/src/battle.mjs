@@ -404,11 +404,21 @@ export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
   });
 }
 
-function candidateSpeciesAtStage(mon, stage) {
+function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
   let speciesName = mon.species;
   const transitions = Array.isArray(mon.speciesByStage) ? [...mon.speciesByStage] : [];
-  transitions.sort((a, b) => Number(a.stage) - Number(b.stage));
+  transitions.sort((a, b) =>
+    Number(a.level || Infinity) - Number(b.level || Infinity) ||
+    Number(a.stage || 0) - Number(b.stage || 0)
+  );
   for (const transition of transitions) {
+    const isLevelEvolution =
+      transition.derived === 'level-evolution' ||
+      /^level\s+\d+/i.test(String(transition.reason || ''));
+    if (isLevelEvolution && Number.isFinite(Number(transition.level)) && actualLevel !== null) {
+      if (Number(actualLevel) >= Number(transition.level)) speciesName = transition.species;
+      continue;
+    }
     if (Number(transition.stage) <= stage) speciesName = transition.species;
   }
   return speciesName;
@@ -418,25 +428,29 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
   const moveAccess = options.moveAccess || null;
   const singleUsePlan = options.singleUsePlan || {};
   const purchasablePlan = options.purchasablePlan || {};
+  const levelsByCandidate = options.levelsByCandidate || null;
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
     .map(mon => {
-      const speciesName = candidateSpeciesAtStage(mon, stage);
+      const key = candidateKey(mon);
+      const candidateLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[key]))
+        ? Math.max(1, Math.min(100, Math.floor(Number(levelsByCandidate[key]))))
+        : level;
+      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
-      const key = candidateKey(mon);
       const assignedMachines = [
         ...(singleUsePlan[key] || []),
         ...(purchasablePlan[key] || []),
       ];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : selectCandidateMoves(species.name, level, stage, moveAccess, assignedMachines);
+        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines);
       return {
         name: species.name,
         species: species.name,
-        level,
+        level: candidateLevel,
         item: mon.item || '',
         ability: mon.ability || species.abilities['0'],
         nature: mon.nature || NEUTRAL_NATURE,
