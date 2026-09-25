@@ -656,7 +656,7 @@ async function cmdSimulate() {
   }
 
   const [moveAccess, expContext] = await Promise.all([
-    loadMoveAccess(resourceProfile),
+    loadMoveAccess(resourceProfile, spendPolicy),
     loadExpContext(story, expProfile, 'HEARTGOLD', grindPolicy),
   ]);
   const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext);
