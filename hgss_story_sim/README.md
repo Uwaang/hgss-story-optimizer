@@ -51,7 +51,7 @@ Current conservative canonical pool: **98 acquisition candidates per version**.
 
 ### Move access and resource costs
 
-Move selection is story-stage aware.
+Move selection is story-stage aware. Under EXP-aware profiles, one-use and purchasable TM ownership is also planned against each member's actual EXP-derived level/evolution state rather than the opponent's ace level.
 
 - Gen 4 level-up moves
 - reusable Johto HMs
