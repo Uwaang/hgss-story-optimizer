@@ -425,6 +425,7 @@ export async function buildCanonicalCandidatePool({
       speciesByStage: buildLevelEvolutionStages(speciesConst, manual.availableFrom, bosses, evoByBase),
       sources: [{
         type: manual.source,
+        map: manual.map || null,
         note: manual.note || '',
         minLevel: Number.isFinite(manualLevel) ? manualLevel : null,
         maxLevel: Number.isFinite(manualLevel) ? manualLevel : null,
