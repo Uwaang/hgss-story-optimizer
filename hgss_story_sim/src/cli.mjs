@@ -1289,6 +1289,53 @@ async function cmdMoveScoreSmoke() {
   }, null, 2));
 }
 
+async function cmdResourceBudgetSmoke() {
+  const moneyOnly = summarizeResourceBudget({ money: 1000, coins: 0 }, null);
+  const coinsOnly = summarizeResourceBudget({ money: 0, coins: 50 }, null);
+  if (moneyOnly.directPurchaseMoneyEquivalent !== 1000) {
+    throw new Error(`1000 money should stay 1000, got ${moneyOnly.directPurchaseMoneyEquivalent}`);
+  }
+  if (coinsOnly.directPurchaseMoneyEquivalent !== 1000) {
+    throw new Error(`50 coins should equal 1000 money, got ${coinsOnly.directPurchaseMoneyEquivalent}`);
+  }
+
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const team = ['Cyndaquil', 'Mareep', 'Geodude'].map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing resource-budget candidate: ${name}`);
+    return candidate;
+  });
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(story, 'all-accessible', 'HEARTGOLD', 'none');
+  const schedule = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'all-accessible',
+    grindPolicy: 'none',
+  });
+  if (!(schedule.totalNaturalMoney > schedule.startingMoney)) {
+    throw new Error(
+      `Expected trainer prize money above starting cash: ${schedule.totalNaturalMoney}`
+    );
+  }
+
+  console.log(JSON.stringify({
+    conversion: {
+      money1000: moneyOnly.directPurchaseMoneyEquivalent,
+      coins50: coinsOnly.directPurchaseMoneyEquivalent,
+      moneyPerCoin: MONEY_PER_COIN,
+    },
+    naturalBudget: {
+      startingMoney: schedule.startingMoney,
+      totalMapMoney: schedule.totalMapMoney,
+      totalMajorMoney: schedule.totalMajorMoney,
+      totalNaturalMoney: schedule.totalNaturalMoney,
+    },
+  }, null, 2));
+}
+
 async function cmdResourceSmoke() {
   const [core, money, all] = await Promise.all([
     loadMoveAccess('core'),
@@ -1844,6 +1891,7 @@ const commands = {
   search: cmdSearch,
   optimize: cmdOptimize,
   'resource-monotonic-smoke': cmdResourceMonotonicSmoke,
+  'resource-budget-smoke': cmdResourceBudgetSmoke,
   'move-score-smoke': cmdMoveScoreSmoke,
   'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
@@ -1862,7 +1910,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
