@@ -120,6 +120,44 @@ function canLearnGen4Tutor(species, moveName) {
   return (learnset[move.id] || []).some(source => /^4T/.test(source));
 }
 
+function effectiveMovePower(move) {
+  if (typeof move.damage === 'number') return move.damage;
+  let power = Math.max(move.basePower || 0, 1);
+
+  if (Array.isArray(move.multihit)) {
+    const [minHits, maxHits] = move.multihit.map(Number);
+    // In the classic 2-5 hit distribution, the expectation is ~3 hits.
+    const expectedHits = minHits === 2 && maxHits === 5
+      ? 3
+      : (minHits + maxHits) / 2;
+    power *= expectedHits;
+  } else if (Number.isFinite(Number(move.multihit))) {
+    power *= Number(move.multihit);
+  }
+
+  return power;
+}
+
+function moveStrategicMultiplier(move) {
+  let multiplier = 1;
+
+  if (move.self?.volatileStatus === 'mustrecharge') multiplier *= 0.52;
+  if (move.flags?.charge) multiplier *= 0.55;
+  if (move.selfdestruct) multiplier *= 0.42;
+
+  if (Array.isArray(move.recoil) && Number(move.recoil[1]) > 0) {
+    const fraction = Number(move.recoil[0]) / Number(move.recoil[1]);
+    multiplier *= Math.max(0.55, 1 - 0.5 * fraction);
+  }
+  if (move.hasCrashDamage) multiplier *= 0.9;
+  if (Array.isArray(move.drain) && Number(move.drain[1]) > 0) {
+    const fraction = Number(move.drain[0]) / Number(move.drain[1]);
+    multiplier *= 1 + Math.min(0.15, 0.2 * fraction);
+  }
+
+  return multiplier;
+}
+
 function candidateMoveScore(species, moveName) {
   const move = dex.moves.get(moveName);
   if (!move.exists) return -Infinity;
@@ -153,9 +191,15 @@ function candidateMoveScore(species, moveName) {
   const stab = species.types.includes(move.type) ? 1.5 : 1;
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   const priority = move.priority > 0 ? 1.08 : 1;
-  const fixedDamage = typeof move.damage === 'number' ? move.damage : 0;
-  const power = Math.max(move.basePower || 0, fixedDamage || 1);
-  return power * accuracy * stab * priority * (0.55 + offensiveStat / 120);
+  const power = effectiveMovePower(move);
+  const strategic = moveStrategicMultiplier(move);
+  return power * accuracy * stab * priority * strategic * (0.55 + offensiveStat / 120);
+}
+
+export function candidateMoveUtility(speciesName, moveName) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
+  return candidateMoveScore(species, moveName);
 }
 
 export function candidateMovePool(speciesName, level, stage, moveAccess = null, extraMachines = []) {
@@ -433,8 +477,9 @@ function scoreMove(active, target, requestedMove) {
   const priority = move.priority > 0 ? 1.05 : 1;
 
   const fixedDamage = typeof move.damage === 'number' ? move.damage : null;
+  const strategic = moveStrategicMultiplier(move);
   if (fixedDamage !== null) {
-    return fixedDamage * effectiveness * accuracy * priority;
+    return fixedDamage * effectiveness * accuracy * priority * strategic;
   }
 
   const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
@@ -442,11 +487,11 @@ function scoreMove(active, target, requestedMove) {
   const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
   const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
   const statRatio = attack / defense;
-  const power = Math.max(move.basePower || 1, 1);
+  const power = effectiveMovePower(move);
 
   // This is a ranking heuristic, not a replacement for Showdown's damage
   // calculation. The battle engine still resolves the real move and damage.
-  return power * statRatio * effectiveness * stab * accuracy * priority;
+  return power * statRatio * effectiveness * stab * accuracy * priority * strategic;
 }
 
 function battleMonMoveScore(mon, target) {
