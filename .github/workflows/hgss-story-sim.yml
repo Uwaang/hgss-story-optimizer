@@ -30,6 +30,7 @@ jobs:
         run: |
           node --check src/hgss-data.mjs
           node --check src/acquisition.mjs
+          node --check src/availability.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
       - name: Validate source-backed availability
