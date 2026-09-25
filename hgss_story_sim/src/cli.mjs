@@ -2092,6 +2092,62 @@ async function cmdExpBudgetSmoke() {
   }, null, 2));
 }
 
+async function cmdExpSegmentSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Gyarados'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing segment-smoke candidate: ${name}`);
+    return candidate;
+  });
+  const gyarados = team.find(mon => mon.species === 'Gyarados');
+  const gyaradosKey = gyarados.familyId || gyarados.species;
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(
+    story,
+    'all-accessible',
+    'HEARTGOLD',
+    'none',
+    'midpoint',
+    'map-order',
+  );
+  const schedule = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'all-accessible',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+  });
+
+  const stage6 = schedule.battles.find(battle => Number(battle.stage) === 6);
+  if (!stage6) throw new Error('Missing stage-6 battle in segment smoke');
+  const t29Index = stage6.mapSegments.findIndex(segment => segment.map === 'T29');
+  if (t29Index < 0) throw new Error('Stage-6 segment order is missing Lake of Rage map T29');
+  const earlier = stage6.mapSegments.slice(0, t29Index);
+  if (earlier.some(segment => segment.joinedBeforeMapExp.includes(gyaradosKey))) {
+    throw new Error('Gyarados joined before reaching its T29 acquisition segment');
+  }
+  if (!stage6.mapSegments[t29Index].joinedBeforeMapExp.includes(gyaradosKey)) {
+    throw new Error(
+      `Gyarados did not join at T29: ${JSON.stringify(stage6.mapSegments[t29Index])}`
+    );
+  }
+  if (stage6.joinedAfterMapExp.includes(gyaradosKey)) {
+    throw new Error('Mapped Gyarados acquisition fell back to after-map EXP join');
+  }
+
+  console.log(JSON.stringify({
+    gyaradosKey,
+    stage: stage6.stage,
+    mapSegments: stage6.mapSegments,
+    joinedAfterMapExp: stage6.joinedAfterMapExp,
+    levelsBefore: stage6.levelsBefore,
+  }, null, 2));
+}
+
 async function cmdExpAllocatorSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -2376,6 +2432,7 @@ const commands = {
   'exp-envelope-smoke': cmdExpEnvelopeSmoke,
   'exp-budget': cmdExpBudget,
   'exp-budget-smoke': cmdExpBudgetSmoke,
+  'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'capture-smoke': cmdCaptureSmoke,
   'exp-route-smoke': cmdExpRouteSmoke,
@@ -2390,7 +2447,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-allocator-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
