@@ -92,3 +92,23 @@ jobs:
           name: hgss-core-optimization
           path: hgss_story_sim/results/core.json
           if-no-files-found: error
+      - name: Natural-EXP starter optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        run: npm run optimize -- --resources=all --exp-profile=all-accessible --grind-policy=none --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/exp-natural.json
+      - name: Upload natural-EXP optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-exp-natural-optimization
+          path: hgss_story_sim/results/exp-natural.json
+          if-no-files-found: error
+      - name: Paid-grind starter optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        run: npm run optimize -- --resources=all --exp-profile=all-accessible --grind-policy=ace-paid --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/exp-ace-paid.json
+      - name: Upload paid-grind optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-exp-ace-paid-optimization
+          path: hgss_story_sim/results/exp-ace-paid.json
+          if-no-files-found: error
