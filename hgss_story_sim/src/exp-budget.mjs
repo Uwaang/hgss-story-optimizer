@@ -384,6 +384,7 @@ function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
   const growthRate = candidate.growthRate || null;
   const initialExp = level === null ? null : expAtLevel(growthRate, level);
   return {
+    candidate,
     key: candidateKey(candidate),
     species: candidate.species,
     availableFrom: Number(candidate.availableFrom || 0),
@@ -424,6 +425,49 @@ export function allocateBalancedExp(states, amount) {
     allocated += grant;
     remaining -= grant;
     state.level = levelAtExp(state.growthRate, state.exp);
+
+    for (let i = eligible.length - 1; i >= 0; i -= 1) {
+      if (eligible[i].level >= 100) eligible.splice(i, 1);
+    }
+  }
+
+  return { allocated, unallocated: remaining };
+}
+
+export function allocateBossAwareExp(states, amount, boss, levelUtility) {
+  let remaining = Math.max(0, Math.floor(Number(amount || 0)));
+  let allocated = 0;
+  const eligible = states.filter(state => !state.unknown && state.level < 100);
+
+  while (remaining > 0 && eligible.length) {
+    let best = null;
+    for (const state of eligible) {
+      const nextThreshold = expAtLevel(state.growthRate, state.level + 1);
+      if (nextThreshold === null) continue;
+      const need = Math.max(1, nextThreshold - state.exp);
+      const currentUtility = Number(levelUtility?.(state.candidate, boss, state.level) || 0);
+      const nextUtility = Number(levelUtility?.(state.candidate, boss, state.level + 1) || 0);
+      const gain = Math.max(0, nextUtility - currentUtility);
+      // Absolute matchup value keeps useful members trainable even between
+      // discrete move/evolution breakpoints; marginal gain rewards breakpoints.
+      const priority = (0.25 * Math.max(0, nextUtility) + 2 * gain + 0.01) / need;
+      if (
+        !best ||
+        priority > best.priority ||
+        (priority === best.priority && nextUtility > best.nextUtility) ||
+        (priority === best.priority && nextUtility === best.nextUtility &&
+          state.key.localeCompare(best.state.key) < 0)
+      ) {
+        best = { state, need, priority, nextUtility };
+      }
+    }
+    if (!best) break;
+
+    const grant = Math.min(remaining, best.need);
+    best.state.exp += grant;
+    allocated += grant;
+    remaining -= grant;
+    best.state.level = levelAtExp(best.state.growthRate, best.state.exp);
 
     for (let i = eligible.length - 1; i >= 0; i -= 1) {
       if (eligible[i].level >= 100) eligible.splice(i, 1);
@@ -485,6 +529,8 @@ export function buildTeamExpSchedule({
   grindPolicy = 'none',
   entryLevelPolicy = 'midpoint',
   sameStageJoinPolicy = 'after-map-exp',
+  allocator = 'balanced',
+  levelUtility = null,
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -497,6 +543,12 @@ export function buildTeamExpSchedule({
   }
   if (!['before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
     throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
+  }
+  if (!['balanced', 'boss-aware'].includes(allocator)) {
+    throw new Error(`Unknown EXP allocator: ${allocator}`);
+  }
+  if (allocator === 'boss-aware' && typeof levelUtility !== 'function') {
+    throw new Error('boss-aware EXP allocator requires levelUtility(candidate, boss, level)');
   }
 
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
@@ -524,6 +576,12 @@ export function buildTeamExpSchedule({
     }
   }
 
+  function allocate(amount, targetBoss) {
+    return allocator === 'boss-aware'
+      ? allocateBossAwareExp(states, amount, targetBoss, levelUtility)
+      : allocateBalancedExp(states, amount);
+  }
+
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const stage = Number(boss.stage);
     const firstBattleInStage = !stageStarted.has(stage);
@@ -549,7 +607,7 @@ export function buildTeamExpSchedule({
         mapExpBefore = source.totalExp;
         mapMoneyBefore = source.totalMoney;
         mapTrainerCount = source.trainers.length;
-        const allocation = allocateBalancedExp(states, mapExpBefore);
+        const allocation = allocate(mapExpBefore, boss);
         totalMapExp += mapExpBefore;
         totalMapMoney += mapMoneyBefore;
         currentMoney += mapMoneyBefore;
@@ -608,7 +666,7 @@ export function buildTeamExpSchedule({
       prizeMoneyAfter: majorPrizeMoney,
     });
 
-    const allocation = allocateBalancedExp(states, majorReward.total);
+    const allocation = allocate(majorReward.total, routeBosses[battleIndex + 1] || boss);
     totalMajorExp += majorReward.total;
     totalMajorMoney += majorPrizeMoney;
     currentMoney += majorPrizeMoney;
@@ -624,7 +682,10 @@ export function buildTeamExpSchedule({
       ? 'midpoint of source-backed encounter/gift level range'
       : `${entryLevelPolicy} source-backed encounter/gift level`,
     sameStageJoinPolicy,
-    allocator: 'balanced-lowest-level-first',
+    allocator,
+    allocatorDescription: allocator === 'boss-aware'
+      ? 'boss-aware matchup utility per EXP-to-next-level'
+      : 'balanced-lowest-level-first',
     totalMapExp,
     totalMajorExp,
     totalNaturalExp: totalMapExp + totalMajorExp,
