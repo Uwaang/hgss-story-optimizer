@@ -1240,6 +1240,7 @@ async function cmdSearch() {
       grindPolicy,
       entryLevelPolicy,
       sameStageJoinPolicy,
+      expAllocator,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -1286,6 +1287,7 @@ async function cmdSearch() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    expAllocator,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -1473,6 +1475,7 @@ async function cmdOptimize() {
         grindPolicy,
         entryLevelPolicy,
         sameStageJoinPolicy,
+        expAllocator,
       ),
     ]);
     const candidates = pool.candidates;
@@ -1973,6 +1976,7 @@ async function cmdExpBudget() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    expAllocator,
   );
   const schedule = buildTeamExpSchedule({
     candidates: team,
