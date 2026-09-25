@@ -123,9 +123,10 @@ async function loadExpContext(
       world: null,
     };
   }
-  const [baseAccess, expAccess] = await Promise.all([
+  const [baseAccess, expAccess, expTiming] = await Promise.all([
     readJson('config/story-access.canonical.json'),
     readJson('config/exp-access.json'),
+    readJson('config/exp-timing.json'),
   ]);
   const access = profile === 'all-accessible'
     ? mergeExpAccess(baseAccess, expAccess)
@@ -135,6 +136,7 @@ async function loadExpContext(
     access,
     trainerSource: story.source,
     version,
+    timing: expTiming,
   });
   return {
     profile,
