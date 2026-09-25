@@ -614,6 +614,7 @@ export function buildTeamExpSchedule({
   let currentMoney = startingMoney;
 
   function addAvailable(stage, map = null, onlyMapped = false) {
+    const added = [];
     for (const state of pending) {
       if (state.availableFrom > stage || stateKeys.has(state.key)) continue;
       if (state.availableFrom === stage && map !== null) {
@@ -625,7 +626,9 @@ export function buildTeamExpSchedule({
       }
       states.push({ ...state });
       stateKeys.add(state.key);
+      added.push(state.key);
     }
+    return added;
   }
 
   function allocate(amount, targetBoss) {
@@ -652,6 +655,8 @@ export function buildTeamExpSchedule({
     let mapExpBefore = 0;
     let mapMoneyBefore = 0;
     let mapTrainerCount = 0;
+    const mapSegments = [];
+    let joinedAfterMapExp = [];
     if (firstBattleInStage) {
       stageStarted.add(stage);
       if (profile === 'normal-route' || profile === 'all-accessible') {
@@ -661,7 +666,7 @@ export function buildTeamExpSchedule({
             // Wild/source-backed candidates can join when their acquisition map
             // is reached; they may then receive EXP from trainers on that map
             // and later maps, but never from earlier maps in the same stage.
-            addAvailable(stage, map);
+            const joinedBeforeMapExp = addAvailable(stage, map);
             const source = singleMapResources(expWorld, map, excludedMapTrainerKeys);
             mapExpBefore += source.totalExp;
             mapMoneyBefore += source.totalMoney;
@@ -669,6 +674,13 @@ export function buildTeamExpSchedule({
             const allocation = allocate(source.totalExp, boss);
             totalAllocatedExp += allocation.allocated;
             totalUnallocatedExp += allocation.unallocated;
+            mapSegments.push({
+              map,
+              joinedBeforeMapExp,
+              trainerCount: source.trainers.length,
+              exp: source.totalExp,
+              money: source.totalMoney,
+            });
           }
         } else {
           const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
@@ -688,7 +700,7 @@ export function buildTeamExpSchedule({
     // Manual gifts/statics without a mapped acquisition point conservatively
     // join after the stage's map EXP; every stage candidate still exists for
     // the stage's scored boss battle.
-    addAvailable(stage);
+    joinedAfterMapExp = addAvailable(stage);
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const aceGapBefore = aceGapForStates(states, Number(boss.aceLevel));
@@ -725,6 +737,8 @@ export function buildTeamExpSchedule({
       mapExpBefore,
       mapMoneyBefore,
       mapTrainerCount,
+      mapSegments,
+      joinedAfterMapExp,
       moneyBefore,
       bestWildGrind: wild,
       aceGapExpBefore: aceGapBefore.total,
