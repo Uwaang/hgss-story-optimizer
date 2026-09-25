@@ -878,19 +878,19 @@ async function cmdOptimize() {
 async function cmdMoveScoreSmoke() {
   const aerialAce = candidateMoveUtility('Pidgeot', 'Aerial Ace');
   const hyperBeam = candidateMoveUtility('Pidgeot', 'Hyper Beam');
-  const razorLeaf = candidateMoveUtility('Meganium', 'Razor Leaf');
+  const energyBall = candidateMoveUtility('Meganium', 'Energy Ball');
   const solarBeam = candidateMoveUtility('Meganium', 'Solar Beam');
 
   if (!(aerialAce > hyperBeam)) {
     throw new Error(`Recharge penalty regression: Aerial Ace ${aerialAce} <= Hyper Beam ${hyperBeam}`);
   }
-  if (!(razorLeaf > solarBeam * 0.45)) {
-    throw new Error('Charge-move penalty looks unexpectedly weak/strong');
+  if (!(energyBall > solarBeam)) {
+    throw new Error(`Charge penalty regression: Energy Ball ${energyBall} <= Solar Beam ${solarBeam}`);
   }
 
   console.log(JSON.stringify({
     Pidgeot: { aerialAce, hyperBeam },
-    Meganium: { razorLeaf, solarBeam },
+    Meganium: { energyBall, solarBeam },
   }, null, 2));
 }
 
