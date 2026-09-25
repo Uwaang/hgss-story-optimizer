@@ -33,7 +33,7 @@ Currently deferred:
 - voluntary switches use a 3-turn cooldown and a maximum of 6 per battle;
 - NPCs remain attack-focused rather than being given invented aggressive switching.
 
-Player battle levels are still normalized to the current opponent's ace level. Grinding burden is modeled separately.
+Battle levels now have three explicit modes. The legacy `ace` profile keeps the old free ace-level normalization only for regression. `major` and `all-accessible` derive each party member's actual level from source-backed EXP supply, acquisition timing, and its Gen 4 growth curve.
 
 ### Acquisition and evolution
 
@@ -63,19 +63,46 @@ Move selection is story-stage aware.
 
 Examples of modeled repeatable resources include Fire Blast / Blizzard / Thunder from the Department Store and Flamethrower / Ice Beam / Thunderbolt from the Game Corner.
 
-### Grinding / cost metrics
+### EXP budget and grinding
 
-The optimizer reports several objectives separately instead of hiding them in one arbitrary score.
+EXP is now modeled from the HGSS source instead of assigning free levels.
+
+Source inputs:
+
+- trainer species/levels: `trainers.json`
+- species EXP yield and growth rate: `personal.json`
+- Lv1-100 cumulative EXP: `growtbl.csv`
+- trainer-map placement: `zone_event/*.json`
+- wild species/levels: `gs_enc_data.json`
+- Gen 4 EXP rule from `battle_command.c`: `floor(expYield * level / 7)`, then the trainer-battle 1.5× bonus
+
+EXP supply profiles:
+
+- `ace`: legacy regression mode; free normalization to each opponent's ace level
+- `major`: lower bound using only the 21 scored major battles
+- `all-accessible`: accessible-trainer envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
+
+Late-joining Pokémon never receive EXP from earlier stages. Natural EXP is currently allocated with a deterministic **lowest-level-first balanced policy**. The entry-level assumption is the highest source-backed encounter/gift level for each acquisition source, so this remains mildly optimistic.
+
+Grind policies for non-`ace` EXP profiles:
+
+- `none`: fight with the naturally reached levels
+- `ace-paid`: raise the current team to the next opponent ace level, but record the exact extra EXP and an expected wild-battle count instead of granting those levels for free
+
+Wild-grind estimates use the original Gen 4 slot weights (land 20/20/10/10/10/10/5/5/4/4/1/1, Surf 60/30/5/4/1, rods 40/30/15/10/5, Rock Smash 80/20) and the best currently accessible source by expected EXP per battle.
+
+For the current six-mon regression team, the source-backed `all-accessible + none` envelope reaches roughly Lv35-36 by Lance from 262k natural EXP, while repeatedly forcing ace levels costs more than 500k additional EXP and roughly one thousand expected wild battles. This quantifies why the former free ace normalization was too generous.
+
+The optimizer reports:
 
 - mean battle win rate
-- `worstBossWinRate`: the weakest major-story matchup, retained as a separate robustness objective
-- `catchUpExp`: EXP needed to bring a newly acquired member to the next relevant story battle level
+- `worstBossWinRate`
+- effective EXP burden (`totalGrindExp` in the new EXP profiles; legacy `catchUpExp` only in `ace`)
+- expected grind battles
 - `purchaseCosts.money`
 - `purchaseCosts.coins`
 
-Growth-rate-aware EXP uses the six Gen 4 curves (Fast, Medium Fast, Medium Slow, Slow, Erratic, Fluctuating), validated against the HGSS growth table.
-
-Pareto output removes teams that are simultaneously no better in win rate and no cheaper in EXP/money/coins.
+Pareto and beam-search dominance use the effective EXP burden, so legacy `catchUpExp` is no longer double-counted in natural-EXP searches.
 
 
 ### Resource profiles
@@ -93,6 +120,15 @@ This matters because the optimizer can now compare a practical no-shopping party
 Examples:
 
 ```bash
+# Legacy level-normalized regression
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --final-runs=10
+
+# Natural levels from accessible trainer EXP
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --exp-profile=all-accessible --grind-policy=none --final-runs=10
+
+# Same natural supply, but explicitly pay to grind to each ace level
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --exp-profile=all-accessible --grind-policy=ace-paid --final-runs=10
+
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --final-runs=10
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=money --final-runs=10
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --final-runs=10
@@ -161,6 +197,9 @@ npm run simulate -- --runs=20
 
 npm run route-smoke
 npm run exp-smoke
+npm run exp-budget-smoke
+npm run exp-route-smoke
+npm run exp-budget -- --version=HEARTGOLD --exp-profile=all-accessible --grind-policy=none
 npm run switch-smoke
 npm run tutor-smoke
 npm run hm-smoke
@@ -198,7 +237,9 @@ This is not yet a bit-perfect HGSS story emulator.
 - reachability stages are conservative curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
-- battle level normalization remains an abstraction even though catch-up EXP is now tracked;
+- `all-accessible` is an accessible-trainer envelope, not yet a proven normal-route trainer subset;
+- EXP allocation is a deterministic balanced policy rather than a jointly optimized switch-training schedule;
+- entry levels currently use the highest source-backed encounter level, which is optimistic;
 - beam search is heuristic and does not prove the global optimum;
 - double battles with an ally are not yet represented faithfully.
 
@@ -208,6 +249,8 @@ GitHub Actions currently checks:
 
 - syntax and source-backed acquisition validation
 - exact growth-curve smoke
+- source-backed natural EXP supply and real per-Pokémon battle levels
+- paid-grind EXP / expected-wild-battle accounting
 - starter-specific 21-battle route selection
 - real battle completion
 - bounded player switching
@@ -218,7 +261,7 @@ GitHub Actions currently checks:
 - HG/SS canonical pools
 - prefix and beam-search smoke
 
-Push commits containing `[optimize]` run the `all` resource profile across HG/SS × all three starters. `[optimize-core]` runs the same search with no purchasable TMs. Both retain JSON results as Actions artifacts.
+Push commits containing `[optimize]` run the legacy `ace` comparison across HG/SS × all three starters. `[optimize-core]` runs the same legacy search with no purchasable TMs. `[optimize-exp]` runs two `all-accessible` EXP searches: natural levels (`grind-policy=none`) and explicitly paid ace-level grinding (`grind-policy=ace-paid`). All retain JSON results as Actions artifacts.
 
 The current CI optimization profile uses beam width 4, candidate cap 16, and 10-run finalist rescoring.
 
