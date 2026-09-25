@@ -109,8 +109,56 @@ async function cmdExtract() {
   console.log(JSON.stringify(compact, null, 2));
 }
 
+function estimateCatchUpLevels(candidates, bosses) {
+  const details = [];
+  let total = 0;
+  let unknown = 0;
+
+  for (const candidate of candidates) {
+    // Stage-0 members are assumed to level naturally during the opening route.
+    if (Number(candidate.availableFrom || 0) <= 0) {
+      details.push({
+        species: candidate.species,
+        availableFrom: Number(candidate.availableFrom || 0),
+        entryLevelMax: candidate.entryLevelMax ?? null,
+        targetLevel: bosses[0]?.aceLevel ?? null,
+        catchUpLevels: 0,
+        assumedNaturalOpening: true,
+      });
+      continue;
+    }
+
+    const firstBoss = bosses.find(boss => boss.stage >= Number(candidate.availableFrom || 0));
+    const entryLevel = Number(candidate.entryLevelMax);
+    if (!firstBoss || !Number.isFinite(entryLevel)) {
+      unknown += 1;
+      details.push({
+        species: candidate.species,
+        availableFrom: Number(candidate.availableFrom || 0),
+        entryLevelMax: candidate.entryLevelMax ?? null,
+        targetLevel: firstBoss?.aceLevel ?? null,
+        catchUpLevels: null,
+      });
+      continue;
+    }
+
+    const deficit = Math.max(0, Number(firstBoss.aceLevel) - entryLevel);
+    total += deficit;
+    details.push({
+      species: candidate.species,
+      availableFrom: Number(candidate.availableFrom || 0),
+      entryLevelMax: entryLevel,
+      targetLevel: firstBoss.aceLevel,
+      catchUpLevels: deficit,
+    });
+  }
+
+  return { total, unknown, details };
+}
+
 async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const rows = [];
+  const catchUp = estimateCatchUpLevels(candidates, bosses);
   const singleUsePlan = planSingleUseMachines(candidates, bosses, moveAccess);
   let weightedWins = 0;
   let weightedRuns = 0;
@@ -150,6 +198,9 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   }
   return {
     score: weightedRuns ? weightedWins / weightedRuns : 0,
+    catchUpLevels: catchUp.total,
+    catchUpUnknown: catchUp.unknown,
+    catchUpDetails: catchUp.details,
     singleUsePlan,
     rows,
   };
@@ -180,6 +231,8 @@ async function cmdPool() {
       species: mon.species,
       availableFrom: mon.availableFrom,
       familyId: mon.familyId,
+      entryLevelMin: mon.entryLevelMin ?? null,
+      entryLevelMax: mon.entryLevelMax ?? null,
       speciesByStage: mon.speciesByStage,
       sourceTypes: [...new Set(mon.sources.map(x => x.type))],
     })),
@@ -274,6 +327,8 @@ function findStarterCandidate(candidates, requested) {
 function searchResultRow(team, evaluation) {
   return {
     score: evaluation.score,
+    catchUpLevels: evaluation.catchUpLevels,
+    catchUpUnknown: evaluation.catchUpUnknown,
     team: team.map(x => x.species),
     singleUsePlan: evaluation.singleUsePlan,
     bosses: evaluation.rows.map(row => ({
