@@ -35,10 +35,33 @@ function normalizeExpProfile(value) {
   return profile;
 }
 
+function mergeExpAccess(baseAccess, expAccess) {
+  const stages = new Map(
+    (baseAccess?.stages || []).map(stage => [
+      Number(stage.stage),
+      { ...stage, addMaps: [...(stage.addMaps || [])] },
+    ])
+  );
+  for (const extra of expAccess?.additionalStages || []) {
+    const stage = Number(extra.stage);
+    const current = stages.get(stage) || { stage, addMaps: [] };
+    const maps = new Set([...(current.addMaps || []), ...(extra.maps || [])]);
+    stages.set(stage, { ...current, addMaps: [...maps] });
+  }
+  return {
+    ...baseAccess,
+    stages: [...stages.values()].sort((a, b) => Number(a.stage) - Number(b.stage)),
+  };
+}
+
 async function loadExpContext(story, expProfile) {
   const profile = normalizeExpProfile(expProfile);
   if (profile === 'ace') return { profile, world: null };
-  const access = await readJson('config/story-access.canonical.json');
+  const [baseAccess, expAccess] = await Promise.all([
+    readJson('config/story-access.canonical.json'),
+    readJson('config/exp-access.json'),
+  ]);
+  const access = mergeExpAccess(baseAccess, expAccess);
   const world = await buildExpWorld({
     commit: story.config.sourceCommit,
     access,
