@@ -1275,6 +1275,126 @@ async function cmdSearch() {
   }, null, 2));
 }
 
+async function cmdConvergence() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = arg('starter', 'Cyndaquil');
+  const runs = Number(arg('runs', '1'));
+  const screenRuns = Number(arg('screen-runs', '1'));
+  const finalRuns = Number(arg('final-runs', '3'));
+  const teamSize = Number(arg('team-size', '6'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const beamWidths = String(arg('beam-widths', '4,8,16'))
+    .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
+  const candidateCaps = String(arg('candidate-caps', '16,24,32'))
+    .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
+  if (!beamWidths.length || !candidateCaps.length) {
+    throw new Error('convergence requires positive --beam-widths and --candidate-caps');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+    ),
+  ]);
+  const candidates = pool.candidates;
+  const requiredCandidate = findStarterCandidate(candidates, starterName);
+  const screenRows = await screenCandidates(
+    candidates,
+    story,
+    moveAccess,
+    screenRuns,
+    expContext,
+    grindPolicy,
+  );
+
+  const rows = [];
+  for (const candidateCap of candidateCaps) {
+    for (const beamWidth of beamWidths) {
+      const result = await runBeamSearch({
+        candidates,
+        story,
+        moveAccess,
+        runs,
+        teamSize,
+        beamWidth,
+        candidateCap,
+        screenRuns,
+        finalRuns,
+        requiredCandidate,
+        screenRowsOverride: screenRows,
+        expContext,
+        grindPolicy,
+      });
+      const top = result.top[0] || null;
+      rows.push({
+        beamWidth,
+        candidateCap,
+        evaluatedTeams: result.evaluatedTeams,
+        finalRescoredTeams: result.finalRescoredTeams,
+        team: top?.team || [],
+        finalTeam: top?.finalTeam || [],
+        score: top?.score ?? null,
+        worstBossWinRate: top?.worstBossWinRate ?? null,
+        expBurden: top?.expBurden ?? null,
+        captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
+        resourceBurden: top ? rowResourceBurden(top) : null,
+      });
+    }
+  }
+
+  const baseline = rows
+    .slice()
+    .sort((a, b) =>
+      b.candidateCap - a.candidateCap ||
+      b.beamWidth - a.beamWidth
+    )[0] || null;
+  const baselineSet = new Set(baseline?.team || []);
+  for (const row of rows) {
+    const overlap = row.team.filter(species => baselineSet.has(species)).length;
+    row.baselineTeamOverlap = overlap;
+    row.baselineTeamOverlapRatio = baselineSet.size ? overlap / baselineSet.size : null;
+    row.scoreDeltaFromLargest = baseline && row.score !== null && baseline.score !== null
+      ? row.score - baseline.score
+      : null;
+  }
+
+  console.log(JSON.stringify({
+    version,
+    starter: requiredCandidate?.species || 'any',
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    runsPerBoss: runs,
+    screenRunsPerBoss: screenRuns,
+    finalRunsPerBoss: finalRuns,
+    teamSize,
+    baseline: baseline ? {
+      beamWidth: baseline.beamWidth,
+      candidateCap: baseline.candidateCap,
+      team: baseline.team,
+      score: baseline.score,
+      worstBossWinRate: baseline.worstBossWinRate,
+    } : null,
+    rows,
+  }, null, 2));
+}
+
 async function cmdOptimize() {
   const versions = String(arg('versions', 'HEARTGOLD,SOULSILVER'))
     .split(',')
@@ -2168,6 +2288,7 @@ const commands = {
   validate: cmdValidate,
   simulate: cmdSimulate,
   search: cmdSearch,
+  convergence: cmdConvergence,
   optimize: cmdOptimize,
   'resource-monotonic-smoke': cmdResourceMonotonicSmoke,
   'resource-budget-smoke': cmdResourceBudgetSmoke,
@@ -2191,7 +2312,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
