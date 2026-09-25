@@ -108,8 +108,11 @@ function buildLevelEvolutionStages(speciesConst, availableFrom, bosses, evoByBas
   while (true) {
     const evo = firstLinearLevelEvolution(current, evoByBase);
     if (!evo || seen.has(evo.target)) break;
-    const stage = bosses.findIndex((boss, idx) => idx >= availableFrom && boss.aceLevel >= Number(evo.param));
-    if (stage < 0) break;
+    const nextBattle = bosses.find(
+      boss => Number(boss.stage) >= Number(availableFrom) && boss.aceLevel >= Number(evo.param)
+    );
+    if (!nextBattle) break;
+    const stage = Number(nextBattle.stage);
     transitions.push({
       stage,
       species: constantToName(evo.target, 'SPECIES_'),
