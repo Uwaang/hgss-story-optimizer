@@ -1,13 +1,15 @@
 {
-  "notes": "Illustrative pool only. availableFrom and speciesByStage are approximate story-stage examples and must be verified before a definitive optimization run.",
+  "notes": "Source-backed example pool. Acquisition evidence is defined in story-access.json and validated against the pinned pret source. Level-based evolutions are derived automatically from evo.json; speciesByStage is reserved for explicitly modeled non-level evolutions.",
   "candidates": [
-    {"species": "Cyndaquil", "availableFrom": 0, "speciesByStage": [{"stage": 1, "species": "Quilava"}, {"stage": 7, "species": "Typhlosion"}]},
-    {"species": "Mareep", "availableFrom": 0, "speciesByStage": [{"stage": 1, "species": "Flaaffy"}, {"stage": 4, "species": "Ampharos"}]},
-    {"species": "Heracross", "availableFrom": 2},
-    {"species": "Magikarp", "availableFrom": 1, "speciesByStage": [{"stage": 2, "species": "Gyarados"}]},
-    {"species": "Eevee", "availableFrom": 3, "speciesByStage": [{"stage": 4, "species": "Espeon"}]},
-    {"species": "Zubat", "availableFrom": 0, "speciesByStage": [{"stage": 2, "species": "Golbat"}, {"stage": 3, "species": "Crobat"}]},
-    {"species": "Lapras", "availableFrom": 4},
-    {"species": "Swinub", "availableFrom": 7, "speciesByStage": [{"stage": 7, "species": "Mamoswine"}]}
+    {"species": "Chikorita", "source": "starter-chikorita", "exclusiveGroup": "starter"},
+    {"species": "Cyndaquil", "source": "starter-cyndaquil", "exclusiveGroup": "starter"},
+    {"species": "Totodile", "source": "starter-totodile", "exclusiveGroup": "starter"},
+    {"species": "Zubat", "source": "zubat-dark-cave-r31", "speciesByStage": [{"stage": 4, "species": "Crobat", "derived": "friendship-approximation"}]},
+    {"species": "Mareep", "source": "mareep-route32"},
+    {"species": "Magikarp", "source": "magikarp-route32-old-rod"},
+    {"species": "Heracross", "source": "heracross-route33-headbutt"},
+    {"species": "Eevee", "source": "eevee-bill-goldenrod", "speciesByStage": [{"stage": 4, "species": "Espeon", "derived": "friendship-time-approximation"}]},
+    {"species": "Lapras", "source": "lapras-union-cave"},
+    {"species": "Swinub", "source": "swinub-ice-path"}
   ]
 }
