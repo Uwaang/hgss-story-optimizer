@@ -727,6 +727,56 @@ async function cmdOptimize() {
   console.log(serialized);
 }
 
+async function cmdRouteSmoke() {
+  const story = await loadStory();
+  const expected = {
+    Chikorita: [
+      'TRAINER_RIVAL_SILVER_7',
+      'TRAINER_RIVAL_SILVER_8',
+      'TRAINER_RIVAL_SILVER_18',
+      'TRAINER_RIVAL_SILVER_9',
+    ],
+    Cyndaquil: [
+      'TRAINER_RIVAL_SILVER_10',
+      'TRAINER_RIVAL_SILVER_11',
+      'TRAINER_RIVAL_SILVER_12',
+      'TRAINER_RIVAL_SILVER_13',
+    ],
+    Totodile: [
+      'TRAINER_RIVAL_SILVER',
+      'TRAINER_RIVAL_SILVER_4',
+      'TRAINER_RIVAL_SILVER_17',
+      'TRAINER_RIVAL_SILVER_5',
+    ],
+  };
+
+  const output = {};
+  for (const [starter, rivalKeys] of Object.entries(expected)) {
+    const route = storyBattlesForCandidates(story.bosses, [
+      { species: starter, exclusiveGroup: 'starter' },
+    ]);
+    const activeRivals = route.filter(battle => battle.kind === 'rival').map(battle => battle.key);
+    if (route.length !== 21) {
+      throw new Error(`${starter} route expected 21 battles, got ${route.length}`);
+    }
+    if (JSON.stringify(activeRivals) !== JSON.stringify(rivalKeys)) {
+      throw new Error(`${starter} rival route mismatch: ${JSON.stringify(activeRivals)}`);
+    }
+    output[starter] = {
+      battleCount: route.length,
+      rivalKeys: activeRivals,
+    };
+  }
+
+  const noStarterRoute = storyBattlesForCandidates(story.bosses, []);
+  if (noStarterRoute.length !== 17 || noStarterRoute.some(battle => battle.kind === 'rival')) {
+    throw new Error(`Starter-neutral screening route mismatch: ${noStarterRoute.length}`);
+  }
+  output.starterNeutral = { battleCount: noStarterRoute.length };
+
+  console.log(JSON.stringify(output, null, 2));
+}
+
 async function cmdExpSmoke() {
   const expected = {
     MEDIUM_FAST: 8000,
@@ -955,6 +1005,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'route-smoke': cmdRouteSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'tutor-smoke': cmdTutorSmoke,
@@ -966,7 +1017,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
