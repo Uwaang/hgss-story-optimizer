@@ -8,6 +8,7 @@
     "extract": "node src/cli.mjs extract",
     "simulate": "node src/cli.mjs simulate",
     "search": "node src/cli.mjs search",
+    "convergence": "node src/cli.mjs convergence",
     "smoke": "node src/cli.mjs smoke",
     "pool": "node src/cli.mjs pool",
     "validate": "node src/cli.mjs validate",
