@@ -1,75 +1,124 @@
 # HGSS story simulator
 
-This module searches for strong Pokémon HeartGold/SoulSilver story parties by combining pinned `pret/pokeheartgold` game data with Pokémon Showdown's Gen 4 headless battle simulator.
+A source-backed HeartGold/SoulSilver story-party optimizer using pinned `pret/pokeheartgold` data and Pokémon Showdown's Gen 4 headless battle engine.
 
-## Current coverage
+## What is modeled
 
-### Battle fidelity
+### Story battles
 
-- Boss rosters are fetched from pinned `pret/pokeheartgold` commit `9d8b7591f09b65804da2fb2dfd56f320633e0d36`.
-- The current route covers all 8 Johto Gym Leaders, the Elite Four, and Champion Lance.
-- Explicit trainer moves and held items are mapped into Showdown Gen 4 sets.
-- NPC IVs reproduce HGSS's `floor(difficulty * 31 / 255)` formula.
-- Trainer class/gender metadata and the HGSS LCRNG path reproduce deterministic NPC personality, nature, and ability slot.
-- Battles are deterministic by seed and can be repeated.
-- The player-side policy can voluntarily switch when a bench matchup is materially better; the NPC side remains attack-focused to avoid inventing aggressive trainer switching.
-- Candidate levels are still normalized to each boss's ace level for the battle itself.
+The acquisition stage stays badge-oriented (`0..12`) even when multiple battles occur inside one stage.
+
+For a party with a fixed starter, the current scoring route has **21 major battles**:
+
+- 8 Johto Gym Leaders
+- 4 Team Rocket executive singles with explicit source-script evidence
+- 4 starter-matched Silver battles
+- Elite Four
+- Champion Lance
+
+Silver variants are selected from the player's starter, so all three rival variants are never counted together. Candidate screening without a starter uses the 17 common battles only.
+
+Currently deferred:
+
+- the opening Silver fight, because it occurs before normal catching access;
+- the Mahogany Ariana + Grunt MultiBattle with Lance, because treating it as a 1v1 would distort difficulty;
+- event-trainer Proton/Ariana encounters whose mandatory-route status still needs reachability verification.
+
+### Trainer fidelity
+
+- rosters, levels, explicit moves and held items come from pinned HGSS trainer data;
+- NPC IVs reproduce `floor(difficulty * 31 / 255)`;
+- trainer class/gender plus the HGSS LCRNG reproduce deterministic personality, nature and ability slot;
+- the player AI uses deterministic move scoring plus bounded voluntary switching;
+- voluntary switches use a 3-turn cooldown and a maximum of 6 per battle;
+- NPCs remain attack-focused rather than being given invented aggressive switching.
+
+Player battle levels are still normalized to the current opponent's ace level. Grinding burden is modeled separately.
 
 ### Acquisition and evolution
 
-The main canonical pool is built from the game data rather than a handwritten tier list.
+The canonical pool is generated from game data rather than a handwritten tier list.
 
-- Wild availability comes from `gs_enc_data.json`.
-- Headbutt candidates and Lv ranges come from `files/arc/headbutt.json` once Headbutt is available.
-- HeartGold/SoulSilver version differences are resolved from the source data.
-- Story-accessible maps and method unlocks are defined in `config/story-access.canonical.json`.
-- Gifts/statics/headbutt exceptions are auditable manual acquisitions.
-- Unambiguous level evolutions are derived from `evo.json`.
-- Duplicate evolution families and mutually exclusive starters are rejected.
-- Wild encounter min/max levels are retained as `entryLevelMin/Max`.
-- Verified manual acquisition levels are recorded where source scripts make them explicit.
+- wild, Surf, fishing and Rock Smash data: `gs_enc_data.json`
+- Headbutt species and encounter levels: `files/arc/headbutt.json`
+- gifts/statics/manual exceptions: audited config entries with source notes
+- unambiguous level evolution: `evo.json`
+- species growth rate: `personal.json`
+- HeartGold/SoulSilver version differences are preserved
+- starter exclusivity and duplicate evolution-family constraints are enforced
 
-The current conservative canonical route produces **98 candidate acquisitions** for HeartGold and **98** for SoulSilver, with version-specific stage distributions. Headbutt candidates and their encounter levels are sourced from `files/arc/headbutt.json` after the story unlock.
+Current conservative canonical pool: **98 acquisition candidates per version**.
 
-A smaller curated pool remains as a regression/reference path; every candidate points to encounter/headbutt/script evidence and is validated against the pinned source.
+### Move access and resource costs
 
-### Move access
+Move selection is story-stage aware.
 
-Move selection is stage-aware.
+- Gen 4 level-up moves
+- reusable Johto HMs
+- reusable Ilex Forest Headbutt tutor
+- single-use story TMs with persistent ownership
+- Goldenrod Department Store repeatable TMs with money cost
+- Goldenrod Game Corner repeatable TMs with coin cost
+- Gen 4 compatibility checks before a move is offered
 
-- Level-up moves come from Gen 4 learnsets.
-- Johto HMs are modeled as reusable machines with story acquisition stages.
-- A first source-backed set of one-use story TMs is modeled, including the Johto Gym rewards plus early TM70/TM05.
-- Each one-use TM gets a persistent owner within a candidate team; the same TM cannot be assigned to multiple members.
-- Machine compatibility is checked against Gen 4 learnsets.
+Examples of modeled repeatable resources include Fire Blast / Blizzard / Thunder from the Department Store and Flamethrower / Ice Beam / Thunderbolt from the Game Corner.
 
-This is intentionally conservative: the full set of overworld/shop/Game Corner/Tutor moves is not modeled yet.
+### Grinding / cost metrics
 
-### Search
+The optimizer reports several objectives separately instead of hiding them in one arbitrary score.
 
-Two strategies are available:
+- battle win rate
+- `catchUpExp`: EXP needed to bring a newly acquired member to the next relevant story battle level
+- `purchaseCosts.money`
+- `purchaseCosts.coins`
 
-- `prefix`: deterministic regression/simple search over the first legal combinations.
-- `beam`: actual battle simulations first screen individual candidates, then iteratively keep the strongest partial teams.
+Growth-rate-aware EXP uses the six Gen 4 curves (Fast, Medium Fast, Medium Slow, Slow, Erratic, Fluctuating), validated against the HGSS growth table.
+
+Pareto output removes teams that are simultaneously no better in win rate and no cheaper in EXP/money/coins.
+
+## Search
+
+`prefix` exists mainly as a deterministic regression path.
+
+`beam` is the useful optimizer:
+
+1. simulate individual candidates;
+2. keep a candidate shortlist;
+3. iteratively grow legal partial teams;
+4. retain a beam of strong teams;
+5. rescore surviving full teams across multiple deterministic RNG seeds.
 
 A starter can be fixed:
 
 ```bash
-npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
+npm run search -- \
+  --pool=canonical \
+  --version=HEARTGOLD \
+  --strategy=beam \
+  --starter=Cyndaquil \
+  --runs=1 \
+  --screen-runs=1 \
+  --final-runs=10 \
+  --beam-width=8 \
+  --candidate-cap=24 \
+  --team-size=6
 ```
 
-The search output now includes:
+All six HG/SS × starter searches can share candidate screening:
 
-- aggregate boss win rate;
-- boss-by-boss results;
-- persistent one-use TM ownership plan;
-- `catchUpLevels`: a first acquisition-level burden metric.
+```bash
+npm run optimize -- \
+  --versions=HEARTGOLD,SOULSILVER \
+  --starters=Chikorita,Cyndaquil,Totodile \
+  --runs=1 \
+  --screen-runs=1 \
+  --final-runs=10 \
+  --beam-width=4 \
+  --candidate-cap=16 \
+  --team-size=6
+```
 
-`catchUpLevels` is deliberately kept separate from win rate for now, so Pareto output can compare battle strength against grinding burden rather than hiding an arbitrary weight inside one score.
-
-Final beam survivors can be rescored across multiple deterministic RNG seeds with `--final-runs=N`; the CI preliminary optimizer uses 10 runs per boss for the finalists.
-
-The current optimizer baseline also uses bounded voluntary switching (3-turn cooldown, maximum 6 voluntary switches per battle) to avoid switch-loop artifacts.
+Optimization output includes provenance, route size, team members, battle-by-battle win rates, TM ownership, purchase costs and Pareto results. It can be written to JSON and retained as a GitHub Actions artifact.
 
 ## Setup
 
@@ -80,38 +129,27 @@ cd hgss_story_sim
 npm install
 ```
 
-## Commands
+## Useful commands
 
 ```bash
-# source-backed curated validation
 npm run validate
-
-# inspect canonical pools
 npm run pool -- --version=HEARTGOLD
 npm run pool -- --version=SOULSILVER
-npm run pool -- --version=HEARTGOLD --full=true
-
-# curated baseline through all 13 bosses
 npm run simulate -- --runs=20
 
-# canonical beam search, fixed starter
-npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
-
-# HG/SS × all three starters; candidate screening is reused per version
-npm run optimize -- --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=3 --candidate-cap=12 --team-size=6
-
-# simple/prefix search
-npm run search -- --pool=canonical --version=HEARTGOLD --strategy=prefix --runs=1 --limit=100 --team-size=6
-
-# regression checks
-npm run smoke
+npm run route-smoke
+npm run exp-smoke
+npm run switch-smoke
+npm run tutor-smoke
 npm run hm-smoke
 npm run tm-smoke
+npm run shop-tm-smoke
+npm run smoke
 ```
 
-## Story stages
+## Acquisition stages
 
-`availableFrom` is the zero-based position in `config/story-bosses.json`:
+Stage is an acquisition checkpoint, not the index of a battle in the route.
 
 - 0 Falkner
 - 1 Bugsy
@@ -127,40 +165,43 @@ npm run tm-smoke
 - 11 Karen
 - 12 Lance
 
+Rocket and rival battles share the appropriate stage without shifting these checkpoints.
+
 ## Current approximations
 
 This is not yet a bit-perfect HGSS story emulator.
 
-- Trainer bag-item use is not modeled.
-- Battle decisions use a deterministic heuristic policy (including conservative player switching) rather than an exhaustive optimal controller or exact HGSS AI flags.
-- Story map/method unlock stages are conservative curated checkpoints, not a full map-event reachability graph.
-- Friendship, stone, trade, move-known, and location evolutions remain conservative/manual.
-- Only a subset of story TMs is modeled; shops, many overworld TMs, and tutors still need coverage.
-- Equal-level battle normalization is still used; `catchUpLevels` only records an entry-level burden and is not a full EXP/time simulator.
-- Beam search is heuristic, not a proof of the globally optimal team.
-- Search does not yet emit a true Pareto frontier.
+- trainer bag-item use is not modeled;
+- battle policy is heuristic rather than a globally optimal controller or exact HGSS AI;
+- reachability stages are conservative curated checkpoints, not a complete event-graph proof;
+- friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
+- overworld TM coverage is incomplete;
+- battle level normalization remains an abstraction even though catch-up EXP is now tracked;
+- beam search is heuristic and does not prove the global optimum;
+- double battles with an ally are not yet represented faithfully.
 
-## CI coverage
+## CI
 
-GitHub Actions verifies:
+GitHub Actions currently checks:
 
-- dependency install and syntax checks;
-- curated source-backed acquisition validation;
-- a real Falkner battle;
-- a targeted player-side matchup-switch case;
-- reusable-HM timing;
-- one-use TM ownership;
-- one full pass over all 13 Johto/E4/Lance bosses;
-- HeartGold and SoulSilver canonical pools;
-- canonical prefix-search smoke;
-- beam-search smoke.
+- syntax and source-backed acquisition validation
+- exact growth-curve smoke
+- starter-specific 21-battle route selection
+- real battle completion
+- bounded player switching
+- tutor/HM timing
+- one-use TM ownership
+- repeatable TM cost accounting
+- full story-route simulation
+- HG/SS canonical pools
+- prefix and beam-search smoke
 
-A heavier six-search preliminary optimization (HG/SS × three starters) only runs on push commits whose message contains `[optimize]`.
+Push commits containing `[optimize]` additionally run HG/SS × all three starters and retain the JSON result as an Actions artifact.
 
 ## Next milestones
 
-1. Expand source-backed TM/shop/tutor coverage.
-2. Turn entry-level burden into a better EXP/grinding-time model and Pareto objective.
-3. Improve trainer AI/item-use fidelity.
-4. Increase optimizer breadth and compare multiple search strategies.
+1. Verify and add remaining mandatory Rocket/event encounters.
+2. Expand overworld TM and other pre-Lance move-source coverage.
+3. Improve trainer item-use / AI fidelity.
+4. Broaden optimizer search and benchmark convergence.
 5. Extend through Kanto and Red.
