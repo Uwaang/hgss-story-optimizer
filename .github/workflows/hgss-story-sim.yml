@@ -32,6 +32,8 @@ jobs:
           node --check src/acquisition.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
+      - name: Validate source-backed availability
+        run: npm run validate
       - name: HGSS battle smoke test
         run: npm run smoke
       - name: Full Johto route smoke test
