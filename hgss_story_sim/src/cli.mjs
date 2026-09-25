@@ -1131,6 +1131,116 @@ async function cmdRouteSmoke() {
   console.log(JSON.stringify(output, null, 2));
 }
 
+async function cmdExpBudget() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
+  if (profile === 'ace') {
+    throw new Error('exp-budget requires --exp-profile=major or all-accessible');
+  }
+  const requestedTeam = String(arg(
+    'team',
+    'Cyndaquil,Mareep,Geodude,Zubat,Lapras,Tentacool'
+  )).split(',').map(value => value.trim()).filter(Boolean);
+
+  const story = await loadStory();
+  const pool = await loadCanonicalPool(version, story);
+  const team = requestedTeam.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species.toLowerCase() === name.toLowerCase());
+    if (!candidate) throw new Error(`EXP-budget candidate not found: ${name}`);
+    return candidate;
+  });
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(story, profile);
+  const schedule = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile,
+  });
+
+  console.log(JSON.stringify({
+    version,
+    team: team.map(mon => mon.species),
+    routeBattleCount: route.length,
+    world: {
+      mapTrainerCount: expContext.world.mapTrainerRows.length,
+      mapCount: expContext.world.mapCount,
+      unresolvedMaps: expContext.world.unresolvedMaps,
+    },
+    ...schedule,
+  }, null, 2));
+}
+
+async function cmdExpBudgetSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude', 'Zubat', 'Lapras', 'Tentacool'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing EXP-budget smoke candidate: ${name}`);
+    return candidate;
+  });
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(story, 'all-accessible');
+
+  const major = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'major',
+  });
+  const accessible = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'all-accessible',
+  });
+
+  if (major.totalMapExp !== 0) {
+    throw new Error(`major profile unexpectedly included map EXP: ${major.totalMapExp}`);
+  }
+  if (!(accessible.totalNaturalExp > major.totalNaturalExp)) {
+    throw new Error(
+      `all-accessible EXP must exceed major-only: ${accessible.totalNaturalExp} <= ${major.totalNaturalExp}`
+    );
+  }
+  if (major.unknownEntryLevels.length || accessible.unknownEntryLevels.length) {
+    throw new Error(
+      `EXP-budget smoke has unknown entry levels: ${JSON.stringify(accessible.unknownEntryLevels)}`
+    );
+  }
+
+  const laprasKey = team.find(mon => mon.species === 'Lapras').familyId || 'Lapras';
+  const preLapras = accessible.battles.filter(battle => battle.stage < 4);
+  if (preLapras.some(battle => Object.hasOwn(battle.levelsBefore, laprasKey))) {
+    throw new Error('Lapras received EXP before its stage-4 acquisition');
+  }
+
+  const levelSum = schedule => Object.values(schedule.finalLevels)
+    .reduce((sum, level) => sum + Number(level || 0), 0);
+  if (!(levelSum(accessible) >= levelSum(major))) {
+    throw new Error('More natural EXP produced a lower final level sum');
+  }
+
+  console.log(JSON.stringify({
+    routeBattleCount: route.length,
+    worldMapTrainerCount: expContext.world.mapTrainerRows.length,
+    unresolvedMaps: expContext.world.unresolvedMaps,
+    major: {
+      totalNaturalExp: major.totalNaturalExp,
+      totalMajorExp: major.totalMajorExp,
+      finalLevels: major.finalLevels,
+    },
+    allAccessible: {
+      totalNaturalExp: accessible.totalNaturalExp,
+      totalMapExp: accessible.totalMapExp,
+      totalMajorExp: accessible.totalMajorExp,
+      firstBattleLevels: accessible.battles[0]?.levelsBefore,
+      finalLevels: accessible.finalLevels,
+    },
+  }, null, 2));
+}
+
 async function cmdExpSmoke() {
   const expected = {
     MEDIUM_FAST: 8000,
@@ -1363,6 +1473,8 @@ const commands = {
   'move-score-smoke': cmdMoveScoreSmoke,
   'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
+  'exp-budget': cmdExpBudget,
+  'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'tutor-smoke': cmdTutorSmoke,
@@ -1374,7 +1486,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
