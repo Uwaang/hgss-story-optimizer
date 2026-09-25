@@ -5,6 +5,8 @@ export function pretUrls(commit = DEFAULT_PRET_COMMIT) {
   return {
     trainers: `${PRET_RAW_ROOT}/${commit}/files/poketool/trainer/trainers.json`,
     trainerConstants: `${PRET_RAW_ROOT}/${commit}/include/constants/trainers.h`,
+    trainerClassConstants: `${PRET_RAW_ROOT}/${commit}/include/constants/trainer_class.h`,
+    trainerDataSource: `${PRET_RAW_ROOT}/${commit}/src/trainer_data.c`,
   };
 }
 
@@ -27,11 +29,35 @@ export function parseTrainerConstants(headerText) {
   return result;
 }
 
+export function parseTrainerClassConstants(headerText) {
+  const result = new Map();
+  const define = /^#define\s+(TRAINERCLASS_[A-Z0-9_]+)\s+(\d+)\s*$/gm;
+  for (const match of headerText.matchAll(define)) {
+    result.set(match[1], Number(match[2]));
+  }
+  return result;
+}
+
+export function parseTrainerGenders(sourceText) {
+  const result = new Map();
+  const start = sourceText.indexOf('static const u8 sTrainerGenders[] = {');
+  if (start < 0) return result;
+  const end = sourceText.indexOf('};', start);
+  const block = end >= 0 ? sourceText.slice(start, end) : sourceText.slice(start);
+  const row = /\b(TRAINER_MALE|TRAINER_FEMALE|TRAINER_DOUBLE),\s*\/\/\s*(TRAINERCLASS_[A-Z0-9_]+)/g;
+  for (const match of block.matchAll(row)) {
+    result.set(match[2], match[1]);
+  }
+  return result;
+}
+
 export async function loadPretTrainerData(commit = DEFAULT_PRET_COMMIT) {
   const urls = pretUrls(commit);
-  const [trainerJsonText, constantsText] = await Promise.all([
+  const [trainerJsonText, constantsText, classConstantsText, trainerDataText] = await Promise.all([
     fetchText(urls.trainers),
     fetchText(urls.trainerConstants),
+    fetchText(urls.trainerClassConstants),
+    fetchText(urls.trainerDataSource),
   ]);
   const trainerJson = JSON.parse(trainerJsonText);
   if (!Array.isArray(trainerJson.trainers)) {
@@ -41,6 +67,8 @@ export async function loadPretTrainerData(commit = DEFAULT_PRET_COMMIT) {
     commit,
     trainers: trainerJson.trainers,
     constants: parseTrainerConstants(constantsText),
+    trainerClasses: parseTrainerClassConstants(classConstantsText),
+    trainerGenders: parseTrainerGenders(trainerDataText),
   };
 }
 
@@ -55,11 +83,18 @@ export function extractBosses(source, bossConfig) {
       throw new Error(`Trainer id ${trainerId} (${boss.key}) is outside trainers.json`);
     }
     const aceLevel = Math.max(...trainer.party.map(mon => mon.level));
+    const trainerClassId = source.trainerClasses.get(trainer.class);
+    if (trainerClassId === undefined) {
+      throw new Error(`Trainer class constant not found: ${trainer.class}`);
+    }
+    const trainerGender = source.trainerGenders.get(trainer.class) || 'TRAINER_MALE';
     return {
       stage,
       key: boss.key,
       label: boss.label,
       trainerId,
+      trainerClassId,
+      trainerGender,
       aceLevel,
       trainer,
     };
