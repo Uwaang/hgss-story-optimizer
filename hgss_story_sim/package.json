@@ -25,6 +25,7 @@
     "resource-monotonic-smoke": "node src/cli.mjs resource-monotonic-smoke",
     "exp-budget": "node src/cli.mjs exp-budget",
     "exp-budget-smoke": "node src/cli.mjs exp-budget-smoke",
+    "exp-segment-smoke": "node src/cli.mjs exp-segment-smoke",
     "exp-allocator-smoke": "node src/cli.mjs exp-allocator-smoke",
     "exp-route-smoke": "node src/cli.mjs exp-route-smoke",
     "capture-smoke": "node src/cli.mjs capture-smoke",
