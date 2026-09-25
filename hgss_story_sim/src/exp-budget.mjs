@@ -472,7 +472,7 @@ function allocateBossAwareExpInternal(
   amount,
   boss,
   levelUtility,
-  { maxTrainingGap = null } = {},
+  { softLevelScale = null } = {},
 ) {
   let remaining = Math.max(0, Math.floor(Number(amount || 0)));
   let allocated = 0;
@@ -480,12 +480,8 @@ function allocateBossAwareExpInternal(
 
   while (remaining > 0 && eligible.length) {
     const minimumLevel = Math.min(...eligible.map(state => state.level));
-    const trainingPool = Number.isFinite(Number(maxTrainingGap))
-      ? eligible.filter(state => state.level < minimumLevel + Number(maxTrainingGap))
-      : eligible;
-
     let best = null;
-    for (const state of trainingPool) {
+    for (const state of eligible) {
       const nextThreshold = expAtLevel(state.growthRate, state.level + 1);
       if (nextThreshold === null) continue;
       const need = Math.max(1, nextThreshold - state.exp);
@@ -494,7 +490,12 @@ function allocateBossAwareExpInternal(
       const gain = Math.max(0, nextUtility - currentUtility);
       // Absolute matchup value keeps useful members trainable even between
       // discrete move/evolution breakpoints; marginal gain rewards breakpoints.
-      const priority = (0.25 * Math.max(0, nextUtility) + 2 * gain + 0.01) / need;
+      const basePriority = (0.25 * Math.max(0, nextUtility) + 2 * gain + 0.01) / need;
+      const levelGap = Math.max(0, state.level - minimumLevel);
+      const fairness = softLevelScale === null
+        ? 1
+        : 1 / (1 + (levelGap / Math.max(1, Number(softLevelScale))) ** 2);
+      const priority = basePriority * fairness;
       if (
         !best ||
         priority > best.priority ||
@@ -530,14 +531,14 @@ export function allocateBossAwareSoftExp(
   amount,
   boss,
   levelUtility,
-  maxTrainingGap = 8,
+  softLevelScale = 8,
 ) {
   return allocateBossAwareExpInternal(
     states,
     amount,
     boss,
     levelUtility,
-    { maxTrainingGap },
+    { softLevelScale },
   );
 }
 
@@ -614,7 +615,7 @@ export function buildTeamExpSchedule({
   sameStageJoinPolicy = 'map-order',
   allocator = 'balanced',
   levelUtility = null,
-  bossAwareSoftLevelGap = 8,
+  bossAwareSoftLevelScale = 8,
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -636,8 +637,8 @@ export function buildTeamExpSchedule({
       `${allocator} EXP allocator requires levelUtility(candidate, boss, level)`
     );
   }
-  if (!Number.isInteger(Number(bossAwareSoftLevelGap)) || Number(bossAwareSoftLevelGap) < 1) {
-    throw new Error(`Invalid boss-aware-soft level gap: ${bossAwareSoftLevelGap}`);
+  if (!Number.isInteger(Number(bossAwareSoftLevelScale)) || Number(bossAwareSoftLevelScale) < 1) {
+    throw new Error(`Invalid boss-aware-soft level gap: ${bossAwareSoftLevelScale}`);
   }
 
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
@@ -698,7 +699,7 @@ export function buildTeamExpSchedule({
         amount,
         targetBoss,
         levelUtility,
-        bossAwareSoftLevelGap,
+        bossAwareSoftLevelScale,
       );
     }
     return allocateBalancedExp(states, amount);
@@ -879,10 +880,10 @@ export function buildTeamExpSchedule({
     allocatorDescription: allocator === 'boss-aware'
       ? 'boss-aware matchup utility per EXP-to-next-level'
       : allocator === 'boss-aware-soft'
-        ? `boss-aware utility with max training gap ${bossAwareSoftLevelGap}`
+        ? `boss-aware utility with level-gap penalty scale ${bossAwareSoftLevelScale}`
         : 'balanced-lowest-level-first',
-    bossAwareSoftLevelGap: allocator === 'boss-aware-soft'
-      ? Number(bossAwareSoftLevelGap)
+    bossAwareSoftLevelScale: allocator === 'boss-aware-soft'
+      ? Number(bossAwareSoftLevelScale)
       : null,
     totalMapExp,
     totalMajorExp,
