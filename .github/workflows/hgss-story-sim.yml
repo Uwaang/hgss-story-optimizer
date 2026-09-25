@@ -31,5 +31,7 @@ jobs:
           node --check src/hgss-data.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
-      - name: HGSS data smoke test
+      - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Full Johto route smoke test
+        run: npm run simulate -- --runs=1
