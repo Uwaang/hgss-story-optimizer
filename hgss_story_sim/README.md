@@ -109,7 +109,9 @@ Capture-search cost is a separate Pareto axis. Standard wild encounters use sour
 
 ### Resource profiles
 
-Purchased moves are now an explicit search profile instead of being forced onto every team:
+Purchased move **availability** and actual **spending policy** are separate.
+
+Resource availability profiles:
 
 - `core`: level-up moves + reusable HMs/tutors + free single-use story TMs; no Department Store or Game Corner purchases
 - `money`: permits both the `core` plan and repeatable money-purchased Department Store TMs
@@ -117,7 +119,14 @@ Purchased moves are now an explicit search profile instead of being forced onto 
 
 Higher profiles are optional supersets rather than forced spending. For each candidate team, `money` keeps the better of core/money simulations and `all` keeps the better of core/money/all simulations (ties prefer the cheaper profile). CI enforces `all >= money >= core` on a real short-route simulation.
 
-This matters because the optimizer can now compare a practical no-shopping party against high-resource variants instead of assuming every useful purchasable TM is always bought.
+Spending policies:
+
+- `unbounded`: legacy comparison mode; any unlocked purchasable TM can be bought.
+- `natural`: the optimizer may use all unlocked sources, but Goldenrod purchases are globally selected by battle-utility-per-cost and capped by the source-backed natural-money envelope available before Whitney.
+
+HGSS source scripts exchange 1,000 money for 50 Game Corner coins and 10,000 for 500, so the optimizer uses **20 money per coin** as a direct-purchase-equivalent resource cost. Trainer prize money is derived from the original class multiplier table and last-party-member level, and the source-backed initial wallet is 3,000.
+
+This makes `resources=all --spend-policy=natural` mean “all move sources are allowed, but purchases must fit the natural story cash envelope,” rather than “infinite Game Corner/TM resources.”
 
 Examples:
 
@@ -125,11 +134,11 @@ Examples:
 # Legacy level-normalized regression
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --final-runs=10
 
-# Natural levels from accessible trainer EXP
-npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --exp-profile=all-accessible --grind-policy=none --final-runs=10
+# Natural levels + natural Goldenrod spending budget
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=none --final-runs=10
 
-# Same natural supply, but explicitly pay to grind to each ace level
-npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --exp-profile=all-accessible --grind-policy=ace-paid --final-runs=10
+# Same natural money supply, but explicitly pay EXP/time to grind to each ace level
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=ace-paid --final-runs=10
 
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --final-runs=10
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=money --final-runs=10
@@ -239,9 +248,10 @@ This is not yet a bit-perfect HGSS story emulator.
 - reachability stages are conservative curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
-- `all-accessible` is an accessible-trainer envelope, not yet a proven normal-route trainer subset;
+- `all-accessible` is an accessible-trainer EXP/money envelope, not yet a proven normal-route trainer subset;
 - EXP allocation is a deterministic balanced policy rather than a jointly optimized switch-training schedule;
 - entry levels currently use the highest source-backed encounter level, which is optimistic;
+- the natural spending budget assumes all modeled pre-Whitney prize money can be reserved for TMs and does not yet subtract routine Poké Ball/healing-item purchases;
 - beam search is heuristic and does not prove the global optimum;
 - double battles with an ally are not yet represented faithfully.
 
