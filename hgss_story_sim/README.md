@@ -198,6 +198,8 @@ GitHub Actions currently checks:
 
 Push commits containing `[optimize]` additionally run HG/SS × all three starters and retain the JSON result as an Actions artifact.
 
+The current CI optimization profile uses beam width 4, candidate cap 16, and 10-run finalist rescoring.
+
 ## Next milestones
 
 1. Verify and add remaining mandatory Rocket/event encounters.
