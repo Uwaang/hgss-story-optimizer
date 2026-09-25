@@ -98,12 +98,17 @@ async function cmdExtract() {
   console.log(JSON.stringify(compact, null, 2));
 }
 
-async function evaluateCandidates(candidates, bosses, runs) {
+async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const rows = [];
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const boss of bosses) {
-    const playerTeam = materializeCandidateTeam(candidates, boss.stage, boss.aceLevel);
+    const playerTeam = materializeCandidateTeam(
+      candidates,
+      boss.stage,
+      boss.aceLevel,
+      { moveAccess },
+    );
     if (!playerTeam.length) {
       rows.push({ boss: boss.label, skipped: true, reason: 'no available candidates' });
       continue;
@@ -202,7 +207,8 @@ async function cmdSimulate() {
     throw new Error('baselineTeam violates team constraints');
   }
 
-  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs);
+  const moveAccess = await loadMoveAccess();
+  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess);
   console.log(JSON.stringify({
     pool: poolPath,
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
@@ -241,6 +247,7 @@ async function cmdSearch() {
 
   if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
 
+  const moveAccess = await loadMoveAccess();
   const results = [];
   let tested = 0;
   let rejectedByConstraints = 0;
@@ -249,7 +256,7 @@ async function cmdSearch() {
       rejectedByConstraints += 1;
       continue;
     }
-    const evaluation = await evaluateCandidates(team, story.bosses, runs);
+    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess);
     results.push({
       score: evaluation.score,
       team: team.map(x => x.species),
@@ -274,12 +281,56 @@ async function cmdSearch() {
   }, null, 2));
 }
 
+async function cmdHmSmoke() {
+  const story = await loadStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story),
+    loadMoveAccess(),
+  ]);
+  const magikarp = pool.candidates.find(candidate => candidate.species === 'Magikarp');
+  if (!magikarp) throw new Error('Magikarp not found in canonical pool');
+
+  const beforeSurf = materializeCandidateTeam([magikarp], 2, 19, { moveAccess })[0];
+  const afterSurf = materializeCandidateTeam([magikarp], 3, 25, { moveAccess })[0];
+
+  if (beforeSurf.moves.includes('Surf')) {
+    throw new Error('Surf became available before its acquisition stage');
+  }
+  if (afterSurf.species !== 'Gyarados') {
+    throw new Error(`Expected Magikarp to evolve to Gyarados by stage 3, got ${afterSurf.species}`);
+  }
+  if (!afterSurf.moves.includes('Surf')) {
+    throw new Error(`Expected stage-3 Gyarados to consider Surf, got ${afterSurf.moves.join(', ')}`);
+  }
+
+  console.log(JSON.stringify({
+    beforeSurf: {
+      stage: 2,
+      species: beforeSurf.species,
+      moves: beforeSurf.moves,
+    },
+    afterSurf: {
+      stage: 3,
+      species: afterSurf.species,
+      moves: afterSurf.moves,
+    },
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
   const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
-  const resolved = await loadCuratedPool('config/candidates.example.json', story);
-  const playerTeam = materializeCandidateTeam(resolved.baseline, falkner.stage, falkner.aceLevel);
+  const [resolved, moveAccess] = await Promise.all([
+    loadCuratedPool('config/candidates.example.json', story),
+    loadMoveAccess(),
+  ]);
+  const playerTeam = materializeCandidateTeam(
+    resolved.baseline,
+    falkner.stage,
+    falkner.aceLevel,
+    { moveAccess },
+  );
   const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
   console.log(JSON.stringify({
     source: falkner.key,
@@ -298,12 +349,13 @@ const commands = {
   validate: cmdValidate,
   simulate: cmdSimulate,
   search: cmdSearch,
+  'hm-smoke': cmdHmSmoke,
   smoke: cmdSmoke,
 };
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, extract, pool, validate, simulate, search');
+  console.error('Use one of: smoke, hm-smoke, extract, pool, validate, simulate, search');
   process.exitCode = 2;
 } else {
   await commands[command]();
