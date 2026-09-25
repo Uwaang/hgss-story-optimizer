@@ -83,7 +83,7 @@ EXP supply profiles:
 - `normal-route`: canonical-route map envelope plus the 21 major battles; this intentionally excludes the extra Gym/Rocket maps used only by the upper envelope
 - `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
 
-Late-joining Pokémon never receive EXP from earlier stages. For stages after Falkner, the conservative default also prevents a newly obtainable Pokémon from retroactively receiving that stage's full map-EXP bucket before it joins.
+Late-joining Pokémon never receive EXP from earlier stages. Same-stage timing now defaults to **map order**: the canonical route's newly opened maps are processed in order, and a source-mapped Pokémon joins when its acquisition map is reached. It can receive trainer EXP from that map and later maps, but not from earlier maps in the same stage. Gifts/statics without a reliable map remain conservative and join after the stage's map EXP.
 
 Natural EXP supports two deterministic allocation policies:
 
@@ -92,7 +92,7 @@ Natural EXP supports two deterministic allocation policies:
 
 The boss-aware score is intentionally a cheap training heuristic rather than a nested battle simulation, so search cost stays tractable. Use `--exp-allocator=balanced|boss-aware` to compare sensitivity.
 
-Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=after-map-exp|before-map-exp`; the latter restores the previous optimistic same-stage behavior.
+Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=map-order|after-map-exp|before-map-exp`. `after-map-exp` is the conservative stage-level fallback; `before-map-exp` restores the previous optimistic same-stage behavior.
 
 Grind policies for non-`ace` EXP profiles:
 
@@ -291,7 +291,7 @@ This is not yet a bit-perfect HGSS story emulator.
 
 - trainer bag-item use is not modeled;
 - battle policy is heuristic rather than a globally optimal controller or exact HGSS AI;
-- reachability stages are conservative curated checkpoints, not a complete event-graph proof;
+- reachability stages and within-stage map order are curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
 - `normal-route` is a canonical-map envelope, not yet a trainer-by-trainer proof of the exact mandatory/on-route subset;
