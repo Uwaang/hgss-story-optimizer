@@ -208,16 +208,29 @@ function estimateCatchUpLevels(candidates, bosses) {
   return { total, unknown, totalExp, expUnknown, details };
 }
 
+function storyStarterFromCandidates(candidates) {
+  return candidates.find(candidate => candidate.exclusiveGroup === 'starter')?.species || null;
+}
+
+function storyBattlesForCandidates(bosses, candidates) {
+  const starter = storyStarterFromCandidates(candidates);
+  return bosses.filter(boss =>
+    !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
+  );
+}
+
 async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const rows = [];
-  const catchUp = estimateCatchUpLevels(candidates, bosses);
-  const singleUsePlan = planSingleUseMachines(candidates, bosses, moveAccess);
-  const purchasable = planPurchasableMachines(candidates, bosses, moveAccess, singleUsePlan);
+  const routeBosses = storyBattlesForCandidates(bosses, candidates);
+  const routeStarter = storyStarterFromCandidates(candidates);
+  const catchUp = estimateCatchUpLevels(candidates, routeBosses);
+  const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
+  const purchasable = planPurchasableMachines(candidates, routeBosses, moveAccess, singleUsePlan);
   const purchasablePlan = purchasable.assignments;
   const purchaseCosts = purchasable.costs;
   let weightedWins = 0;
   let weightedRuns = 0;
-  for (const boss of bosses) {
+  for (const [battleIndex, boss] of routeBosses.entries()) {
     const playerTeam = materializeCandidateTeam(
       candidates,
       boss.stage,
@@ -241,7 +254,12 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
       continue;
     }
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
-    const result = await simulateMatchup(playerTeam, enemyTeam, runs, 1000 + boss.stage * 100000);
+    const result = await simulateMatchup(
+      playerTeam,
+      enemyTeam,
+      runs,
+      1000 + boss.stage * 100000 + battleIndex * 1000,
+    );
     weightedWins += result.wins;
     weightedRuns += result.runs;
     rows.push({
@@ -253,6 +271,8 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   }
   return {
     score: weightedRuns ? weightedWins / weightedRuns : 0,
+    routeStarter,
+    routeBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
     catchUpExp: catchUp.totalExp,
@@ -415,6 +435,8 @@ function searchResultRow(team, evaluation) {
     catchUpExp: evaluation.catchUpExp,
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
     team: team.map(x => x.species),
+    routeStarter: evaluation.routeStarter,
+    routeBattleCount: evaluation.routeBattleCount,
     singleUsePlan: evaluation.singleUsePlan,
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
