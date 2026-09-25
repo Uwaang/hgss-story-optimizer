@@ -85,12 +85,13 @@ EXP supply profiles:
 
 Late-joining Pokémon never receive EXP from earlier stages. Same-stage timing now defaults to **boss-windowed map order**. `config/exp-timing.json` assigns route/Gym/Rocket maps to the scored boss they occur before, then those maps are processed in route order inside that window. A source-mapped Pokémon joins when its acquisition map is reached, so it can receive trainer EXP from that point forward without inheriting earlier same-stage EXP. Manual gifts/statics can provide a conservative `beforeBoss` hint; anything still unresolved falls back to the final scored boss of that stage.
 
-Natural EXP supports two deterministic allocation policies:
+Natural EXP supports three deterministic allocation policies:
 
 - `balanced` (default): lowest-level-first, then lowest progress within the current level;
-- `boss-aware`: prioritizes the next level with the best next-boss matchup utility per EXP-to-next-level, including type matchups, level-up move breakpoints and level-based evolutions.
+- `boss-aware-soft`: uses the same next-boss utility signal but smoothly penalizes concentrating more levels onto a member that is already ahead of the lowest-level active teammate;
+- `boss-aware`: unrestricted specialization toward the next level with the best next-boss matchup utility per EXP-to-next-level, including type matchups, level-up move breakpoints and level-based evolutions.
 
-The boss-aware score is intentionally a cheap training heuristic rather than a nested battle simulation, so search cost stays tractable. Use `--exp-allocator=balanced|boss-aware` to compare sensitivity.
+The boss-aware score is intentionally a cheap training heuristic rather than a nested battle simulation, so search cost stays tractable. The soft policy uses a level-gap penalty scale of 8 by default; `--soft-level-scale=N` can adjust how quickly specialization is penalized. Use `--exp-allocator=balanced|boss-aware-soft|boss-aware` to compare sensitivity.
 
 Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=map-order|after-map-exp|before-map-exp`. `after-map-exp` is the conservative stage-level fallback; `before-map-exp` restores the previous optimistic same-stage behavior.
 
