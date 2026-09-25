@@ -1,0 +1,80 @@
+{
+  "description": "Within-stage EXP timing. Each map bucket is applied immediately before the named scored boss. Unlisted accessible maps fall back to the last scored boss of that stage.",
+  "windows": [
+    {
+      "stage": 0,
+      "beforeBoss": "Falkner",
+      "maps": ["R29", "R30", "R31", "R46", "D42R0102", "D15R0102", "D15R0103", "T22GYM0101"]
+    },
+    {
+      "stage": 1,
+      "beforeBoss": "Proton (Slowpoke Well)",
+      "maps": ["R32", "D25R0101", "D25R0102", "D25R0103", "R33", "D26R0102", "D26R0103"]
+    },
+    {
+      "stage": 1,
+      "beforeBoss": "Bugsy",
+      "maps": ["T23GYM0102"]
+    },
+    {
+      "stage": 2,
+      "beforeBoss": "Whitney",
+      "maps": ["D36R0101", "R34", "R35", "D22R0101", "R36", "T25GYM0101"]
+    },
+    {
+      "stage": 3,
+      "beforeBoss": "Silver (Burned Tower)",
+      "maps": ["R37", "D18R0101", "D18R0102"]
+    },
+    {
+      "stage": 3,
+      "beforeBoss": "Morty",
+      "maps": ["R38", "R39", "T27GYM0101"]
+    },
+    {
+      "stage": 4,
+      "beforeBoss": "Chuck",
+      "maps": ["W40", "W41", "T24", "T24GYM0101"]
+    },
+    {
+      "stage": 5,
+      "beforeBoss": "Jasmine",
+      "maps": ["T26GYM0101"]
+    },
+    {
+      "stage": 6,
+      "beforeBoss": "Petrel (Mahogany Hideout)",
+      "maps": ["R42", "D38R0101", "R43", "T29", "D35R0101", "D35R0102", "D35R0103", "D35R0104"]
+    },
+    {
+      "stage": 6,
+      "beforeBoss": "Pryce",
+      "maps": ["T28GYM0101"]
+    },
+    {
+      "stage": 7,
+      "beforeBoss": "Petrel (Radio Tower)",
+      "maps": ["D23R0101", "D23R0102", "D23R0103", "D23R0104", "D23R0105"]
+    },
+    {
+      "stage": 7,
+      "beforeBoss": "Silver (Goldenrod Underground)",
+      "maps": ["D37R0101", "D37R0102", "D37R0103", "D37R0104"]
+    },
+    {
+      "stage": 7,
+      "beforeBoss": "Archer (Radio Tower)",
+      "maps": ["D23R0106"]
+    },
+    {
+      "stage": 7,
+      "beforeBoss": "Clair",
+      "maps": ["R44", "D39R0101", "D39R0102", "D39R0103", "D39R0104", "R45", "D42R0101", "T30GYM0101"]
+    },
+    {
+      "stage": 8,
+      "beforeBoss": "Silver (Victory Road)",
+      "maps": ["D44R0102", "R27", "R26", "D45R0101", "D43R0101", "D43R0102", "D43R0103"]
+    }
+  ]
+}
