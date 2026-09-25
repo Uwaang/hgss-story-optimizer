@@ -360,16 +360,27 @@ function candidateKey(candidate) {
   return candidate.familyId || candidate.species;
 }
 
-function entryLevel(candidate) {
-  const max = Number(candidate.entryLevelMax);
-  if (Number.isFinite(max)) return Math.max(1, Math.floor(max));
+function entryLevel(candidate, policy = 'midpoint') {
   const min = Number(candidate.entryLevelMin);
-  if (Number.isFinite(min)) return Math.max(1, Math.floor(min));
-  return null;
+  const max = Number(candidate.entryLevelMax);
+  const hasMin = Number.isFinite(min);
+  const hasMax = Number.isFinite(max);
+  if (!hasMin && !hasMax) return null;
+
+  let value;
+  if (policy === 'min') value = hasMin ? min : max;
+  else if (policy === 'max') value = hasMax ? max : min;
+  else if (policy === 'midpoint') {
+    if (hasMin && hasMax) value = Math.floor((min + max) / 2);
+    else value = hasMin ? min : max;
+  } else {
+    throw new Error(`Unknown entry-level policy: ${policy}`);
+  }
+  return Math.max(1, Math.floor(value));
 }
 
-function createCandidateState(candidate) {
-  const level = entryLevel(candidate);
+function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
+  const level = entryLevel(candidate, entryLevelPolicy);
   const growthRate = candidate.growthRate || null;
   const initialExp = level === null ? null : expAtLevel(growthRate, level);
   return {
@@ -472,15 +483,23 @@ export function buildTeamExpSchedule({
   expWorld,
   profile = 'all-accessible',
   grindPolicy = 'none',
+  entryLevelPolicy = 'midpoint',
+  sameStageJoinPolicy = 'after-map-exp',
 }) {
-  if (!['major', 'all-accessible'].includes(profile)) {
+  if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
   }
   if (!['none', 'ace-paid'].includes(grindPolicy)) {
     throw new Error(`Unknown grind policy: ${grindPolicy}`);
   }
+  if (!['min', 'midpoint', 'max'].includes(entryLevelPolicy)) {
+    throw new Error(`Unknown entry-level policy: ${entryLevelPolicy}`);
+  }
+  if (!['before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
+    throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
+  }
 
-  const pending = candidates.map(createCandidateState);
+  const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
   const states = [];
   const stateKeys = new Set();
   const excludedMapTrainerKeys = new Set(routeBosses.map(boss => boss.key));
@@ -507,14 +526,25 @@ export function buildTeamExpSchedule({
 
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const stage = Number(boss.stage);
-    addAvailable(stage);
+    const firstBattleInStage = !stageStarted.has(stage);
+
+    // Stage 0 candidates (starter and early-route catches) can naturally receive
+    // pre-Falkner route EXP. For later stages, the conservative default avoids
+    // retroactively granting the entire stage's map EXP to a Pokémon whose
+    // acquisition happens somewhere inside that same stage.
+    if (
+      firstBattleInStage &&
+      (stage === 0 || sameStageJoinPolicy === 'before-map-exp')
+    ) {
+      addAvailable(stage);
+    }
 
     let mapExpBefore = 0;
     let mapMoneyBefore = 0;
     let mapTrainerCount = 0;
-    if (!stageStarted.has(stage)) {
+    if (firstBattleInStage) {
       stageStarted.add(stage);
-      if (profile === 'all-accessible') {
+      if (profile === 'normal-route' || profile === 'all-accessible') {
         const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
         mapExpBefore = source.totalExp;
         mapMoneyBefore = source.totalMoney;
@@ -527,6 +557,10 @@ export function buildTeamExpSchedule({
         totalUnallocatedExp += allocation.unallocated;
       }
     }
+
+    // Newly obtainable members must exist before the stage's first scored
+    // battle, but by default do not inherit map EXP earned before acquisition.
+    addAvailable(stage);
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const aceGapBefore = aceGapForStates(states, Number(boss.aceLevel));
@@ -585,7 +619,11 @@ export function buildTeamExpSchedule({
   return {
     profile,
     grindPolicy,
-    entryLevelAssumption: 'highest source-backed encounter/gift level',
+    entryLevelPolicy,
+    entryLevelAssumption: entryLevelPolicy === 'midpoint'
+      ? 'midpoint of source-backed encounter/gift level range'
+      : `${entryLevelPolicy} source-backed encounter/gift level`,
+    sameStageJoinPolicy,
     allocator: 'balanced-lowest-level-first',
     totalMapExp,
     totalMajorExp,
