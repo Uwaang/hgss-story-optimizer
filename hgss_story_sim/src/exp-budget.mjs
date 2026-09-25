@@ -261,6 +261,15 @@ function earliestMapStages(access) {
   return result;
 }
 
+function stageMapOrder(access) {
+  return new Map(
+    (access?.stages || []).map(stageDef => [
+      Number(stageDef.stage),
+      [...(stageDef.addMaps || [])],
+    ])
+  );
+}
+
 export async function buildExpWorld({ commit, access, trainerSource, version = 'HEARTGOLD' }) {
   const [personalJson, encounterJson, prizeMoneySource, eventPaths] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
@@ -338,6 +347,21 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
     }
   }
 
+  const mapTrainerRewards = new Map();
+  for (const trainerRow of trainerRows) {
+    const bucket = mapTrainerRewards.get(trainerRow.map) || {
+      map: trainerRow.map,
+      stage: trainerRow.stage,
+      totalExp: 0,
+      totalMoney: 0,
+      trainers: [],
+    };
+    bucket.totalExp += trainerRow.totalExp;
+    bucket.totalMoney += Number(trainerRow.prizeMoney || 0);
+    bucket.trainers.push(trainerRow);
+    mapTrainerRewards.set(trainerRow.map, bucket);
+  }
+
   const bestWildByStage = buildBestWildByStage(encounterJson, access, version, expYieldBySpecies);
 
   return {
@@ -348,6 +372,8 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
     bestWildByStage,
     stageTrainerRewards,
     stageMoneyRewards,
+    mapTrainerRewards,
+    stageMapOrder: stageMapOrder(access),
     mapTrainerRows: trainerRows,
     mapCount: mapRows.length,
     unresolvedMaps: [...mapStages.entries()]
@@ -488,6 +514,25 @@ function stageMapResources(expWorld, stage, excludedKeys) {
   };
 }
 
+function singleMapResources(expWorld, map, excludedKeys) {
+  const bucket = expWorld.mapTrainerRewards?.get(map);
+  if (!bucket) return { totalExp: 0, totalMoney: 0, trainers: [] };
+  const trainers = bucket.trainers.filter(row => !excludedKeys.has(row.key));
+  return {
+    totalExp: trainers.reduce((sum, row) => sum + row.totalExp, 0),
+    totalMoney: trainers.reduce((sum, row) => sum + Number(row.prizeMoney || 0), 0),
+    trainers,
+  };
+}
+
+function candidateAcquisitionMaps(candidate) {
+  return new Set(
+    (candidate?.sources || [])
+      .map(source => source?.map)
+      .filter(Boolean)
+  );
+}
+
 function snapshotLevels(states) {
   return Object.fromEntries(
     [...states]
@@ -528,7 +573,7 @@ export function buildTeamExpSchedule({
   profile = 'all-accessible',
   grindPolicy = 'none',
   entryLevelPolicy = 'midpoint',
-  sameStageJoinPolicy = 'after-map-exp',
+  sameStageJoinPolicy = 'map-order',
   allocator = 'balanced',
   levelUtility = null,
 }) {
@@ -541,7 +586,7 @@ export function buildTeamExpSchedule({
   if (!['min', 'midpoint', 'max'].includes(entryLevelPolicy)) {
     throw new Error(`Unknown entry-level policy: ${entryLevelPolicy}`);
   }
-  if (!['before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
+  if (!['map-order', 'before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
     throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
   }
   if (!['balanced', 'boss-aware'].includes(allocator)) {
@@ -568,9 +613,16 @@ export function buildTeamExpSchedule({
   let totalMajorMoney = 0;
   let currentMoney = startingMoney;
 
-  function addAvailable(stage) {
+  function addAvailable(stage, map = null, onlyMapped = false) {
     for (const state of pending) {
       if (state.availableFrom > stage || stateKeys.has(state.key)) continue;
+      if (state.availableFrom === stage && map !== null) {
+        const maps = candidateAcquisitionMaps(state.candidate);
+        if (!maps.has(map)) continue;
+      } else if (state.availableFrom === stage && onlyMapped) {
+        const maps = candidateAcquisitionMaps(state.candidate);
+        if (!maps.size) continue;
+      }
       states.push({ ...state });
       stateKeys.add(state.key);
     }
@@ -603,21 +655,39 @@ export function buildTeamExpSchedule({
     if (firstBattleInStage) {
       stageStarted.add(stage);
       if (profile === 'normal-route' || profile === 'all-accessible') {
-        const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
-        mapExpBefore = source.totalExp;
-        mapMoneyBefore = source.totalMoney;
-        mapTrainerCount = source.trainers.length;
-        const allocation = allocate(mapExpBefore, boss);
+        if (sameStageJoinPolicy === 'map-order' && stage > 0) {
+          const maps = expWorld.stageMapOrder?.get(stage) || [];
+          for (const map of maps) {
+            // Wild/source-backed candidates can join when their acquisition map
+            // is reached; they may then receive EXP from trainers on that map
+            // and later maps, but never from earlier maps in the same stage.
+            addAvailable(stage, map);
+            const source = singleMapResources(expWorld, map, excludedMapTrainerKeys);
+            mapExpBefore += source.totalExp;
+            mapMoneyBefore += source.totalMoney;
+            mapTrainerCount += source.trainers.length;
+            const allocation = allocate(source.totalExp, boss);
+            totalAllocatedExp += allocation.allocated;
+            totalUnallocatedExp += allocation.unallocated;
+          }
+        } else {
+          const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
+          mapExpBefore = source.totalExp;
+          mapMoneyBefore = source.totalMoney;
+          mapTrainerCount = source.trainers.length;
+          const allocation = allocate(mapExpBefore, boss);
+          totalAllocatedExp += allocation.allocated;
+          totalUnallocatedExp += allocation.unallocated;
+        }
         totalMapExp += mapExpBefore;
         totalMapMoney += mapMoneyBefore;
         currentMoney += mapMoneyBefore;
-        totalAllocatedExp += allocation.allocated;
-        totalUnallocatedExp += allocation.unallocated;
       }
     }
 
-    // Newly obtainable members must exist before the stage's first scored
-    // battle, but by default do not inherit map EXP earned before acquisition.
+    // Manual gifts/statics without a mapped acquisition point conservatively
+    // join after the stage's map EXP; every stage candidate still exists for
+    // the stage's scored boss battle.
     addAvailable(stage);
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
