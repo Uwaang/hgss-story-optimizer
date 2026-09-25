@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planSingleUseMachines, simulateMatchup } from './battle.mjs';
+import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -624,6 +624,42 @@ async function cmdOptimize() {
   console.log(serialized);
 }
 
+async function cmdSwitchSmoke() {
+  const playerTeam = [
+    {
+      species: 'Geodude',
+      level: 20,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Tackle', 'Rock Throw'],
+    },
+    {
+      species: 'Mareep',
+      level: 20,
+      ability: 'Static',
+      nature: 'Serious',
+      moves: ['ThunderShock', 'Tackle'],
+    },
+  ];
+  const enemyTeam = [
+    {
+      species: 'Totodile',
+      level: 20,
+      ability: 'Torrent',
+      nature: 'Serious',
+      moves: ['Water Gun', 'Scratch'],
+    },
+  ];
+  const result = await runBattle(playerTeam, enemyTeam, 7331);
+  if (result.p1VoluntarySwitches < 1) {
+    throw new Error(`Expected player-side matchup switch, got ${result.p1VoluntarySwitches}`);
+  }
+  if (result.p2VoluntarySwitches !== 0) {
+    throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
+  }
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function cmdHmSmoke() {
   const story = await loadStory();
   const [pool, moveAccess] = await Promise.all([
@@ -736,6 +772,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'switch-smoke': cmdSwitchSmoke,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,
   smoke: cmdSmoke,
@@ -743,7 +780,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, switch-smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
