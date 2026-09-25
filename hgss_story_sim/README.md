@@ -19,6 +19,7 @@ This module searches for strong Pokémon HeartGold/SoulSilver story parties by c
 The main canonical pool is built from the game data rather than a handwritten tier list.
 
 - Wild availability comes from `gs_enc_data.json`.
+- Headbutt candidates and Lv ranges come from `files/arc/headbutt.json` once Headbutt is available.
 - HeartGold/SoulSilver version differences are resolved from the source data.
 - Story-accessible maps and method unlocks are defined in `config/story-access.canonical.json`.
 - Gifts/statics/headbutt exceptions are auditable manual acquisitions.
@@ -27,7 +28,7 @@ The main canonical pool is built from the game data rather than a handwritten ti
 - Wild encounter min/max levels are retained as `entryLevelMin/Max`.
 - Verified manual acquisition levels are recorded where source scripts make them explicit.
 
-The current conservative canonical route produces **92 candidate acquisitions** for HeartGold and **92** for SoulSilver, with version-specific stage distributions.
+The current conservative canonical route produces **98 candidate acquisitions** for HeartGold and **98** for SoulSilver, with version-specific stage distributions. Headbutt candidates and their encounter levels are sourced from `files/arc/headbutt.json` after the story unlock.
 
 A smaller curated pool remains as a regression/reference path; every candidate points to encounter/headbutt/script evidence and is validated against the pinned source.
 
@@ -90,6 +91,9 @@ npm run simulate -- --runs=20
 
 # canonical beam search, fixed starter
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
+
+# HG/SS × all three starters; candidate screening is reused per version
+npm run optimize -- --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --beam-width=3 --candidate-cap=12 --team-size=6
 
 # simple/prefix search
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=prefix --runs=1 --limit=100 --team-size=6
