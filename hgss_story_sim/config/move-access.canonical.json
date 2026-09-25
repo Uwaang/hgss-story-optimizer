@@ -1,0 +1,52 @@
+{
+  "mode": "canonical",
+  "notes": [
+    "availableFrom is battle-use availability, not overworld field-use availability.",
+    "Surf is obtainable before Morty but requires Fog Badge only for overworld surfing.",
+    "Only reusable HMs are modeled here. One-use TMs are intentionally deferred."
+  ],
+  "reusableMachines": [
+    {
+      "move": "Cut",
+      "item": "HM01",
+      "availableFrom": 2,
+      "source": "Ilex Forest after Bugsy"
+    },
+    {
+      "move": "Surf",
+      "item": "HM03",
+      "availableFrom": 3,
+      "source": "Ecruteak Dance Theater before Morty"
+    },
+    {
+      "move": "Rock Smash",
+      "item": "HM06",
+      "availableFrom": 3,
+      "source": "Route 36 after Sudowoodo"
+    },
+    {
+      "move": "Fly",
+      "item": "HM02",
+      "availableFrom": 5,
+      "source": "Cianwood after Chuck"
+    },
+    {
+      "move": "Strength",
+      "item": "HM04",
+      "availableFrom": 6,
+      "source": "Route 42; conservative canonical-route timing"
+    },
+    {
+      "move": "Whirlpool",
+      "item": "HM05",
+      "availableFrom": 6,
+      "source": "Team Rocket HQ with Lance before Pryce"
+    },
+    {
+      "move": "Waterfall",
+      "item": "HM07",
+      "availableFrom": 7,
+      "source": "Ice Path before Clair"
+    }
+  ]
+}
