@@ -1,0 +1,75 @@
+{
+  "notes": "Earliest story stages are conservative checkpoints for the current Johto boss route. Encounter/script existence is verified automatically against the pinned pret source; progression-stage assignment remains an explicit auditable config.",
+  "sources": {
+    "starter-chikorita": {
+      "availableFrom": 0,
+      "type": "script",
+      "path": "src/choose_starter.c",
+      "token": "SPECIES_CHIKORITA"
+    },
+    "starter-cyndaquil": {
+      "availableFrom": 0,
+      "type": "script",
+      "path": "src/choose_starter.c",
+      "token": "SPECIES_CYNDAQUIL"
+    },
+    "starter-totodile": {
+      "availableFrom": 0,
+      "type": "script",
+      "path": "src/choose_starter.c",
+      "token": "SPECIES_TOTODILE"
+    },
+    "zubat-dark-cave-r31": {
+      "availableFrom": 0,
+      "type": "wild",
+      "map": "D42R0102",
+      "method": "land",
+      "species": "SPECIES_ZUBAT",
+      "requirements": ["Route 31-side Dark Cave is reachable before Falkner"]
+    },
+    "mareep-route32": {
+      "availableFrom": 1,
+      "type": "wild",
+      "map": "R32",
+      "method": "land",
+      "species": "SPECIES_MAREEP",
+      "requirements": ["Route 32 southward progression after Zephyr Badge"]
+    },
+    "magikarp-route32-old-rod": {
+      "availableFrom": 1,
+      "type": "wild",
+      "map": "R32",
+      "method": "old_rod",
+      "species": "SPECIES_MAGIKARP"
+    },
+    "heracross-route33-headbutt": {
+      "availableFrom": 2,
+      "type": "headbutt",
+      "map": "R33",
+      "species": "SPECIES_HERACROSS",
+      "requirements": ["Headbutt access from Ilex Forest after Bugsy"]
+    },
+    "eevee-bill-goldenrod": {
+      "availableFrom": 3,
+      "type": "script",
+      "path": "files/fielddata/script/scr_seq/scr_seq_0892_T25R0401.s",
+      "token": "GiveMon SPECIES_EEVEE, 5"
+    },
+    "lapras-union-cave": {
+      "availableFrom": 4,
+      "type": "script",
+      "path": "files/fielddata/script/scr_seq/scr_seq_0058_D25R0103.s",
+      "token": "WildBattle SPECIES_LAPRAS, 20",
+      "requiredTokens": ["GetWeekday", "Compare VAR_TEMP_x4000, 5"],
+      "requirements": ["Friday", "Surf field use requires BADGE_FOG (Morty)"]
+    },
+    "swinub-ice-path": {
+      "availableFrom": 7,
+      "type": "wild",
+      "map": "D39R0101",
+      "method": "land",
+      "species": "SPECIES_SWINUB",
+      "requirements": ["Ice Path 1F before Clair"]
+    }
+  }
+}
