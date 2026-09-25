@@ -23,7 +23,8 @@
     "move-score-smoke": "node src/cli.mjs move-score-smoke",
     "resource-monotonic-smoke": "node src/cli.mjs resource-monotonic-smoke",
     "exp-budget": "node src/cli.mjs exp-budget",
-    "exp-budget-smoke": "node src/cli.mjs exp-budget-smoke"
+    "exp-budget-smoke": "node src/cli.mjs exp-budget-smoke",
+    "exp-route-smoke": "node src/cli.mjs exp-route-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
