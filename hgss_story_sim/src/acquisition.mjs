@@ -2,6 +2,16 @@ import { constantToName, fetchText } from './hgss-data.mjs';
 
 const PRET_RAW_ROOT = 'https://raw.githubusercontent.com/pret/pokeheartgold';
 
+const ENCOUNTER_SLOT_WEIGHTS = {
+  land: [20, 20, 10, 10, 10, 10, 5, 5, 4, 4, 1, 1],
+  surf: [60, 30, 5, 4, 1],
+  old_rod: [40, 30, 15, 10, 5],
+  good_rod: [40, 30, 15, 10, 5],
+  super_rod: [40, 30, 15, 10, 5],
+  rock_smash: [80, 20],
+};
+const HEADBUTT_SLOT_WEIGHTS = [50, 15, 15, 10, 5, 5];
+
 async function fetchJson(url) {
   return JSON.parse(await fetchText(url));
 }
@@ -35,14 +45,15 @@ function speciesValues(value, version, out = []) {
   return out;
 }
 
-function levelRange(level) {
-  if (Number.isFinite(Number(level))) {
-    const value = Number(level);
+function levelRange(level, version) {
+  const resolved = resolveVersioned(level, version);
+  if (Number.isFinite(Number(resolved))) {
+    const value = Number(resolved);
     return { min: value, max: value };
   }
-  if (level && typeof level === 'object') {
-    const min = Number(level.min);
-    const max = Number(level.max);
+  if (resolved && typeof resolved === 'object') {
+    const min = Number(resolveVersioned(resolved.min, version));
+    const max = Number(resolveVersioned(resolved.max, version));
     if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
   }
   return { min: null, max: null };
@@ -55,40 +66,173 @@ function methodMons(encounter, method) {
   return encounter.fishing?.[method]?.mons || [];
 }
 
+function encounterRateForMethod(encounter, method) {
+  if (method === 'land') return Number(encounter.land?.rate || 0);
+  if (method === 'surf') return Number(encounter.surf?.rate || 0);
+  if (method === 'rock_smash') return Number(encounter.rock_smash?.rate || 0);
+  return Number(encounter.fishing?.[method]?.rate || 0);
+}
+
+function speciesForLandTime(value, version, time) {
+  const resolved = resolveVersioned(value, version);
+  if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+    if (time in resolved) return [...new Set(speciesValues(resolved[time], version))];
+  }
+  return [...new Set(speciesValues(resolved, version))];
+}
+
 function methodEntries(encounter, method, version) {
-  const out = [];
-  for (const mon of methodMons(encounter, method)) {
-    const range = levelRange(mon.level);
-    const species = [...new Set(speciesValues(mon.species, version))];
-    for (const speciesConst of species) {
-      out.push({
-        speciesConst,
-        minLevel: range.min,
-        maxLevel: range.max,
-      });
+  const mons = methodMons(encounter, method);
+  const weights = ENCOUNTER_SLOT_WEIGHTS[method] || [];
+  const bySpecies = new Map();
+
+  function add(speciesConst, range, probability, time = null) {
+    if (!speciesConst || probability <= 0) return;
+    const row = bySpecies.get(speciesConst) || {
+      speciesConst,
+      minLevel: null,
+      maxLevel: null,
+      probabilityByTime: {},
+      encounterProbability: 0,
+      bestTime: null,
+    };
+    if (Number.isFinite(range.min)) {
+      row.minLevel = Number.isFinite(row.minLevel) ? Math.min(row.minLevel, range.min) : range.min;
+    }
+    if (Number.isFinite(range.max)) {
+      row.maxLevel = Number.isFinite(row.maxLevel) ? Math.max(row.maxLevel, range.max) : range.max;
+    }
+    if (time) {
+      row.probabilityByTime[time] = (row.probabilityByTime[time] || 0) + probability;
+    } else {
+      row.encounterProbability += probability;
+    }
+    bySpecies.set(speciesConst, row);
+  }
+
+  for (let index = 0; index < mons.length; index += 1) {
+    const mon = mons[index];
+    const probability = Number(weights[index] || 0);
+    const range = levelRange(mon.level, version);
+    if (method === 'land') {
+      for (const time of ['morn', 'day', 'nite']) {
+        for (const speciesConst of speciesForLandTime(mon.species, version, time)) {
+          add(speciesConst, range, probability, time);
+        }
+      }
+    } else {
+      for (const speciesConst of [...new Set(speciesValues(mon.species, version))]) {
+        add(speciesConst, range, probability);
+      }
     }
   }
-  return out;
+
+  const encounterRate = encounterRateForMethod(encounter, method);
+  return [...bySpecies.values()].map(row => {
+    if (method === 'land') {
+      const times = Object.entries(row.probabilityByTime);
+      times.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      row.bestTime = times[0]?.[0] || null;
+      row.encounterProbability = Number(times[0]?.[1] || 0);
+    }
+    return {
+      speciesConst: row.speciesConst,
+      minLevel: row.minLevel,
+      maxLevel: row.maxLevel,
+      encounterProbability: row.encounterProbability,
+      expectedEncounters: row.encounterProbability > 0 ? 100 / row.encounterProbability : null,
+      encounterRate,
+      bestTime: row.bestTime,
+    };
+  });
 }
 
 function headbuttEntries(table, version) {
-  const out = [];
-  const slots = [
-    ...(table?.CommonMons || []),
-    ...(table?.RareMons || []),
-    ...(table?.SecretMons || []),
+  const bySpecies = new Map();
+  const groups = [
+    ['common', table?.CommonMons || []],
+    ['rare', table?.RareMons || []],
+    ['secret', table?.SecretMons || []],
   ];
-  for (const slot of slots) {
-    const species = [...new Set(speciesValues(slot.species, version))];
-    for (const speciesConst of species) {
-      out.push({
-        speciesConst,
-        minLevel: Number.isFinite(Number(slot.minLevel)) ? Number(slot.minLevel) : null,
-        maxLevel: Number.isFinite(Number(slot.maxLevel)) ? Number(slot.maxLevel) : null,
-      });
+
+  for (const [group, slots] of groups) {
+    const groupProbability = new Map();
+    const levels = new Map();
+    for (let index = 0; index < slots.length; index += 1) {
+      const slot = slots[index];
+      const probability = Number(HEADBUTT_SLOT_WEIGHTS[index] || 0);
+      const species = [...new Set(speciesValues(slot.species, version))];
+      for (const speciesConst of species) {
+        groupProbability.set(speciesConst, (groupProbability.get(speciesConst) || 0) + probability);
+        const range = levels.get(speciesConst) || { min: null, max: null };
+        const min = Number(slot.minLevel);
+        const max = Number(slot.maxLevel);
+        if (Number.isFinite(min)) range.min = Number.isFinite(range.min) ? Math.min(range.min, min) : min;
+        if (Number.isFinite(max)) range.max = Number.isFinite(range.max) ? Math.max(range.max, max) : max;
+        levels.set(speciesConst, range);
+      }
+    }
+
+    for (const [speciesConst, probability] of groupProbability) {
+      const range = levels.get(speciesConst) || { min: null, max: null };
+      const existing = bySpecies.get(speciesConst);
+      if (!existing || probability > existing.encounterProbability) {
+        bySpecies.set(speciesConst, {
+          speciesConst,
+          minLevel: range.min,
+          maxLevel: range.max,
+          encounterProbability: probability,
+          expectedEncounters: probability > 0 ? 100 / probability : null,
+          headbuttTreeGroup: group,
+          conditionalTreeGroup: true,
+        });
+      }
     }
   }
-  return out;
+
+  return [...bySpecies.values()];
+}
+
+function bestCaptureSource(sources) {
+  const fixed = (sources || []).find(source =>
+    !['wild', 'headbutt'].includes(source.type)
+  );
+  if (fixed) {
+    return {
+      mode: 'fixed-or-gift',
+      expectedEncounters: 0,
+      source: fixed,
+    };
+  }
+
+  const standard = (sources || [])
+    .filter(source => source.type === 'wild' && Number.isFinite(Number(source.expectedEncounters)))
+    .sort((a, b) => Number(a.expectedEncounters) - Number(b.expectedEncounters));
+  if (standard.length) {
+    return {
+      mode: 'wild',
+      expectedEncounters: Number(standard[0].expectedEncounters),
+      source: standard[0],
+    };
+  }
+
+  const headbutt = (sources || [])
+    .filter(source => source.type === 'headbutt' && Number.isFinite(Number(source.expectedEncounters)))
+    .sort((a, b) => Number(a.expectedEncounters) - Number(b.expectedEncounters));
+  if (headbutt.length) {
+    return {
+      mode: 'headbutt-lower-bound',
+      expectedEncounters: Number(headbutt[0].expectedEncounters),
+      conditionalTreeGroup: true,
+      source: headbutt[0],
+    };
+  }
+
+  return {
+    mode: 'unknown',
+    expectedEncounters: null,
+    source: null,
+  };
 }
 
 function buildEncounterIndex(encounters) {
@@ -157,6 +301,10 @@ export async function buildCanonicalCandidatePool({
     `SPECIES_${row.species}`,
     row.growthRate,
   ]));
+  const catchRateBySpecies = new Map((personalJson.baseStats || []).map(row => [
+    `SPECIES_${row.species}`,
+    Number(row.catchRate),
+  ]));
   const evoByBase = new Map((evoJson.evoTable || []).map(x => [x.baseSpecies, x.evos || []]));
   const parentByTarget = new Map();
   for (const row of evoJson.evoTable || []) {
@@ -213,6 +361,10 @@ export async function buildCanonicalCandidatePool({
               method,
               minLevel: entry.minLevel,
               maxLevel: entry.maxLevel,
+              encounterProbability: entry.encounterProbability,
+              expectedEncounters: entry.expectedEncounters,
+              encounterRate: entry.encounterRate,
+              bestTime: entry.bestTime,
             });
           }
         }
@@ -228,6 +380,10 @@ export async function buildCanonicalCandidatePool({
             method: 'headbutt',
             minLevel: entry.minLevel,
             maxLevel: entry.maxLevel,
+            encounterProbability: entry.encounterProbability,
+            expectedEncounters: entry.expectedEncounters,
+            headbuttTreeGroup: entry.headbuttTreeGroup,
+            conditionalTreeGroup: true,
           });
         }
       }
@@ -241,6 +397,8 @@ export async function buildCanonicalCandidatePool({
       availableFrom: row.availableFrom,
       familyId: familyRoot(row.speciesConst, parentByTarget),
       growthRate: growthBySpecies.get(row.speciesConst) || null,
+      catchRate: catchRateBySpecies.get(row.speciesConst) ?? null,
+      captureSearch: bestCaptureSource(row.sources),
       entryLevelMin: row.entryLevelMin,
       entryLevelMax: row.entryLevelMax,
       speciesByStage: buildLevelEvolutionStages(row.speciesConst, row.availableFrom, bosses, evoByBase),
@@ -256,6 +414,12 @@ export async function buildCanonicalCandidatePool({
       ...manual,
       familyId: familyRoot(speciesConst, parentByTarget),
       growthRate: growthBySpecies.get(speciesConst) || null,
+      catchRate: catchRateBySpecies.get(speciesConst) ?? null,
+      captureSearch: {
+        mode: 'fixed-or-gift',
+        expectedEncounters: 0,
+        source: { type: manual.source, note: manual.note || '' },
+      },
       entryLevelMin: Number.isFinite(manualLevel) ? manualLevel : null,
       entryLevelMax: Number.isFinite(manualLevel) ? manualLevel : null,
       speciesByStage: buildLevelEvolutionStages(speciesConst, manual.availableFrom, bosses, evoByBase),
@@ -282,6 +446,7 @@ export async function buildCanonicalCandidatePool({
           : enriched.entryLevelMax;
       }
       if (manual.exclusiveGroup) existing.exclusiveGroup = manual.exclusiveGroup;
+      existing.captureSearch = bestCaptureSource(existing.sources);
     }
   }
 
@@ -303,6 +468,8 @@ export async function buildCanonicalCandidatePool({
       'Headbutt/static/gift exceptions are represented as manual acquisitions with provenance notes.',
       'Wild candidate entry-level ranges are derived from the same encounter slots and retained for catch-up/grinding metrics.',
       'Species growth rates are read from files/poketool/personal/personal.json for EXP-aware burden metrics.',
+      'Standard wild capture-search cost uses original encounter-slot probabilities; weekday restrictions are intentionally not penalized.',
+      'Headbutt expected encounters are a lower bound conditional on using the correct tree group.',
     ],
     candidates,
   };
