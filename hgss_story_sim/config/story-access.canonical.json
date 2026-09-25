@@ -134,25 +134,29 @@
       "species": "Chikorita",
       "availableFrom": 0,
       "source": "starter",
-      "exclusiveGroup": "starter"
+      "exclusiveGroup": "starter",
+      "level": 5
     },
     {
       "species": "Cyndaquil",
       "availableFrom": 0,
       "source": "starter",
-      "exclusiveGroup": "starter"
+      "exclusiveGroup": "starter",
+      "level": 5
     },
     {
       "species": "Totodile",
       "availableFrom": 0,
       "source": "starter",
-      "exclusiveGroup": "starter"
+      "exclusiveGroup": "starter",
+      "level": 5
     },
     {
       "species": "Togepi",
       "availableFrom": 1,
       "source": "gift-egg",
-      "note": "Mystery Egg received after Falkner; assumes hatching before Bugsy."
+      "note": "Mystery Egg received after Falkner; assumes hatching before Bugsy.",
+      "level": 1
     },
     {
       "species": "Heracross",
@@ -170,13 +174,15 @@
       "species": "Eevee",
       "availableFrom": 3,
       "source": "gift",
-      "note": "Bill gift after meeting Bill in Ecruteak and returning to Goldenrod."
+      "note": "Bill gift after meeting Bill in Ecruteak and returning to Goldenrod.",
+      "level": 5
     },
     {
       "species": "Sudowoodo",
       "availableFrom": 3,
       "source": "static",
-      "note": "Route 36 static encounter after Whitney."
+      "note": "Route 36 static encounter after Whitney.",
+      "level": 20
     },
     {
       "species": "Shuckle",
@@ -188,25 +194,29 @@
       "species": "Lapras",
       "availableFrom": 4,
       "source": "static",
-      "note": "Friday Union Cave B2F encounter; Surf required."
+      "note": "Friday Union Cave B2F encounter; Surf required.",
+      "level": 20
     },
     {
       "species": "Gyarados",
       "availableFrom": 6,
       "source": "static",
-      "note": "Red Gyarados at Lake of Rage."
+      "note": "Red Gyarados at Lake of Rage.",
+      "level": 30
     },
     {
       "species": "Dratini",
       "availableFrom": 8,
       "source": "gift",
-      "note": "Dragon's Den gift after Clair."
+      "note": "Dragon's Den gift after Clair.",
+      "level": 15
     },
     {
       "species": "Tyrogue",
       "availableFrom": 8,
       "source": "gift",
-      "note": "Mt. Mortar gift; conservative placement after Rising Badge/Waterfall access."
+      "note": "Mt. Mortar gift; conservative placement after Rising Badge/Waterfall access.",
+      "level": 10
     }
   ]
 }
