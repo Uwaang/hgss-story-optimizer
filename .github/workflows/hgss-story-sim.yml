@@ -37,6 +37,8 @@ jobs:
         run: npm run validate
       - name: Growth EXP table smoke test
         run: npm run exp-smoke
+      - name: Starter-specific story route smoke test
+        run: npm run route-smoke
       - name: HGSS battle smoke test
         run: npm run smoke
       - name: Player matchup switching smoke test
