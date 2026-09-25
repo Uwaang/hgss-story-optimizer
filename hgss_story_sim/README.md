@@ -9,6 +9,7 @@ This module evaluates candidate HeartGold/SoulSilver story parties by repeatedly
 - The default route contains the 8 Johto Gym Leaders, Elite Four, and Champion Lance.
 - Explicit HGSS held items and moves are mapped into Showdown sets.
 - HGSS trainer IVs use the original formula from `CreateNPCTrainerParty`: `floor(difficulty * 31 / 255)` for every stat.
+- HGSS trainer class/gender metadata is parsed from the same pinned source, and the original LCRNG path is reproduced to derive deterministic NPC personality, nature, and ability slot.
 - If a trainer/candidate has no explicit moves, Gen 4 level-up moves are reconstructed from Pokemon Showdown learnsets.
 - Candidate availability can be staged with `availableFrom`, and evolutions can be represented with `speciesByStage`, so a late-game form is not used against an early Gym.
 - Candidate levels are normalized to each boss's ace level for the first MVP, avoiding a hidden grinding assumption.
@@ -19,13 +20,11 @@ This module evaluates candidate HeartGold/SoulSilver story parties by repeatedly
 
 This is not yet a bit-perfect HGSS emulator. The current branch intentionally separates the pieces that still need fidelity work:
 
-1. HGSS trainer personality/nature generation is not reproduced yet; trainer Pokemon use a neutral nature.
-2. `TRPOKE_ABILITY_OVERRIDE_OFF` currently resolves to the species' first ability instead of reproducing the original PID-based ability bit.
-3. Trainer bag-item usage (Potion, Full Restore, etc.) is not modeled by Pokemon Showdown.
-4. The battle policy is a simple deterministic greedy policy, not HGSS's exact AI-flag implementation.
-5. Candidate acquisition stages in `candidates.example.json` are illustrative. A real optimization run should replace them with verified HGSS encounter/gift/evolution availability.
-6. TM/HM/tutor availability and one-use TM competition are not modeled yet. Candidate moves default to level-up moves unless explicitly supplied.
-7. Normalizing player levels to the boss ace level measures party efficiency at comparable levels; it does not yet model the HGSS EXP curve or required grinding time.
+1. Trainer bag-item usage (Potion, Full Restore, etc.) is not modeled by Pokemon Showdown.
+2. The battle policy is a simple deterministic greedy policy, not HGSS's exact AI-flag implementation.
+3. Candidate acquisition stages in `candidates.example.json` are illustrative. A real optimization run should replace them with verified HGSS encounter/gift/evolution availability.
+4. TM/HM/tutor availability and one-use TM competition are not modeled yet. Candidate moves default to level-up moves unless explicitly supplied.
+5. Normalizing player levels to the boss ace level measures party efficiency at comparable levels; it does not yet model the HGSS EXP curve or required grinding time.
 
 These limitations make the MVP useful for comparative experiments, but its output should not yet be called the definitive optimal HGSS story party.
 
@@ -90,10 +89,14 @@ npm run search -- --pool=config/my-candidates.json --runs=20 --limit=1000
 
 ## Next fidelity milestones
 
-- Reproduce HGSS trainer PID, nature, gender, and ability generation exactly from `trainer_data.c`.
 - Port the relevant HGSS AI flags and trainer item-use rules.
 - Build verified encounter/gift/evolution availability data by route and badge count.
 - Add TM/HM/tutor acquisition constraints and one-use TM ownership.
 - Replace equal-level normalization with an EXP/time cost model.
 - Add beam/genetic search and Pareto objectives for win rate, grinding, acquisition timing, and TM cost.
 - Extend after Lance to Kanto Gym Leaders and Red.
+
+
+## CI coverage
+
+The branch CI performs both a single Falkner battle smoke test and a one-run pass across all 13 Johto/E4/Lance bosses. This catches data-mapping and battle-stream regressions across the current story route.
