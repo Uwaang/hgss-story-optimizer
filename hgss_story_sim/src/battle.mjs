@@ -151,7 +151,7 @@ function candidateMoveScore(species, moveName) {
   return power * accuracy * stab * priority * (0.55 + offensiveStat / 120);
 }
 
-export function candidateMovePool(speciesName, level, stage, moveAccess = null) {
+export function candidateMovePool(speciesName, level, stage, moveAccess = null, extraMachines = []) {
   const species = dex.species.get(speciesName);
   if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
 
@@ -160,12 +160,17 @@ export function candidateMovePool(speciesName, level, stage, moveAccess = null) 
     if (Number(machine.availableFrom) > stage) continue;
     if (canLearnGen4Machine(species, machine.move)) moves.add(machine.move);
   }
+  for (const machine of extraMachines || []) {
+    const descriptor = typeof machine === 'string' ? { move: machine, availableFrom: 0 } : machine;
+    if (!descriptor?.move || Number(descriptor.availableFrom || 0) > stage) continue;
+    if (canLearnGen4Machine(species, descriptor.move)) moves.add(descriptor.move);
+  }
   return [...moves];
 }
 
-export function selectCandidateMoves(speciesName, level, stage, moveAccess = null) {
+export function selectCandidateMoves(speciesName, level, stage, moveAccess = null, extraMachines = []) {
   const species = dex.species.get(speciesName);
-  const pool = candidateMovePool(speciesName, level, stage, moveAccess);
+  const pool = candidateMovePool(speciesName, level, stage, moveAccess, extraMachines);
   const scored = pool.map(name => ({
     name,
     move: dex.moves.get(name),
@@ -191,6 +196,59 @@ export function selectCandidateMoves(speciesName, level, stage, moveAccess = nul
     }
   }
   return selected;
+}
+
+
+function moveSetScore(speciesName, moves) {
+  const species = dex.species.get(speciesName);
+  return moves.reduce((sum, moveName) => sum + candidateMoveScore(species, moveName), 0);
+}
+
+function candidateKey(candidate) {
+  return candidate.familyId || candidate.species;
+}
+
+export function planSingleUseMachines(candidates, bosses, moveAccess = null) {
+  const assignments = {};
+  const machines = [...(moveAccess?.singleUseMachines || [])]
+    .sort((a, b) => Number(a.availableFrom) - Number(b.availableFrom) || String(a.machine).localeCompare(String(b.machine)));
+
+  for (const machine of machines) {
+    let best = null;
+
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate.moves) && candidate.moves.length) continue;
+      const key = candidateKey(candidate);
+      const existing = assignments[key] || [];
+      let totalGain = 0;
+      let legalSomewhere = false;
+
+      for (const boss of bosses) {
+        if (boss.stage < Number(candidate.availableFrom || 0)) continue;
+        if (boss.stage < Number(machine.availableFrom || 0)) continue;
+
+        const speciesName = candidateSpeciesAtStage(candidate, boss.stage);
+        const species = dex.species.get(speciesName);
+        if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
+        legalSomewhere = true;
+
+        const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, existing);
+        const after = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, [...existing, machine]);
+        totalGain += Math.max(0, moveSetScore(speciesName, after) - moveSetScore(speciesName, before));
+      }
+
+      if (!legalSomewhere) continue;
+      if (!best || totalGain > best.totalGain || (totalGain === best.totalGain && key.localeCompare(best.key) < 0)) {
+        best = { key, totalGain };
+      }
+    }
+
+    if (best && best.totalGain > 0) {
+      assignments[best.key] = [...(assignments[best.key] || []), machine];
+    }
+  }
+
+  return assignments;
 }
 
 export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
@@ -230,6 +288,7 @@ function candidateSpeciesAtStage(mon, stage) {
 
 export function materializeCandidateTeam(candidates, stage, level, options = {}) {
   const moveAccess = options.moveAccess || null;
+  const singleUsePlan = options.singleUsePlan || {};
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
@@ -237,9 +296,10 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       const speciesName = candidateSpeciesAtStage(mon, stage);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
+      const assignedMachines = singleUsePlan[candidateKey(mon)] || [];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : selectCandidateMoves(species.name, level, stage, moveAccess);
+        : selectCandidateMoves(species.name, level, stage, moveAccess, assignedMachines);
       return {
         name: species.name,
         species: species.name,
