@@ -73,7 +73,8 @@ export async function loadPretTrainerData(commit = DEFAULT_PRET_COMMIT) {
 }
 
 export function extractBosses(source, bossConfig) {
-  return bossConfig.bosses.map((boss, stage) => {
+  return bossConfig.bosses.map((boss, index) => {
+    const stage = Number.isInteger(boss.stage) ? boss.stage : index;
     const trainerId = source.constants.get(boss.key);
     if (trainerId === undefined) {
       throw new Error(`Trainer constant not found: ${boss.key}`);
@@ -92,6 +93,8 @@ export function extractBosses(source, bossConfig) {
       stage,
       key: boss.key,
       label: boss.label,
+      kind: boss.kind || 'boss',
+      sourceRef: boss.sourceRef || null,
       trainerId,
       trainerClassId,
       trainerGender,
