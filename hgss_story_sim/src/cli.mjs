@@ -243,7 +243,7 @@ function storyBattlesForCandidates(bosses, candidates) {
   );
 }
 
-async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
+async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
   const routeStarter = storyStarterFromCandidates(candidates);
@@ -323,6 +323,66 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
     purchaseCosts,
     rows,
   };
+}
+
+function resourceMoveAccessVariants(moveAccess) {
+  const requested = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
+  const allPurchasable = Array.isArray(moveAccess?.purchasableMachines)
+    ? moveAccess.purchasableMachines
+    : [];
+
+  const core = {
+    ...moveAccess,
+    resourceProfile: 'core',
+    purchasableMachines: [],
+  };
+  const money = {
+    ...moveAccess,
+    resourceProfile: 'money',
+    purchasableMachines: allPurchasable.filter(machine => machine.currency === 'money'),
+  };
+  const all = {
+    ...moveAccess,
+    resourceProfile: 'all',
+    purchasableMachines: allPurchasable,
+  };
+
+  if (requested === 'core') return [core];
+  if (requested === 'money') return [core, money];
+  return [core, money, all];
+}
+
+function resourceEvaluationBetter(a, b) {
+  if (!b) return true;
+  if (a.score !== b.score) return a.score > b.score;
+  if (a.worstBossWinRate !== b.worstBossWinRate) {
+    return a.worstBossWinRate > b.worstBossWinRate;
+  }
+  const rank = { core: 0, money: 1, all: 2 };
+  const ar = rank[a.effectiveResourceProfile] ?? 9;
+  const br = rank[b.effectiveResourceProfile] ?? 9;
+  if (ar !== br) return ar < br;
+  const aMoney = Number(a.purchaseCosts?.money || 0);
+  const bMoney = Number(b.purchaseCosts?.money || 0);
+  if (aMoney !== bMoney) return aMoney < bMoney;
+  return Number(a.purchaseCosts?.coins || 0) < Number(b.purchaseCosts?.coins || 0);
+}
+
+async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
+  const requestedResourceProfile = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
+  let best = null;
+
+  for (const variant of resourceMoveAccessVariants(moveAccess)) {
+    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant);
+    const enriched = {
+      ...evaluation,
+      requestedResourceProfile,
+      effectiveResourceProfile: variant.resourceProfile,
+    };
+    if (resourceEvaluationBetter(enriched, best)) best = enriched;
+  }
+
+  return best;
 }
 
 async function cmdPool() {
@@ -483,6 +543,8 @@ function searchResultRow(team, evaluation) {
     finalTeam: evaluation.finalTeam,
     routeStarter: evaluation.routeStarter,
     routeBattleCount: evaluation.routeBattleCount,
+    requestedResourceProfile: evaluation.requestedResourceProfile,
+    effectiveResourceProfile: evaluation.effectiveResourceProfile,
     singleUsePlan: evaluation.singleUsePlan,
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
