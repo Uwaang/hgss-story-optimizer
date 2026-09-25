@@ -481,7 +481,7 @@ function allocateBossAwareExpInternal(
   while (remaining > 0 && eligible.length) {
     const minimumLevel = Math.min(...eligible.map(state => state.level));
     const trainingPool = Number.isFinite(Number(maxTrainingGap))
-      ? eligible.filter(state => state.level <= minimumLevel + Number(maxTrainingGap))
+      ? eligible.filter(state => state.level < minimumLevel + Number(maxTrainingGap))
       : eligible;
 
     let best = null;
@@ -636,7 +636,7 @@ export function buildTeamExpSchedule({
       `${allocator} EXP allocator requires levelUtility(candidate, boss, level)`
     );
   }
-  if (!Number.isInteger(Number(bossAwareSoftLevelGap)) || Number(bossAwareSoftLevelGap) < 0) {
+  if (!Number.isInteger(Number(bossAwareSoftLevelGap)) || Number(bossAwareSoftLevelGap) < 1) {
     throw new Error(`Invalid boss-aware-soft level gap: ${bossAwareSoftLevelGap}`);
   }
 
