@@ -37,6 +37,8 @@ jobs:
         run: npm run validate
       - name: Growth EXP table smoke test
         run: npm run exp-smoke
+      - name: Resource profile smoke test
+        run: npm run resource-smoke
       - name: Starter-specific story route smoke test
         run: npm run route-smoke
       - name: HGSS battle smoke test
@@ -70,4 +72,14 @@ jobs:
         with:
           name: hgss-preliminary-optimization
           path: hgss_story_sim/results/preliminary.json
+          if-no-files-found: error
+      - name: Core-resource starter optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-core]')
+        run: npm run optimize -- --resources=core --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/core.json
+      - name: Upload core-resource optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-core]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-core-optimization
+          path: hgss_story_sim/results/core.json
           if-no-files-found: error
