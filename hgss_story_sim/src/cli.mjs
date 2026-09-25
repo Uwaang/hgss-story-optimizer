@@ -54,9 +54,18 @@ function mergeExpAccess(baseAccess, expAccess) {
   };
 }
 
-async function loadExpContext(story, expProfile) {
+function normalizeGrindPolicy(value) {
+  const policy = String(value || 'none').toLowerCase();
+  if (!['none', 'ace-paid'].includes(policy)) {
+    throw new Error(`Unknown grind policy: ${value}. Use none or ace-paid.`);
+  }
+  return policy;
+}
+
+async function loadExpContext(story, expProfile, version = 'HEARTGOLD', grindPolicy = 'none') {
   const profile = normalizeExpProfile(expProfile);
-  if (profile === 'ace') return { profile, world: null };
+  const normalizedGrindPolicy = normalizeGrindPolicy(grindPolicy);
+  if (profile === 'ace') return { profile, grindPolicy: 'none', world: null };
   const [baseAccess, expAccess] = await Promise.all([
     readJson('config/story-access.canonical.json'),
     readJson('config/exp-access.json'),
@@ -66,8 +75,9 @@ async function loadExpContext(story, expProfile) {
     commit: story.config.sourceCommit,
     access,
     trainerSource: story.source,
+    version,
   });
-  return { profile, world };
+  return { profile, grindPolicy: normalizedGrindPolicy, world };
 }
 
 async function loadMoveAccess(resourceProfile = 'all') {
@@ -299,6 +309,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         routeBosses,
         expWorld: expContext.world,
         profile: expProfile,
+        grindPolicy: expContext?.grindPolicy || 'none',
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
@@ -371,6 +382,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     worstBossWinRate,
     routeStarter,
     expProfile,
+    grindPolicy: expContext?.grindPolicy || 'none',
     expSchedule,
     finalTeam,
     finalLevels,
@@ -519,6 +531,7 @@ async function cmdSimulate() {
   const runs = Number(arg('runs', '20'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -531,7 +544,7 @@ async function cmdSimulate() {
 
   const [moveAccess, expContext] = await Promise.all([
     loadMoveAccess(resourceProfile),
-    loadExpContext(story, expProfile),
+    loadExpContext(story, expProfile, 'HEARTGOLD', grindPolicy),
   ]);
   const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext);
   console.log(JSON.stringify({
@@ -539,6 +552,7 @@ async function cmdSimulate() {
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
     resourceProfile,
     expProfile,
+    grindPolicy,
     runsPerBoss: runs,
     ...result,
   }, null, 2));
@@ -585,6 +599,7 @@ function paretoFront(rows) {
       other.worstBossWinRate >= row.worstBossWinRate &&
       other.catchUpExp <= row.catchUpExp &&
       other.catchUpExpUnknown <= row.catchUpExpUnknown &&
+      Number(other.naturalExp?.totalGrindExp || 0) <= Number(row.naturalExp?.totalGrindExp || 0) &&
       otherMoney <= rowMoney &&
       otherCoins <= rowCoins;
     const strictlyBetter =
@@ -592,6 +607,7 @@ function paretoFront(rows) {
       other.worstBossWinRate > row.worstBossWinRate ||
       other.catchUpExp < row.catchUpExp ||
       other.catchUpExpUnknown < row.catchUpExpUnknown ||
+      Number(other.naturalExp?.totalGrindExp || 0) < Number(row.naturalExp?.totalGrindExp || 0) ||
       otherMoney < rowMoney ||
       otherCoins < rowCoins;
     return atLeastAsGood && strictlyBetter;
@@ -610,10 +626,13 @@ function searchResultRow(team, evaluation) {
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
     expProfile: evaluation.expProfile,
+    grindPolicy: evaluation.grindPolicy,
     naturalExp: evaluation.expSchedule ? {
       totalNaturalExp: evaluation.expSchedule.totalNaturalExp,
       totalMapExp: evaluation.expSchedule.totalMapExp,
       totalMajorExp: evaluation.expSchedule.totalMajorExp,
+      totalGrindExp: evaluation.expSchedule.totalGrindExp,
+      totalExpectedGrindBattles: evaluation.expSchedule.totalExpectedGrindBattles,
       unknownEntryLevels: evaluation.expSchedule.unknownEntryLevels,
     } : null,
     routeStarter: evaluation.routeStarter,
@@ -656,6 +675,7 @@ function evaluationDominates(a, b) {
     a.worstBossWinRate >= b.worstBossWinRate &&
     a.catchUpExp <= b.catchUpExp &&
     a.catchUpExpUnknown <= b.catchUpExpUnknown &&
+    Number(a.expSchedule?.totalGrindExp || 0) <= Number(b.expSchedule?.totalGrindExp || 0) &&
     aMoney <= bMoney &&
     aCoins <= bCoins;
   const strictlyBetter =
@@ -663,6 +683,7 @@ function evaluationDominates(a, b) {
     a.worstBossWinRate > b.worstBossWinRate ||
     a.catchUpExp < b.catchUpExp ||
     a.catchUpExpUnknown < b.catchUpExpUnknown ||
+    Number(a.expSchedule?.totalGrindExp || 0) < Number(b.expSchedule?.totalGrindExp || 0) ||
     aMoney < bMoney ||
     aCoins < bCoins;
   return atLeastAsGood && strictlyBetter;
@@ -854,6 +875,7 @@ async function cmdSearch() {
   const finalRuns = Number(arg('final-runs', String(runs)));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const story = await loadStory();
 
   let candidates;
@@ -867,7 +889,7 @@ async function cmdSearch() {
   const requiredCandidate = findStarterCandidate(candidates, starterName);
   const [moveAccess, expContext] = await Promise.all([
     loadMoveAccess(resourceProfile),
-    loadExpContext(story, expProfile),
+    loadExpContext(story, expProfile, version, grindPolicy),
   ]);
 
   if (strategy === 'beam') {
@@ -891,6 +913,7 @@ async function cmdSearch() {
       starter: requiredCandidate?.species || 'any',
       resourceProfile,
       expProfile,
+      grindPolicy,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -933,6 +956,7 @@ async function cmdSearch() {
     starter: requiredCandidate?.species || 'any',
     resourceProfile,
     expProfile,
+    grindPolicy,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -958,12 +982,10 @@ async function cmdOptimize() {
   const teamSize = Number(arg('team-size', '6'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
 
   const story = await loadStory();
-  const [moveAccess, expContext] = await Promise.all([
-    loadMoveAccess(resourceProfile),
-    loadExpContext(story, expProfile),
-  ]);
+  const moveAccess = await loadMoveAccess(resourceProfile);
   const output = {
     schemaVersion: 1,
     sourceCommit: story.config.sourceCommit,
@@ -971,6 +993,7 @@ async function cmdOptimize() {
     policy: 'greedy-moves+conservative-player-switching',
     resourceProfile,
     expProfile,
+    grindPolicy,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -981,7 +1004,10 @@ async function cmdOptimize() {
   };
 
   for (const version of versions) {
-    const pool = await loadCanonicalPool(version, story);
+    const [pool, expContext] = await Promise.all([
+      loadCanonicalPool(version, story),
+      loadExpContext(story, expProfile, version, grindPolicy),
+    ]);
     const candidates = pool.candidates;
     const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext);
     output.versions[version] = {
@@ -1157,6 +1183,7 @@ async function cmdRouteSmoke() {
 async function cmdExpBudget() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   if (profile === 'ace') {
     throw new Error('exp-budget requires --exp-profile=major or all-accessible');
   }
@@ -1173,16 +1200,18 @@ async function cmdExpBudget() {
     return candidate;
   });
   const route = storyBattlesForCandidates(story.bosses, team);
-  const expContext = await loadExpContext(story, profile);
+  const expContext = await loadExpContext(story, profile, version, grindPolicy);
   const schedule = buildTeamExpSchedule({
     candidates: team,
     routeBosses: route,
     expWorld: expContext.world,
     profile,
+    grindPolicy,
   });
 
   console.log(JSON.stringify({
     version,
+    grindPolicy,
     team: team.map(mon => mon.species),
     routeBattleCount: route.length,
     world: {
@@ -1217,6 +1246,14 @@ async function cmdExpBudgetSmoke() {
     routeBosses: route,
     expWorld: expContext.world,
     profile: 'all-accessible',
+    grindPolicy: 'none',
+  });
+  const acePaid = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'all-accessible',
+    grindPolicy: 'ace-paid',
   });
 
   if (major.totalMapExp !== 0) {
@@ -1244,6 +1281,9 @@ async function cmdExpBudgetSmoke() {
   if (!(levelSum(accessible) >= levelSum(major))) {
     throw new Error('More natural EXP produced a lower final level sum');
   }
+  if (!(acePaid.totalGrindExp > 0) || !(acePaid.totalExpectedGrindBattles > 0)) {
+    throw new Error('ace-paid profile failed to record paid grind');
+  }
 
   console.log(JSON.stringify({
     routeBattleCount: route.length,
@@ -1260,6 +1300,13 @@ async function cmdExpBudgetSmoke() {
       totalMajorExp: accessible.totalMajorExp,
       firstBattleLevels: accessible.battles[0]?.levelsBefore,
       finalLevels: accessible.finalLevels,
+    },
+    acePaid: {
+      totalNaturalExp: acePaid.totalNaturalExp,
+      totalGrindExp: acePaid.totalGrindExp,
+      totalExpectedGrindBattles: acePaid.totalExpectedGrindBattles,
+      firstBattle: acePaid.battles[0],
+      finalLevels: acePaid.finalLevels,
     },
   }, null, 2));
 }
