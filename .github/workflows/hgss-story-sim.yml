@@ -205,6 +205,33 @@ jobs:
           name: hgss-soft-scale-${{ matrix.softScale }}-hg-cyndaquil
           path: hgss_story_sim/results/soft-scale-${{ matrix.softScale }}.json
           if-no-files-found: error
+  soft_allocator_fine_sweep:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[soft-fine]')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        softScale: [9, 10, 11]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize fine soft scale ${{ matrix.softScale }}
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware-soft --soft-level-scale=${{ matrix.softScale }} --runs=1 --screen-runs=1 --final-runs=10 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/soft-fine-${{ matrix.softScale }}.json
+      - name: Upload fine soft scale ${{ matrix.softScale }} result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-soft-fine-${{ matrix.softScale }}-hg-cyndaquil
+          path: hgss_story_sim/results/soft-fine-${{ matrix.softScale }}.json
+          if-no-files-found: error
   convergence:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
     runs-on: ubuntu-latest
