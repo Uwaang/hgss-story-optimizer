@@ -104,6 +104,8 @@ The optimizer reports:
 
 Pareto and beam-search dominance use the effective EXP burden, so legacy `catchUpExp` is no longer double-counted in natural-EXP searches.
 
+Capture-search cost is a separate Pareto axis. Standard wild encounters use source slot probabilities, fixed/gift encounters have zero search cost, and Headbutt remains an explicitly labeled lower bound conditional on selecting the correct tree group.
+
 
 ### Resource profiles
 
