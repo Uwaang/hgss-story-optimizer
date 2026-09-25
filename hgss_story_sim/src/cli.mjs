@@ -38,8 +38,10 @@ function normalizeSpendPolicy(value) {
 
 function normalizeExpProfile(value) {
   const profile = String(value || 'ace').toLowerCase();
-  if (!['ace', 'major', 'all-accessible'].includes(profile)) {
-    throw new Error(`Unknown EXP profile: ${value}. Use ace, major, or all-accessible.`);
+  if (!['ace', 'major', 'normal-route', 'all-accessible'].includes(profile)) {
+    throw new Error(
+      `Unknown EXP profile: ${value}. Use ace, major, normal-route, or all-accessible.`
+    );
   }
   return profile;
 }
@@ -79,7 +81,9 @@ async function loadExpContext(story, expProfile, version = 'HEARTGOLD', grindPol
     readJson('config/story-access.canonical.json'),
     readJson('config/exp-access.json'),
   ]);
-  const access = mergeExpAccess(baseAccess, expAccess);
+  const access = profile === 'all-accessible'
+    ? mergeExpAccess(baseAccess, expAccess)
+    : baseAccess;
   const world = await buildExpWorld({
     commit: story.config.sourceCommit,
     access,
@@ -1630,6 +1634,7 @@ async function cmdExpEnvelope() {
 
   const profiles = [
     { name: 'major', expProfile: 'major', grindPolicy: 'none' },
+    { name: 'normalRoute', expProfile: 'normal-route', grindPolicy: 'none' },
     { name: 'natural', expProfile: 'all-accessible', grindPolicy: 'none' },
     { name: 'acePaid', expProfile: 'all-accessible', grindPolicy: 'ace-paid' },
   ];
@@ -1677,6 +1682,7 @@ async function cmdExpEnvelopeSmoke() {
   const evaluations = {};
   for (const [name, expProfile, grindPolicy] of [
     ['major', 'major', 'none'],
+    ['normalRoute', 'normal-route', 'none'],
     ['natural', 'all-accessible', 'none'],
     ['acePaid', 'all-accessible', 'ace-paid'],
   ]) {
@@ -1690,8 +1696,11 @@ async function cmdExpEnvelopeSmoke() {
     );
   }
 
-  if (!(evaluations.natural.expSchedule.totalNaturalExp > evaluations.major.expSchedule.totalNaturalExp)) {
-    throw new Error('Natural EXP envelope should exceed major-only EXP supply');
+  if (!(evaluations.normalRoute.expSchedule.totalNaturalExp > evaluations.major.expSchedule.totalNaturalExp)) {
+    throw new Error('Normal-route EXP envelope should exceed major-only EXP supply');
+  }
+  if (!(evaluations.natural.expSchedule.totalNaturalExp >= evaluations.normalRoute.expSchedule.totalNaturalExp)) {
+    throw new Error('All-accessible EXP envelope should not be below normal-route EXP supply');
   }
   if (!(evaluations.acePaid.expSchedule.totalGrindExp > 0)) {
     throw new Error('Ace-paid envelope should record non-zero grind EXP');
