@@ -31,13 +31,40 @@ function speciesValues(value, version, out = []) {
   return out;
 }
 
-function methodSpecies(encounter, method, version) {
-  if (method === 'land') return speciesValues(encounter.land?.mons?.map(x => x.species) || [], version);
-  if (method === 'surf') return speciesValues(encounter.surf?.mons?.map(x => x.species) || [], version);
-  if (method === 'rock_smash') return speciesValues(encounter.rock_smash?.mons?.map(x => x.species) || [], version);
-  const rod = encounter.fishing?.[method];
-  if (rod) return speciesValues(rod.mons?.map(x => x.species) || [], version);
-  return [];
+function levelRange(level) {
+  if (Number.isFinite(Number(level))) {
+    const value = Number(level);
+    return { min: value, max: value };
+  }
+  if (level && typeof level === 'object') {
+    const min = Number(level.min);
+    const max = Number(level.max);
+    if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
+  }
+  return { min: null, max: null };
+}
+
+function methodMons(encounter, method) {
+  if (method === 'land') return encounter.land?.mons || [];
+  if (method === 'surf') return encounter.surf?.mons || [];
+  if (method === 'rock_smash') return encounter.rock_smash?.mons || [];
+  return encounter.fishing?.[method]?.mons || [];
+}
+
+function methodEntries(encounter, method, version) {
+  const out = [];
+  for (const mon of methodMons(encounter, method)) {
+    const range = levelRange(mon.level);
+    const species = [...new Set(speciesValues(mon.species, version))];
+    for (const speciesConst of species) {
+      out.push({
+        speciesConst,
+        minLevel: range.min,
+        maxLevel: range.max,
+      });
+    }
+  }
+  return out;
 }
 
 function buildEncounterIndex(encounters) {
@@ -113,18 +140,38 @@ export async function buildCanonicalCandidatePool({
       if (!encounter) continue;
       for (const method of methods) {
         if (stageDef.stage < Number(access.methodUnlockStage[method])) continue;
-        for (const speciesConst of methodSpecies(encounter, method, version)) {
+        for (const entry of methodEntries(encounter, method, version)) {
+          const speciesConst = entry.speciesConst;
+          const source = {
+            type: 'wild',
+            map,
+            method,
+            minLevel: entry.minLevel,
+            maxLevel: entry.maxLevel,
+          };
           const existing = earliest.get(speciesConst);
           if (!existing) {
             earliest.set(speciesConst, {
               speciesConst,
               availableFrom: stageDef.stage,
-              sources: [{ type: 'wild', map, method }],
+              entryLevelMin: entry.minLevel,
+              entryLevelMax: entry.maxLevel,
+              sources: [source],
             });
           } else if (existing.availableFrom === stageDef.stage) {
+            if (Number.isFinite(entry.minLevel)) {
+              existing.entryLevelMin = Number.isFinite(existing.entryLevelMin)
+                ? Math.min(existing.entryLevelMin, entry.minLevel)
+                : entry.minLevel;
+            }
+            if (Number.isFinite(entry.maxLevel)) {
+              existing.entryLevelMax = Number.isFinite(existing.entryLevelMax)
+                ? Math.max(existing.entryLevelMax, entry.maxLevel)
+                : entry.maxLevel;
+            }
             const key = `${map}:${method}`;
             if (!existing.sources.some(x => `${x.map}:${x.method}` === key)) {
-              existing.sources.push({ type: 'wild', map, method });
+              existing.sources.push(source);
             }
           }
         }
@@ -138,6 +185,8 @@ export async function buildCanonicalCandidatePool({
       species: constantToName(row.speciesConst, 'SPECIES_'),
       availableFrom: row.availableFrom,
       familyId: familyRoot(row.speciesConst, parentByTarget),
+      entryLevelMin: row.entryLevelMin,
+      entryLevelMax: row.entryLevelMax,
       speciesByStage: buildLevelEvolutionStages(row.speciesConst, row.availableFrom, bosses, evoByBase),
       sources: row.sources,
     });
@@ -146,17 +195,35 @@ export async function buildCanonicalCandidatePool({
   for (const manual of access.manualAcquisitions || []) {
     const speciesConst = `SPECIES_${manual.species.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
     const existing = candidates.find(x => x.species === manual.species);
+    const manualLevel = Number(manual.level);
     const enriched = {
       ...manual,
       familyId: familyRoot(speciesConst, parentByTarget),
+      entryLevelMin: Number.isFinite(manualLevel) ? manualLevel : null,
+      entryLevelMax: Number.isFinite(manualLevel) ? manualLevel : null,
       speciesByStage: buildLevelEvolutionStages(speciesConst, manual.availableFrom, bosses, evoByBase),
-      sources: [{ type: manual.source, note: manual.note || '' }],
+      sources: [{
+        type: manual.source,
+        note: manual.note || '',
+        minLevel: Number.isFinite(manualLevel) ? manualLevel : null,
+        maxLevel: Number.isFinite(manualLevel) ? manualLevel : null,
+      }],
     };
     if (!existing || manual.availableFrom < existing.availableFrom) {
       if (existing) candidates.splice(candidates.indexOf(existing), 1);
       candidates.push(enriched);
     } else if (existing && manual.availableFrom === existing.availableFrom) {
       existing.sources.push(...enriched.sources);
+      if (Number.isFinite(enriched.entryLevelMin)) {
+        existing.entryLevelMin = Number.isFinite(existing.entryLevelMin)
+          ? Math.min(existing.entryLevelMin, enriched.entryLevelMin)
+          : enriched.entryLevelMin;
+      }
+      if (Number.isFinite(enriched.entryLevelMax)) {
+        existing.entryLevelMax = Number.isFinite(existing.entryLevelMax)
+          ? Math.max(existing.entryLevelMax, enriched.entryLevelMax)
+          : enriched.entryLevelMax;
+      }
       if (manual.exclusiveGroup) existing.exclusiveGroup = manual.exclusiveGroup;
     }
   }
@@ -176,6 +243,7 @@ export async function buildCanonicalCandidatePool({
       'Story-stage map access is curated in story-access.canonical.json.',
       'Only unambiguous EVO_LEVEL evolutions are auto-applied; friendship, stone, trade, move, and location evolutions remain conservative.',
       'Headbutt/static/gift exceptions are represented as manual acquisitions with provenance notes.',
+      'Wild candidate entry-level ranges are derived from the same encounter slots and retained for catch-up/grinding metrics.',
     ],
     candidates,
   };
