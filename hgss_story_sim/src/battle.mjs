@@ -307,7 +307,140 @@ export function planSingleUseMachines(candidates, bosses, moveAccess = null) {
 }
 
 
-export function planPurchasableMachines(candidates, bosses, moveAccess = null, singleUsePlan = {}) {
+function machineMoneyEquivalent(machine, moneyPerCoin = 20) {
+  const unitCost = Number(machine?.unitCost || 0);
+  return machine?.currency === 'coins' ? unitCost * moneyPerCoin : unitCost;
+}
+
+function planPurchasableMachinesBudgeted(
+  candidates,
+  bosses,
+  moveAccess,
+  singleUsePlan,
+  { maxMoneyEquivalent, moneyPerCoin = 20 },
+) {
+  const limit = Math.max(0, Number(maxMoneyEquivalent || 0));
+  const machines = [...(moveAccess?.purchasableMachines || [])]
+    .sort((a, b) =>
+      Number(a.availableFrom) - Number(b.availableFrom) ||
+      machineMoneyEquivalent(a, moneyPerCoin) - machineMoneyEquivalent(b, moneyPerCoin) ||
+      String(a.machine).localeCompare(String(b.machine))
+    );
+
+  const states = candidates
+    .filter(candidate => !(Array.isArray(candidate.moves) && candidate.moves.length))
+    .map(candidate => ({
+      candidate,
+      key: candidateKey(candidate),
+      owned: [...(singleUsePlan[candidateKey(candidate)] || [])],
+      purchased: [],
+    }));
+
+  let spentEquivalent = 0;
+  const assignments = {};
+  const costs = {};
+
+  for (;;) {
+    let best = null;
+
+    for (const state of states) {
+      for (const machine of machines) {
+        if (
+          state.owned.some(existing => existing.machine === machine.machine || existing.move === machine.move) ||
+          state.purchased.some(existing => existing.machine === machine.machine)
+        ) {
+          continue;
+        }
+
+        const costEquivalent = machineMoneyEquivalent(machine, moneyPerCoin);
+        if (spentEquivalent + costEquivalent > limit) continue;
+
+        let totalGain = 0;
+        let legalSomewhere = false;
+        for (const boss of bosses) {
+          if (boss.stage < Number(state.candidate.availableFrom || 0)) continue;
+          if (boss.stage < Number(machine.availableFrom || 0)) continue;
+
+          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage);
+          const species = dex.species.get(speciesName);
+          if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
+          legalSomewhere = true;
+
+          const current = [...state.owned, ...state.purchased];
+          const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, current);
+          const after = selectCandidateMoves(
+            speciesName,
+            boss.aceLevel,
+            boss.stage,
+            moveAccess,
+            [...current, machine],
+          );
+          totalGain += Math.max(0, moveSetScore(speciesName, after) - moveSetScore(speciesName, before));
+        }
+
+        if (!legalSomewhere || totalGain <= 0) continue;
+        const efficiency = totalGain / Math.max(1, costEquivalent);
+        if (
+          !best ||
+          efficiency > best.efficiency ||
+          (efficiency === best.efficiency && totalGain > best.totalGain) ||
+          (efficiency === best.efficiency && totalGain === best.totalGain &&
+            costEquivalent < best.costEquivalent) ||
+          (efficiency === best.efficiency && totalGain === best.totalGain &&
+            costEquivalent === best.costEquivalent &&
+            `${state.key}:${machine.machine}`.localeCompare(
+              `${best.state.key}:${best.machine.machine}`
+            ) < 0)
+        ) {
+          best = { state, machine, totalGain, efficiency, costEquivalent };
+        }
+      }
+    }
+
+    if (!best) break;
+    best.state.purchased.push(best.machine);
+    spentEquivalent += best.costEquivalent;
+    const currency = best.machine.currency || 'money';
+    costs[currency] = (costs[currency] || 0) + Number(best.machine.unitCost || 0);
+  }
+
+  for (const state of states) {
+    if (state.purchased.length) assignments[state.key] = state.purchased;
+  }
+
+  return {
+    assignments,
+    costs,
+    budget: {
+      maxMoneyEquivalent: limit,
+      spentMoneyEquivalent: spentEquivalent,
+      remainingMoneyEquivalent: Math.max(0, limit - spentEquivalent),
+      moneyPerCoin,
+    },
+  };
+}
+
+export function planPurchasableMachines(
+  candidates,
+  bosses,
+  moveAccess = null,
+  singleUsePlan = {},
+  options = {},
+) {
+  const maxMoneyEquivalent = Number(options.maxMoneyEquivalent);
+  if (Number.isFinite(maxMoneyEquivalent)) {
+    return planPurchasableMachinesBudgeted(
+      candidates,
+      bosses,
+      moveAccess,
+      singleUsePlan,
+      {
+        maxMoneyEquivalent,
+        moneyPerCoin: Number(options.moneyPerCoin || 20),
+      },
+    );
+  }
+
   const assignments = {};
   const costs = {};
   const machines = [...(moveAccess?.purchasableMachines || [])]
