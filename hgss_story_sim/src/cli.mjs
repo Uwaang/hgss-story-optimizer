@@ -386,7 +386,7 @@ function rowResourceBurden(row) {
   );
 }
 
-async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null) {
+async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none') {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
   const routeStarter = storyStarterFromCandidates(candidates);
@@ -564,12 +564,12 @@ function resourceEvaluationBetter(a, b) {
   return Number(a.purchaseCosts?.coins || 0) < Number(b.purchaseCosts?.coins || 0);
 }
 
-async function evaluateCandidates(candidates, bosses, runs, moveAccess, expContext = null) {
+async function evaluateCandidates(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none') {
   const requestedResourceProfile = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
   let best = null;
 
   for (const variant of resourceMoveAccessVariants(moveAccess)) {
-    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant, expContext);
+    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant, expContext, grindPolicy);
     const enriched = {
       ...evaluation,
       requestedResourceProfile,
@@ -657,6 +657,7 @@ async function cmdSimulate() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -671,7 +672,7 @@ async function cmdSimulate() {
     loadMoveAccess(resourceProfile, spendPolicy),
     loadExpContext(story, expProfile, 'HEARTGOLD', grindPolicy),
   ]);
-  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext);
+  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext, grindPolicy);
   console.log(JSON.stringify({
     pool: poolPath,
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
@@ -820,10 +821,10 @@ function searchResultRow(team, evaluation) {
   };
 }
 
-async function screenCandidates(candidates, story, moveAccess, screenRuns, expContext = null) {
+async function screenCandidates(candidates, story, moveAccess, screenRuns, expContext = null, grindPolicy = 'none') {
   const rows = [];
   for (const candidate of candidates) {
-    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess, expContext);
+    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess, expContext, grindPolicy);
     rows.push({ candidate, evaluation });
   }
   rows.sort((a, b) =>
@@ -1004,8 +1005,9 @@ async function runBeamSearch({
   requiredCandidate,
   screenRowsOverride = null,
   expContext = null,
+  grindPolicy = 'none',
 }) {
-  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns, expContext);
+  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
 
   const eligibleScreenRows = requiredCandidate
     ? screenRows.filter(row =>
@@ -1023,7 +1025,7 @@ async function runBeamSearch({
   async function evaluateTeam(team) {
     const key = team.map(candidateIdentity).sort().join('|') + `@runs=${runs}`;
     if (!cache.has(key)) {
-      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext));
+      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext, grindPolicy));
     }
     return cache.get(key);
   }
@@ -1111,6 +1113,7 @@ async function cmdSearch() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const story = await loadStory();
 
   let candidates;
@@ -1140,6 +1143,7 @@ async function cmdSearch() {
       finalRuns,
       requiredCandidate,
       expContext,
+      grindPolicy,
     });
     console.log(JSON.stringify({
       pool: poolPath,
@@ -1178,7 +1182,7 @@ async function cmdSearch() {
       rejectedByConstraints += 1;
       continue;
     }
-    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext);
+    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext, grindPolicy);
     results.push(searchResultRow(team, evaluation));
     tested += 1;
     if (tested >= limit) break;
@@ -1221,6 +1225,7 @@ async function cmdOptimize() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -1248,7 +1253,7 @@ async function cmdOptimize() {
       loadExpContext(story, expProfile, version, grindPolicy),
     ]);
     const candidates = pool.candidates;
-    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext);
+    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
     output.versions[version] = {
       candidateCount: candidates.length,
       starters: {},
@@ -1269,6 +1274,7 @@ async function cmdOptimize() {
         requiredCandidate,
         screenRowsOverride: screenRows,
         expContext,
+        grindPolicy,
       });
       output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
@@ -1762,7 +1768,7 @@ async function cmdExpBudgetSmoke() {
     return candidate;
   });
   const route = storyBattlesForCandidates(story.bosses, team);
-  const expContext = await loadExpContext(story, 'all-accessible');
+  const expContext = await loadExpContext(story, 'all-accessible', 'HEARTGOLD');
 
   const major = buildTeamExpSchedule({
     candidates: team,
