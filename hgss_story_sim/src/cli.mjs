@@ -591,7 +591,15 @@ async function cmdOptimize() {
     }
   }
 
-  console.log(JSON.stringify(output, null, 2));
+  const serialized = JSON.stringify(output, null, 2);
+  const outputPath = arg('output', '');
+  if (outputPath) {
+    const absolutePath = path.resolve(ROOT, outputPath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, serialized + '\n', 'utf8');
+    console.error(`wrote optimization result: ${absolutePath}`);
+  }
+  console.log(serialized);
 }
 
 async function cmdHmSmoke() {
