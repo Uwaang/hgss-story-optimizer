@@ -33,7 +33,7 @@ Currently deferred:
 - voluntary switches use a 3-turn cooldown and a maximum of 6 per battle;
 - NPCs remain attack-focused rather than being given invented aggressive switching.
 
-Battle levels now have three explicit modes. The legacy `ace` profile keeps the old free ace-level normalization only for regression. `major` and `all-accessible` derive each party member's actual level from source-backed EXP supply, acquisition timing, and its Gen 4 growth curve.
+Battle levels now have four explicit modes. The legacy `ace` profile keeps the old free ace-level normalization only for regression. `major`, `normal-route`, and `all-accessible` derive each party member's actual level from source-backed EXP supply, acquisition timing, and its Gen 4 growth curve.
 
 ### Acquisition and evolution
 
@@ -80,9 +80,12 @@ EXP supply profiles:
 
 - `ace`: legacy regression mode; free normalization to each opponent's ace level
 - `major`: lower bound using only the 21 scored major battles
-- `all-accessible`: accessible-trainer envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
+- `normal-route`: canonical-route map envelope plus the 21 major battles; this intentionally excludes the extra Gym/Rocket maps used only by the upper envelope
+- `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
 
-Late-joining Pokémon never receive EXP from earlier stages. Natural EXP is currently allocated with a deterministic **lowest-level-first balanced policy**. The entry-level assumption is the highest source-backed encounter/gift level for each acquisition source, so this remains mildly optimistic.
+Late-joining Pokémon never receive EXP from earlier stages. For stages after Falkner, the conservative default also prevents a newly obtainable Pokémon from retroactively receiving that stage's full map-EXP bucket before it joins. Natural EXP is allocated with a deterministic **lowest-level-first balanced policy**.
+
+Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=after-map-exp|before-map-exp`; the latter restores the previous optimistic same-stage behavior.
 
 Grind policies for non-`ace` EXP profiles:
 
@@ -91,7 +94,7 @@ Grind policies for non-`ace` EXP profiles:
 
 Wild-grind estimates use the original Gen 4 slot weights (land 20/20/10/10/10/10/5/5/4/4/1/1, Surf 60/30/5/4/1, rods 40/30/15/10/5, Rock Smash 80/20) and the best currently accessible source by expected EXP per battle.
 
-For the current six-mon regression team, the source-backed `all-accessible + none` envelope reaches roughly Lv35-36 by Lance from 262k natural EXP, while repeatedly forcing ace levels costs more than 500k additional EXP and roughly one thousand expected wild battles. This quantifies why the former free ace normalization was too generous.
+The exact late-game levels and EXP totals are policy-dependent now: the default uses midpoint encounter levels and conservative same-stage joins. Use `exp-envelope` to compare the lower, canonical-route, accessible, and paid-grind envelopes on the same fixed party rather than relying on a single hard-coded total.
 
 The optimizer reports:
 
@@ -161,7 +164,8 @@ npm run exp-envelope -- \
 This reports the same team under:
 
 - `major + none`: low-EXP lower bound;
-- `all-accessible + none`: natural-EXP upper envelope;
+- `normal-route + none`: canonical-route map envelope;
+- `all-accessible + none`: accessible-trainer upper envelope;
 - `all-accessible + ace-paid`: explicit grind-to-ace reference with extra EXP and expected wild battles charged instead of free levels.
 
 A team that only performs well at one envelope endpoint should not be treated as a robust story-party result.
@@ -269,9 +273,10 @@ This is not yet a bit-perfect HGSS story emulator.
 - reachability stages are conservative curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
-- `all-accessible` is an accessible-trainer EXP/money envelope, not yet a proven normal-route trainer subset;
+- `normal-route` is a canonical-map envelope, not yet a trainer-by-trainer proof of the exact mandatory/on-route subset;
+- `all-accessible` is an accessible-trainer EXP/money upper envelope;
 - EXP allocation is a deterministic balanced policy rather than a jointly optimized switch-training schedule;
-- entry levels currently use the highest source-backed encounter level, which is optimistic;
+- midpoint encounter levels reduce the previous max-level optimism, but encounter-level choice is still an explicit modeling policy;
 - the natural spending budget assumes all modeled pre-Whitney prize money can be reserved for TMs and does not yet subtract routine Poké Ball/healing-item purchases;
 - beam search is heuristic and does not prove the global optimum;
 - double battles with an ally are not yet represented faithfully.
@@ -294,7 +299,7 @@ GitHub Actions currently checks:
 - HG/SS canonical pools
 - prefix and beam-search smoke
 
-Push commits containing `[optimize]` run the legacy `ace` comparison across HG/SS × all three starters. `[optimize-core]` runs the same legacy search with no purchasable TMs. `[optimize-exp]` runs two `all-accessible` EXP searches: natural levels (`grind-policy=none`) and explicitly paid ace-level grinding (`grind-policy=ace-paid`). All retain JSON results as Actions artifacts.
+Push commits containing `[optimize]` run the legacy `ace` comparison across HG/SS × all three starters. `[optimize-core]` runs the same legacy search with no purchasable TMs. `[optimize-exp]` runs `major`, `normal-route`, `all-accessible`, and explicitly paid ace-level grinding comparisons. All retain JSON results as Actions artifacts.
 
 The current CI optimization profile uses beam width 4, candidate cap 16, and 10-run finalist rescoring.
 
