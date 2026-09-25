@@ -224,6 +224,60 @@
       "unitCost": 7500,
       "source": "Goldenrod Department Store 5F",
       "sourceRef": "src/scrcmd_mart.c special mart index 7"
+    },
+    {
+      "machine": "TM90",
+      "move": "Substitute",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 2000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
+    },
+    {
+      "machine": "TM75",
+      "move": "Swords Dance",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 4000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
+    },
+    {
+      "machine": "TM44",
+      "move": "Rest",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 6000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
+    },
+    {
+      "machine": "TM35",
+      "move": "Flamethrower",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 10000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
+    },
+    {
+      "machine": "TM13",
+      "move": "Ice Beam",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 10000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
+    },
+    {
+      "machine": "TM24",
+      "move": "Thunderbolt",
+      "availableFrom": 2,
+      "currency": "coins",
+      "unitCost": 10000,
+      "source": "Goldenrod Game Corner prize counter",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
     }
   ]
 }
