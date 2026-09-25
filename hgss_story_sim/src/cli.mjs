@@ -1082,6 +1082,7 @@ async function runBeamSearch({
   screenRowsOverride = null,
   expContext = null,
   grindPolicy = 'none',
+  evaluationCache = null,
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
 
@@ -1097,13 +1098,27 @@ async function runBeamSearch({
     screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
   }
 
-  const cache = new Map();
-  async function evaluateTeam(team) {
-    const key = team.map(candidateIdentity).sort().join('|') + `@runs=${runs}`;
+  const cache = evaluationCache || new Map();
+  const cacheSizeBefore = cache.size;
+  async function evaluateTeamAtRuns(team, requestedRuns) {
+    const key = team.map(candidateIdentity).sort().join('|') + `@runs=${requestedRuns}`;
     if (!cache.has(key)) {
-      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext, grindPolicy));
+      cache.set(
+        key,
+        await evaluateCandidates(
+          team,
+          story.bosses,
+          requestedRuns,
+          moveAccess,
+          expContext,
+          grindPolicy,
+        )
+      );
     }
     return cache.get(key);
+  }
+  async function evaluateTeam(team) {
+    return evaluateTeamAtRuns(team, runs);
   }
 
   let beam = [];
@@ -1140,7 +1155,7 @@ async function runBeamSearch({
   for (const state of beam) {
     const evaluation = Number(finalRuns) === Number(runs)
       ? state.evaluation
-      : await evaluateCandidates(state.team, story.bosses, finalRuns, moveAccess, expContext);
+      : await evaluateTeamAtRuns(state.team, finalRuns);
     finalStates.push({ team: state.team, evaluation });
   }
   finalStates.sort((a, b) =>
@@ -1165,7 +1180,8 @@ async function runBeamSearch({
       expBurden: evaluationExpBurden(row.evaluation),
       expBurdenUnknown: evaluationExpUnknown(row.evaluation),
     })),
-    evaluatedTeams: cache.size,
+    evaluatedTeams: cache.size - cacheSizeBefore,
+    cachedEvaluationsTotal: cache.size,
     finalRescoredTeams: finalStates.length,
     finalRunsPerBoss: finalRuns,
     paretoFront: paretoFront(top),
@@ -1346,6 +1362,7 @@ async function cmdConvergence() {
   );
 
   const rows = [];
+  const sharedEvaluationCache = new Map();
   for (const candidateCap of candidateCaps) {
     for (const beamWidth of beamWidths) {
       const result = await runBeamSearch({
@@ -1362,12 +1379,14 @@ async function cmdConvergence() {
         screenRowsOverride: screenRows,
         expContext,
         grindPolicy,
+        evaluationCache: sharedEvaluationCache,
       });
       const top = result.top[0] || null;
       rows.push({
         beamWidth,
         candidateCap,
         evaluatedTeams: result.evaluatedTeams,
+        cachedEvaluationsTotal: result.cachedEvaluationsTotal,
         finalRescoredTeams: result.finalRescoredTeams,
         team: top?.team || [],
         finalTeam: top?.finalTeam || [],
