@@ -462,6 +462,90 @@ async function screenCandidates(candidates, story, moveAccess, screenRuns) {
   return rows;
 }
 
+function evaluationDominates(a, b) {
+  const aMoney = Number(a.purchaseCosts?.money || 0);
+  const aCoins = Number(a.purchaseCosts?.coins || 0);
+  const bMoney = Number(b.purchaseCosts?.money || 0);
+  const bCoins = Number(b.purchaseCosts?.coins || 0);
+
+  const atLeastAsGood =
+    a.score >= b.score &&
+    a.catchUpExp <= b.catchUpExp &&
+    a.catchUpExpUnknown <= b.catchUpExpUnknown &&
+    aMoney <= bMoney &&
+    aCoins <= bCoins;
+  const strictlyBetter =
+    a.score > b.score ||
+    a.catchUpExp < b.catchUpExp ||
+    a.catchUpExpUnknown < b.catchUpExpUnknown ||
+    aMoney < bMoney ||
+    aCoins < bCoins;
+  return atLeastAsGood && strictlyBetter;
+}
+
+function stateTieKey(state) {
+  return state.team.map(x => x.species).sort().join('|');
+}
+
+function selectMultiObjectiveBeam(states, width) {
+  if (states.length <= width) return states;
+
+  const front = states.filter((state, index) =>
+    !states.some((other, otherIndex) =>
+      index !== otherIndex && evaluationDominates(other.evaluation, state.evaluation)
+    )
+  );
+
+  const selected = [];
+  const keys = new Set();
+  function add(state) {
+    if (!state || selected.length >= width) return;
+    const key = stateTieKey(state);
+    if (keys.has(key)) return;
+    keys.add(key);
+    selected.push(state);
+  }
+
+  const byScore = [...front].sort((a, b) =>
+    b.evaluation.score - a.evaluation.score ||
+    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byExp = [...front].sort((a, b) =>
+    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byMoney = [...front].sort((a, b) =>
+    Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0) ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byCoins = [...front].sort((a, b) =>
+    Number(a.evaluation.purchaseCosts?.coins || 0) - Number(b.evaluation.purchaseCosts?.coins || 0) ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  add(byScore[0]);
+  add(byExp[0]);
+  add(byMoney[0]);
+  add(byCoins[0]);
+
+  for (const state of byScore) add(state);
+
+  if (selected.length < width) {
+    const fallback = [...states].sort((a, b) =>
+      b.evaluation.score - a.evaluation.score ||
+      a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    );
+    for (const state of fallback) add(state);
+  }
+
+  return selected.slice(0, width);
+}
+
 async function runBeamSearch({
   candidates,
   story,
@@ -525,11 +609,7 @@ async function runBeamSearch({
       }
     }
 
-    expanded.sort((a, b) =>
-      b.evaluation.score - a.evaluation.score ||
-      a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
-    );
-    beam = expanded.slice(0, beamWidth);
+    beam = selectMultiObjectiveBeam(expanded, beamWidth);
     if (!beam.length) break;
   }
 
