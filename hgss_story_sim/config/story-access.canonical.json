@@ -170,7 +170,8 @@
       "availableFrom": 2,
       "source": "gift",
       "note": "Kenya from the Route 35/Goldenrod gate delivery quest.",
-      "level": 20
+      "level": 20,
+      "map": "R35"
     },
     {
       "species": "Eevee",
@@ -184,42 +185,48 @@
       "availableFrom": 3,
       "source": "static",
       "note": "Route 36 static encounter after Whitney.",
-      "level": 20
+      "level": 20,
+      "map": "R36"
     },
     {
       "species": "Shuckle",
       "availableFrom": 4,
       "source": "gift",
       "note": "Shuckie loan in Cianwood.",
-      "level": 20
+      "level": 20,
+      "map": "T24"
     },
     {
       "species": "Lapras",
       "availableFrom": 4,
       "source": "static",
       "note": "Friday Union Cave B2F encounter; Surf required.",
-      "level": 20
+      "level": 20,
+      "map": "D25R0103"
     },
     {
       "species": "Gyarados",
       "availableFrom": 6,
       "source": "static",
       "note": "Red Gyarados at Lake of Rage.",
-      "level": 30
+      "level": 30,
+      "map": "T29"
     },
     {
       "species": "Dratini",
       "availableFrom": 8,
       "source": "gift",
       "note": "Dragon's Den gift after Clair.",
-      "level": 15
+      "level": 15,
+      "map": "D44R0102"
     },
     {
       "species": "Tyrogue",
       "availableFrom": 8,
       "source": "gift",
       "note": "Mt. Mortar gift; conservative placement after Rising Badge/Waterfall access.",
-      "level": 10
+      "level": 10,
+      "map": "D42R0101"
     }
   ]
 }
