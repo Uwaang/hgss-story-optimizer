@@ -14,6 +14,7 @@ import {
 } from './availability.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MONEY_PER_COIN = 20;
 
 async function readJson(relativePath) {
   return JSON.parse(await fs.readFile(path.join(ROOT, relativePath), 'utf8'));
@@ -329,6 +330,44 @@ function summarizeCaptureSearch(candidates) {
   };
 }
 
+function summarizeResourceBudget(purchaseCosts, expSchedule = null) {
+  const money = Number(purchaseCosts?.money || 0);
+  const coins = Number(purchaseCosts?.coins || 0);
+  const coinMoneyEquivalent = coins * MONEY_PER_COIN;
+  const directPurchaseMoneyEquivalent = money + coinMoneyEquivalent;
+  const naturalMoney = expSchedule ? Number(expSchedule.totalNaturalMoney || 0) : null;
+  const moneyShortfall = naturalMoney === null
+    ? null
+    : Math.max(0, directPurchaseMoneyEquivalent - naturalMoney);
+
+  return {
+    money,
+    coins,
+    moneyPerCoin: MONEY_PER_COIN,
+    coinMoneyEquivalent,
+    directPurchaseMoneyEquivalent,
+    naturalMoney,
+    moneyShortfall,
+    interpretation: 'coin cost converted using the source-backed Game Corner desk rate',
+  };
+}
+
+function evaluationResourceBurden(evaluation) {
+  return Number(
+    evaluation?.resourceBudget?.directPurchaseMoneyEquivalent ??
+    Number(evaluation?.purchaseCosts?.money || 0) +
+      Number(evaluation?.purchaseCosts?.coins || 0) * MONEY_PER_COIN
+  );
+}
+
+function rowResourceBurden(row) {
+  return Number(
+    row?.resourceBudget?.directPurchaseMoneyEquivalent ??
+    Number(row?.purchaseCosts?.money || 0) +
+      Number(row?.purchaseCosts?.coins || 0) * MONEY_PER_COIN
+  );
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -349,6 +388,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const purchasable = planPurchasableMachines(candidates, routeBosses, moveAccess, singleUsePlan);
   const purchasablePlan = purchasable.assignments;
   const purchaseCosts = purchasable.costs;
+  const resourceBudget = summarizeResourceBudget(purchaseCosts, expSchedule);
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const [battleIndex, boss] of routeBosses.entries()) {
@@ -429,6 +469,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     singleUsePlan,
     purchasablePlan,
     purchaseCosts,
+    resourceBudget,
     rows,
   };
 }
@@ -470,9 +511,9 @@ function resourceEvaluationBetter(a, b) {
   const ar = rank[a.effectiveResourceProfile] ?? 9;
   const br = rank[b.effectiveResourceProfile] ?? 9;
   if (ar !== br) return ar < br;
-  const aMoney = Number(a.purchaseCosts?.money || 0);
-  const bMoney = Number(b.purchaseCosts?.money || 0);
-  if (aMoney !== bMoney) return aMoney < bMoney;
+  const aBurden = evaluationResourceBurden(a);
+  const bBurden = evaluationResourceBurden(b);
+  if (aBurden !== bBurden) return aBurden < bBurden;
   return Number(a.purchaseCosts?.coins || 0) < Number(b.purchaseCosts?.coins || 0);
 }
 
@@ -654,10 +695,8 @@ function rowExpUnknown(row) {
 function paretoFront(rows) {
   return rows.filter((row, index) => !rows.some((other, otherIndex) => {
     if (index === otherIndex) return false;
-    const rowMoney = Number(row.purchaseCosts?.money || 0);
-    const rowCoins = Number(row.purchaseCosts?.coins || 0);
-    const otherMoney = Number(other.purchaseCosts?.money || 0);
-    const otherCoins = Number(other.purchaseCosts?.coins || 0);
+    const rowResource = rowResourceBurden(row);
+    const otherResource = rowResourceBurden(other);
     const rowExp = rowExpBurden(row);
     const otherExp = rowExpBurden(other);
     const rowUnknown = rowExpUnknown(row);
@@ -674,8 +713,7 @@ function paretoFront(rows) {
       otherUnknown <= rowUnknown &&
       otherCapture <= rowCapture &&
       otherCaptureUnknown <= rowCaptureUnknown &&
-      otherMoney <= rowMoney &&
-      otherCoins <= rowCoins;
+      otherResource <= rowResource;
     const strictlyBetter =
       other.score > row.score ||
       other.worstBossWinRate > row.worstBossWinRate ||
@@ -683,8 +721,7 @@ function paretoFront(rows) {
       otherUnknown < rowUnknown ||
       otherCapture < rowCapture ||
       otherCaptureUnknown < rowCaptureUnknown ||
-      otherMoney < rowMoney ||
-      otherCoins < rowCoins;
+      otherResource < rowResource;
     return atLeastAsGood && strictlyBetter;
   }));
 }
@@ -709,6 +746,10 @@ function searchResultRow(team, evaluation) {
       totalNaturalExp: evaluation.expSchedule.totalNaturalExp,
       totalMapExp: evaluation.expSchedule.totalMapExp,
       totalMajorExp: evaluation.expSchedule.totalMajorExp,
+      startingMoney: evaluation.expSchedule.startingMoney,
+      totalMapMoney: evaluation.expSchedule.totalMapMoney,
+      totalMajorMoney: evaluation.expSchedule.totalMajorMoney,
+      totalNaturalMoney: evaluation.expSchedule.totalNaturalMoney,
       totalGrindExp: evaluation.expSchedule.totalGrindExp,
       totalExpectedGrindBattles: evaluation.expSchedule.totalExpectedGrindBattles,
       unknownEntryLevels: evaluation.expSchedule.unknownEntryLevels,
@@ -720,6 +761,7 @@ function searchResultRow(team, evaluation) {
     singleUsePlan: evaluation.singleUsePlan,
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
+    resourceBudget: evaluation.resourceBudget,
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
       winRate: row.winRate,
@@ -743,10 +785,8 @@ async function screenCandidates(candidates, story, moveAccess, screenRuns, expCo
 }
 
 function evaluationDominates(a, b) {
-  const aMoney = Number(a.purchaseCosts?.money || 0);
-  const aCoins = Number(a.purchaseCosts?.coins || 0);
-  const bMoney = Number(b.purchaseCosts?.money || 0);
-  const bCoins = Number(b.purchaseCosts?.coins || 0);
+  const aResource = evaluationResourceBurden(a);
+  const bResource = evaluationResourceBurden(b);
   const aExp = evaluationExpBurden(a);
   const bExp = evaluationExpBurden(b);
   const aUnknown = evaluationExpUnknown(a);
@@ -763,8 +803,7 @@ function evaluationDominates(a, b) {
     aUnknown <= bUnknown &&
     aCapture <= bCapture &&
     aCaptureUnknown <= bCaptureUnknown &&
-    aMoney <= bMoney &&
-    aCoins <= bCoins;
+    aResource <= bResource;
   const strictlyBetter =
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
@@ -772,8 +811,7 @@ function evaluationDominates(a, b) {
     aUnknown < bUnknown ||
     aCapture < bCapture ||
     aCaptureUnknown < bCaptureUnknown ||
-    aMoney < bMoney ||
-    aCoins < bCoins;
+    aResource < bResource;
   return atLeastAsGood && strictlyBetter;
 }
 
@@ -818,13 +856,8 @@ function selectMultiObjectiveBeam(states, width) {
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
-  const byMoney = [...front].sort((a, b) =>
-    Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0) ||
-    b.evaluation.score - a.evaluation.score ||
-    stateTieKey(a).localeCompare(stateTieKey(b))
-  );
-  const byCoins = [...front].sort((a, b) =>
-    Number(a.evaluation.purchaseCosts?.coins || 0) - Number(b.evaluation.purchaseCosts?.coins || 0) ||
+  const byResource = [...front].sort((a, b) =>
+    evaluationResourceBurden(a.evaluation) - evaluationResourceBurden(b.evaluation) ||
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
@@ -838,8 +871,7 @@ function selectMultiObjectiveBeam(states, width) {
   add(byWorstBoss[0]);
   add(byExp[0]);
   add(byCapture[0]);
-  add(byMoney[0]);
-  add(byCoins[0]);
+  add(byResource[0]);
 
   for (const state of byScore) add(state);
 
