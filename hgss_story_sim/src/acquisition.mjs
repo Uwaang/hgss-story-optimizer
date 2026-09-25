@@ -115,7 +115,9 @@ function buildLevelEvolutionStages(speciesConst, availableFrom, bosses, evoByBas
     const stage = Number(nextBattle.stage);
     transitions.push({
       stage,
+      level: Number(evo.param),
       species: constantToName(evo.target, 'SPECIES_'),
+      derived: 'level-evolution',
       reason: `level ${evo.param}`,
     });
     current = evo.target;
