@@ -86,6 +86,18 @@ jobs:
         run: npm run search -- --strategy=beam --starter=Cyndaquil --runs=1 --screen-runs=1 --beam-width=2 --candidate-cap=5 --team-size=3
       - name: Search convergence smoke test
         run: npm run convergence -- --version=HEARTGOLD --starter=Cyndaquil --resources=core --exp-profile=major --runs=1 --screen-runs=1 --final-runs=1 --beam-widths=1,2 --candidate-caps=3,4 --team-size=3
+      - name: Full normal-route convergence benchmark
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
+        run: |
+          mkdir -p results
+          npm run convergence -- --version=HEARTGOLD --starter=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --exp-allocator=balanced --runs=1 --screen-runs=1 --final-runs=2 --beam-widths=4,8,16 --candidate-caps=16,24,32 --team-size=6 > results/convergence-hg-cyndaquil.json
+      - name: Upload convergence benchmark
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-convergence-hg-cyndaquil
+          path: hgss_story_sim/results/convergence-hg-cyndaquil.json
+          if-no-files-found: error
       - name: EXP-budgeted beam-search smoke test
         run: npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=none --runs=1 --screen-runs=1 --final-runs=1 --beam-width=2 --candidate-cap=5 --team-size=3
       - name: Preliminary starter optimization
