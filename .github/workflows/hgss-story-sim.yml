@@ -29,9 +29,16 @@ jobs:
       - name: Syntax check
         run: |
           node --check src/hgss-data.mjs
+          node --check src/acquisition.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
       - name: HGSS battle smoke test
         run: npm run smoke
       - name: Full Johto route smoke test
         run: npm run simulate -- --runs=1
+      - name: Canonical acquisition pool smoke test
+        run: |
+          npm run pool -- --version=HEARTGOLD
+          npm run pool -- --version=SOULSILVER
+      - name: Generated-pool search smoke test
+        run: npm run search -- --pool=canonical --version=HEARTGOLD --runs=1 --limit=2 --team-size=6
