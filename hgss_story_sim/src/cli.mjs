@@ -82,10 +82,10 @@ function normalizeEntryLevelPolicy(value) {
 }
 
 function normalizeSameStageJoinPolicy(value) {
-  const policy = String(value || 'after-map-exp').toLowerCase();
-  if (!['after-map-exp', 'before-map-exp'].includes(policy)) {
+  const policy = String(value || 'map-order').toLowerCase();
+  if (!['map-order', 'after-map-exp', 'before-map-exp'].includes(policy)) {
     throw new Error(
-      `Unknown same-stage join policy: ${value}. Use after-map-exp or before-map-exp.`
+      `Unknown same-stage join policy: ${value}. Use map-order, after-map-exp, or before-map-exp.`
     );
   }
   return policy;
@@ -105,7 +105,7 @@ async function loadExpContext(
   version = 'HEARTGOLD',
   grindPolicy = 'none',
   entryLevelPolicy = 'midpoint',
-  sameStageJoinPolicy = 'after-map-exp',
+  sameStageJoinPolicy = 'map-order',
   expAllocator = 'balanced',
 ) {
   const profile = normalizeExpProfile(expProfile);
@@ -457,7 +457,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         profile: expProfile,
         grindPolicy: expContext?.grindPolicy || 'none',
         entryLevelPolicy: expContext?.entryLevelPolicy || 'midpoint',
-        sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'after-map-exp',
+        sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'map-order',
         allocator: expContext?.expAllocator || 'balanced',
         levelUtility: candidateBossUtility,
       });
@@ -719,7 +719,7 @@ async function cmdSimulate() {
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
-  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
@@ -1188,7 +1188,7 @@ async function cmdSearch() {
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
-  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const story = await loadStory();
 
@@ -1308,7 +1308,7 @@ async function cmdConvergence() {
   const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
-  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const beamWidths = String(arg('beam-widths', '4,8,16'))
     .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
@@ -1439,7 +1439,7 @@ async function cmdOptimize() {
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
-  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
 
   const story = await loadStory();
@@ -1951,7 +1951,7 @@ async function cmdExpBudget() {
   const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
-  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   if (profile === 'ace') {
     throw new Error('exp-budget requires --exp-profile=major, normal-route, or all-accessible');
