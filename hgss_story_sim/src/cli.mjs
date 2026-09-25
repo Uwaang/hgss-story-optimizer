@@ -269,8 +269,14 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
       ...result,
     });
   }
+  const meanWinRate = weightedRuns ? weightedWins / weightedRuns : 0;
+  const worstBossWinRate = rows.length
+    ? Math.min(...rows.map(row => Number(row.winRate || 0)))
+    : 0;
+
   return {
-    score: weightedRuns ? weightedWins / weightedRuns : 0,
+    score: meanWinRate,
+    worstBossWinRate,
     routeStarter,
     routeBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
@@ -413,12 +419,14 @@ function paretoFront(rows) {
     const otherCoins = Number(other.purchaseCosts?.coins || 0);
     const atLeastAsGood =
       other.score >= row.score &&
+      other.worstBossWinRate >= row.worstBossWinRate &&
       other.catchUpExp <= row.catchUpExp &&
       other.catchUpExpUnknown <= row.catchUpExpUnknown &&
       otherMoney <= rowMoney &&
       otherCoins <= rowCoins;
     const strictlyBetter =
       other.score > row.score ||
+      other.worstBossWinRate > row.worstBossWinRate ||
       other.catchUpExp < row.catchUpExp ||
       other.catchUpExpUnknown < row.catchUpExpUnknown ||
       otherMoney < rowMoney ||
@@ -430,6 +438,7 @@ function paretoFront(rows) {
 function searchResultRow(team, evaluation) {
   return {
     score: evaluation.score,
+    worstBossWinRate: evaluation.worstBossWinRate,
     catchUpLevels: evaluation.catchUpLevels,
     catchUpUnknown: evaluation.catchUpUnknown,
     catchUpExp: evaluation.catchUpExp,
@@ -470,12 +479,14 @@ function evaluationDominates(a, b) {
 
   const atLeastAsGood =
     a.score >= b.score &&
+    a.worstBossWinRate >= b.worstBossWinRate &&
     a.catchUpExp <= b.catchUpExp &&
     a.catchUpExpUnknown <= b.catchUpExpUnknown &&
     aMoney <= bMoney &&
     aCoins <= bCoins;
   const strictlyBetter =
     a.score > b.score ||
+    a.worstBossWinRate > b.worstBossWinRate ||
     a.catchUpExp < b.catchUpExp ||
     a.catchUpExpUnknown < b.catchUpExpUnknown ||
     aMoney < bMoney ||
@@ -526,8 +537,14 @@ function selectMultiObjectiveBeam(states, width) {
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
+  const byWorstBoss = [...front].sort((a, b) =>
+    b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
 
   add(byScore[0]);
+  add(byWorstBoss[0]);
   add(byExp[0]);
   add(byMoney[0]);
   add(byCoins[0]);
@@ -634,6 +651,7 @@ async function runBeamSearch({
       species: row.candidate.species,
       availableFrom: row.candidate.availableFrom,
       score: row.evaluation.score,
+      worstBossWinRate: row.evaluation.worstBossWinRate,
       catchUpLevels: row.evaluation.catchUpLevels,
       catchUpUnknown: row.evaluation.catchUpUnknown,
       catchUpExp: row.evaluation.catchUpExp,
