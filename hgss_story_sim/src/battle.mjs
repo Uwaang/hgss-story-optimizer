@@ -341,6 +341,50 @@ function scoreMove(active, target, requestedMove) {
   return Math.max(move.basePower || 1, 1) * effectiveness * stab * accuracy * priority;
 }
 
+function battleMonMoveScore(mon, target) {
+  if (!mon || !target) return 0;
+  const slots = mon.moveSlots || [];
+  let best = 0;
+  for (const slot of slots) {
+    const requested = { move: slot.id || slot.move, disabled: slot.disabled || false };
+    best = Math.max(best, scoreMove(mon, target, requested));
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+function matchupUtility(mon, foeMon) {
+  if (!mon || !foeMon || mon.fainted) return -Infinity;
+  const offense = battleMonMoveScore(mon, foeMon);
+  const incoming = battleMonMoveScore(foeMon, mon);
+  const hpRatio = mon.maxhp > 0 ? mon.hp / mon.maxhp : 0;
+  return (offense * (0.5 + hpRatio)) / Math.max(35, incoming);
+}
+
+function bestVoluntarySwitch(request, side, foeActive, active, activeRequest) {
+  if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
+  if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
+
+  const currentUtility = matchupUtility(active, foeActive);
+  const currentOffense = battleMonMoveScore(active, foeActive);
+  let best = null;
+
+  for (let idx = 0; idx < side.pokemon.length; idx += 1) {
+    const mon = side.pokemon[idx];
+    const reqMon = request.side.pokemon[idx];
+    if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
+    const utility = matchupUtility(mon, foeActive);
+    if (!best || utility > best.utility) best = { idx, utility };
+  }
+
+  if (!best) return null;
+  // Avoid constant switching for marginal gains. Switch when the matchup is
+  // materially better and the active mon does not already have a strong hit.
+  if (best.utility > currentUtility * 1.55 && (currentOffense < 140 || currentUtility < 1.0)) {
+    return `switch ${best.idx + 1}`;
+  }
+  return null;
+}
+
 function selectChoice(request, battleStream, sideId) {
   if (request.wait) return null;
   if (request.teamPreview) return 'default';
@@ -375,6 +419,10 @@ function selectChoice(request, battleStream, sideId) {
     const choices = request.active.map((activeRequest, i) => {
       if (!activeRequest) return 'pass';
       const active = activeBattleMons[i];
+      if (sideId === 'p1' && request.active.length === 1) {
+        const switchChoice = bestVoluntarySwitch(request, side, foeActive, active, activeRequest);
+        if (switchChoice) return switchChoice;
+      }
       const legal = activeRequest.moves
         .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
         .filter(entry => !entry.move.disabled);
@@ -387,13 +435,16 @@ function selectChoice(request, battleStream, sideId) {
   return 'default';
 }
 
-async function runGreedyAi(playerStream, battleStream, sideId) {
+async function runGreedyAi(playerStream, battleStream, sideId, stats) {
   for await (const chunk of playerStream) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|request|')) continue;
       const request = JSON.parse(line.slice('|request|'.length));
       const choice = selectChoice(request, battleStream, sideId);
-      if (choice) await playerStream.write(choice);
+      if (choice) {
+        if (choice.startsWith('switch ') && !request.forceSwitch) stats.voluntarySwitches += 1;
+        await playerStream.write(choice);
+      }
     }
   }
 }
@@ -401,8 +452,10 @@ async function runGreedyAi(playerStream, battleStream, sideId) {
 export async function runBattle(p1Team, p2Team, seed = 1) {
   const battleStream = new BattleStream();
   const streams = getPlayerStreams(battleStream);
-  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1').catch(() => undefined);
-  const p2Task = runGreedyAi(streams.p2, battleStream, 'p2').catch(() => undefined);
+  const p1Stats = { voluntarySwitches: 0 };
+  const p2Stats = { voluntarySwitches: 0 };
+  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats).catch(() => undefined);
+  const p2Task = runGreedyAi(streams.p2, battleStream, 'p2', p2Stats).catch(() => undefined);
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
@@ -424,7 +477,11 @@ export async function runBattle(p1Team, p2Team, seed = 1) {
   const result = await resultPromise;
   await streams.omniscient.writeEnd();
   await Promise.allSettled([p1Task, p2Task]);
-  return result;
+  return {
+    ...result,
+    p1VoluntarySwitches: p1Stats.voluntarySwitches,
+    p2VoluntarySwitches: p2Stats.voluntarySwitches,
+  };
 }
 
 export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1) {
@@ -432,9 +489,11 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1) {
   let losses = 0;
   let ties = 0;
   let totalTurns = 0;
+  let totalP1VoluntarySwitches = 0;
   for (let i = 0; i < runs; i += 1) {
     const result = await runBattle(p1Team, p2Team, seedBase + i);
     totalTurns += result.turns || 0;
+    totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
     if (result.winner === 'Player') wins += 1;
     else if (result.winner === 'HGSS') losses += 1;
     else ties += 1;
@@ -446,5 +505,6 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1) {
     ties,
     winRate: wins / runs,
     averageTurns: totalTurns / runs,
+    averageP1VoluntarySwitches: totalP1VoluntarySwitches / runs,
   };
 }
