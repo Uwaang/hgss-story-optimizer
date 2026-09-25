@@ -46,7 +46,7 @@ async function evaluateCandidates(candidates, bosses, runs) {
       rows.push({ boss: boss.label, skipped: true, reason: 'no available candidates' });
       continue;
     }
-    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer);
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
     const result = await simulateMatchup(playerTeam, enemyTeam, runs, 1000 + boss.stage * 100000);
     weightedWins += result.wins;
     weightedRuns += result.runs;
@@ -112,7 +112,7 @@ async function cmdSearch() {
 async function cmdSmoke() {
   const bosses = await loadBosses();
   const falkner = bosses[0];
-  const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer);
+  const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
   const pool = await readJson('config/candidates.example.json');
   const playerTeam = materializeCandidateTeam(pool.candidates, falkner.stage, falkner.aceLevel);
   const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
