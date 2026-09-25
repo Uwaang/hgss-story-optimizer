@@ -122,7 +122,19 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
       { moveAccess, singleUsePlan },
     );
     if (!playerTeam.length) {
-      rows.push({ boss: boss.label, skipped: true, reason: 'no available candidates' });
+      weightedRuns += runs;
+      rows.push({
+        boss: boss.label,
+        aceLevel: boss.aceLevel,
+        skipped: true,
+        reason: 'no available candidates',
+        runs,
+        wins: 0,
+        losses: runs,
+        ties: 0,
+        winRate: 0,
+        averageTurns: 0,
+      });
       continue;
     }
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
@@ -243,12 +255,129 @@ function * combinations(values, choose, start = 0, prefix = []) {
   }
 }
 
+
+function candidateIdentity(candidate) {
+  return candidate.familyId || candidate.species;
+}
+
+function findStarterCandidate(candidates, requested) {
+  if (!requested || String(requested).toLowerCase() === 'any') return null;
+  const wanted = String(requested).toLowerCase();
+  const candidate = candidates.find(mon => mon.species.toLowerCase() === wanted);
+  if (!candidate) throw new Error(`Requested starter not found in pool: ${requested}`);
+  if (candidate.exclusiveGroup !== 'starter') {
+    throw new Error(`Requested --starter is not marked as a starter: ${candidate.species}`);
+  }
+  return candidate;
+}
+
+function searchResultRow(team, evaluation) {
+  return {
+    score: evaluation.score,
+    team: team.map(x => x.species),
+    singleUsePlan: evaluation.singleUsePlan,
+    bosses: evaluation.rows.map(row => ({
+      boss: row.boss,
+      winRate: row.winRate,
+      skipped: row.skipped || false,
+    })),
+  };
+}
+
+async function runBeamSearch({
+  candidates,
+  story,
+  moveAccess,
+  runs,
+  teamSize,
+  beamWidth,
+  candidateCap,
+  screenRuns,
+  requiredCandidate,
+}) {
+  const screenRows = [];
+  for (const candidate of candidates) {
+    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess);
+    screenRows.push({ candidate, evaluation });
+  }
+  screenRows.sort((a, b) =>
+    b.evaluation.score - a.evaluation.score ||
+    a.candidate.availableFrom - b.candidate.availableFrom ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+
+  let screened = screenRows.slice(0, Math.min(candidateCap, screenRows.length)).map(row => row.candidate);
+  if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
+    screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
+  }
+
+  const cache = new Map();
+  async function evaluateTeam(team) {
+    const key = team.map(candidateIdentity).sort().join('|') + `@runs=${runs}`;
+    if (!cache.has(key)) {
+      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess));
+    }
+    return cache.get(key);
+  }
+
+  let beam = [];
+  if (requiredCandidate) {
+    beam = [{ team: [requiredCandidate], evaluation: await evaluateTeam([requiredCandidate]) }];
+  } else {
+    beam = [{ team: [], evaluation: null }];
+  }
+
+  const startSize = requiredCandidate ? 2 : 1;
+  for (let targetSize = startSize; targetSize <= teamSize; targetSize += 1) {
+    const expanded = [];
+    const seenTeams = new Set();
+
+    for (const state of beam) {
+      const existing = new Set(state.team.map(candidateIdentity));
+      for (const candidate of screened) {
+        if (existing.has(candidateIdentity(candidate))) continue;
+        const team = [...state.team, candidate];
+        if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+        const key = team.map(candidateIdentity).sort().join('|');
+        if (seenTeams.has(key)) continue;
+        seenTeams.add(key);
+        const evaluation = await evaluateTeam(team);
+        expanded.push({ team, evaluation });
+      }
+    }
+
+    expanded.sort((a, b) =>
+      b.evaluation.score - a.evaluation.score ||
+      a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
+    );
+    beam = expanded.slice(0, beamWidth);
+    if (!beam.length) break;
+  }
+
+  return {
+    scannedCandidates: screenRows.length,
+    screenedCandidates: screened.length,
+    screenTop: screenRows.slice(0, Math.min(20, screenRows.length)).map(row => ({
+      species: row.candidate.species,
+      availableFrom: row.candidate.availableFrom,
+      score: row.evaluation.score,
+    })),
+    evaluatedTeams: cache.size,
+    top: beam.map(state => searchResultRow(state.team, state.evaluation)),
+  };
+}
+
 async function cmdSearch() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const strategy = String(arg('strategy', 'prefix')).toLowerCase();
+  const starterName = arg('starter', 'any');
   const runs = Number(arg('runs', '5'));
   const teamSize = Number(arg('team-size', '6'));
   const limit = Number(arg('limit', '100'));
+  const beamWidth = Number(arg('beam-width', '8'));
+  const candidateCap = Number(arg('candidate-cap', '24'));
+  const screenRuns = Number(arg('screen-runs', '1'));
   const story = await loadStory();
 
   let candidates;
@@ -259,27 +388,55 @@ async function cmdSearch() {
   }
 
   if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
-
+  const requiredCandidate = findStarterCandidate(candidates, starterName);
   const moveAccess = await loadMoveAccess();
+
+  if (strategy === 'beam') {
+    const result = await runBeamSearch({
+      candidates,
+      story,
+      moveAccess,
+      runs,
+      teamSize,
+      beamWidth,
+      candidateCap,
+      screenRuns,
+      requiredCandidate,
+    });
+    console.log(JSON.stringify({
+      pool: poolPath,
+      version: poolPath === 'canonical' ? version : undefined,
+      strategy,
+      starter: requiredCandidate?.species || 'any',
+      runsPerBoss: runs,
+      screenRunsPerBoss: screenRuns,
+      beamWidth,
+      candidateCap,
+      ...result,
+    }, null, 2));
+    return;
+  }
+
+  if (strategy !== 'prefix') {
+    throw new Error(`Unknown search strategy: ${strategy}`);
+  }
+
   const results = [];
   let tested = 0;
   let rejectedByConstraints = 0;
-  for (const team of combinations(candidates, teamSize)) {
+  const choose = requiredCandidate ? teamSize - 1 : teamSize;
+  const combinationPool = requiredCandidate
+    ? candidates.filter(mon => candidateIdentity(mon) !== candidateIdentity(requiredCandidate))
+    : candidates;
+
+  for (const combo of combinations(combinationPool, choose)) {
+    const team = requiredCandidate ? [requiredCandidate, ...combo] : combo;
     if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
       rejectedByConstraints += 1;
       continue;
     }
     const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess);
-    results.push({
-      score: evaluation.score,
-      team: team.map(x => x.species),
-      singleUsePlan: evaluation.singleUsePlan,
-      bosses: evaluation.rows.map(row => ({
-        boss: row.boss,
-        winRate: row.winRate,
-        skipped: row.skipped || false,
-      })),
-    });
+    results.push(searchResultRow(team, evaluation));
     tested += 1;
     if (tested >= limit) break;
   }
@@ -288,6 +445,8 @@ async function cmdSearch() {
   console.log(JSON.stringify({
     pool: poolPath,
     version: poolPath === 'canonical' ? version : undefined,
+    strategy,
+    starter: requiredCandidate?.species || 'any',
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
