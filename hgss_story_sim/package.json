@@ -11,7 +11,8 @@
     "smoke": "node src/cli.mjs smoke",
     "pool": "node src/cli.mjs pool",
     "validate": "node src/cli.mjs validate",
-    "hm-smoke": "node src/cli.mjs hm-smoke"
+    "hm-smoke": "node src/cli.mjs hm-smoke",
+    "tm-smoke": "node src/cli.mjs tm-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
