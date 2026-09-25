@@ -4,15 +4,69 @@ import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
 
 const dex = Dex.mod('gen4');
 const NEUTRAL_NATURE = 'Serious';
+const NATURES_BY_ID = [
+  'Hardy', 'Lonely', 'Brave', 'Adamant', 'Naughty',
+  'Bold', 'Docile', 'Relaxed', 'Impish', 'Lax',
+  'Timid', 'Hasty', 'Serious', 'Jolly', 'Naive',
+  'Modest', 'Mild', 'Quiet', 'Bashful', 'Rash',
+  'Calm', 'Gentle', 'Sassy', 'Careful', 'Quirky',
+];
 
 function uniformIvs(iv) {
   return { hp: iv, atk: iv, def: iv, spa: iv, spd: iv, spe: iv };
 }
 
-function chooseAbility(species, override = 'TRPOKE_ABILITY_OVERRIDE_OFF') {
+function lcrandom(seed) {
+  const next = (Math.imul(seed >>> 0, 1103515245) + 24691) >>> 0;
+  return { state: next, value: next >>> 16 };
+}
+
+function genderRatioByte(species) {
+  if (species.gender === 'M') return 0;
+  if (species.gender === 'F') return 254;
+  if (species.gender === 'N') return 255;
+  const female = species.genderRatio?.F;
+  if (typeof female === 'number') return Math.floor(female * 254.75);
+  return 127;
+}
+
+function pidSelector(mon, species, trainerGender) {
+  let selector = trainerGender === 'TRAINER_FEMALE' ? 0x78 : 0x88;
+  if (mon.genderOverride === 'TRPOKE_GENDER_OVERRIDE_MALE') {
+    selector = (genderRatioByte(species) + 2) & 0xff;
+  } else if (mon.genderOverride === 'TRPOKE_GENDER_OVERRIDE_FEMALE') {
+    selector = (genderRatioByte(species) - 2) & 0xff;
+  }
+  if (mon.abilityOverride === 'TRPOKE_ABILITY_OVERRIDE_FIRST') selector &= ~1;
+  if (mon.abilityOverride === 'TRPOKE_ABILITY_OVERRIDE_SECOND') selector |= 1;
+  return selector & 0xff;
+}
+
+export function npcPersonality(mon, species, trainerMeta) {
+  const trainerId = Number(trainerMeta.trainerId);
+  const trainerClassId = Number(trainerMeta.trainerClassId);
+  if (!Number.isInteger(trainerId) || !Number.isInteger(trainerClassId)) {
+    throw new Error('trainerId and trainerClassId are required for exact HGSS NPC personality generation');
+  }
+  let personality = (Number(mon.difficulty || 0) + Number(mon.level) + Number(species.num) + trainerId) >>> 0;
+  let state = personality;
+  for (let i = 0; i < trainerClassId; i += 1) {
+    const step = lcrandom(state);
+    state = step.state;
+    personality = step.value;
+  }
+  return (((personality << 8) >>> 0) + pidSelector(mon, species, trainerMeta.trainerGender)) >>> 0;
+}
+
+function natureFromPersonality(personality) {
+  return NATURES_BY_ID[personality % 25];
+}
+
+function chooseAbility(species, override = 'TRPOKE_ABILITY_OVERRIDE_OFF', personality = 0) {
   if (override === 'TRPOKE_ABILITY_OVERRIDE_SECOND') {
     return species.abilities['1'] || species.abilities['0'];
   }
+  if (species.abilities['1'] && (personality & 1)) return species.abilities['1'];
   return species.abilities['0'];
 }
 
@@ -44,7 +98,7 @@ export function levelUpMoves(speciesName, level) {
   return unique.slice(-4).map(x => x.name);
 }
 
-export function hgssTrainerToShowdownTeam(trainer) {
+export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
   return trainer.party.map(mon => {
     const speciesName = constantToName(mon.species, 'SPECIES_');
     const species = dex.species.get(speciesName);
@@ -54,13 +108,14 @@ export function hgssTrainerToShowdownTeam(trainer) {
       : levelUpMoves(species.name, mon.level);
     const item = constantToName(mon.item || 'ITEM_NONE', 'ITEM_');
     const iv = npcIvFromDifficulty(mon.difficulty);
+    const personality = npcPersonality(mon, species, trainerMeta);
     return {
       name: species.name,
       species: species.name,
       level: mon.level,
       item,
-      ability: chooseAbility(species, mon.abilityOverride),
-      nature: NEUTRAL_NATURE,
+      ability: chooseAbility(species, mon.abilityOverride, personality),
+      nature: natureFromPersonality(personality),
       ivs: uniformIvs(iv),
       evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 },
       moves: moves.length ? moves : ['Tackle'],
