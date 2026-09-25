@@ -270,7 +270,13 @@ function stageMapOrder(access) {
   );
 }
 
-export async function buildExpWorld({ commit, access, trainerSource, version = 'HEARTGOLD' }) {
+export async function buildExpWorld({
+  commit,
+  access,
+  trainerSource,
+  version = 'HEARTGOLD',
+  timing = null,
+}) {
   const [personalJson, encounterJson, prizeMoneySource, eventPaths] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
@@ -374,6 +380,7 @@ export async function buildExpWorld({ commit, access, trainerSource, version = '
     stageMoneyRewards,
     mapTrainerRewards,
     stageMapOrder: stageMapOrder(access),
+    expTiming: timing,
     mapTrainerRows: trainerRows,
     mapCount: mapRows.length,
     unresolvedMaps: [...mapStages.entries()]
@@ -601,6 +608,7 @@ export function buildTeamExpSchedule({
   const stateKeys = new Set();
   const excludedMapTrainerKeys = new Set(routeBosses.map(boss => boss.key));
   const stageStarted = new Set();
+  const processedMaps = new Set();
   const battles = [];
   let totalMapExp = 0;
   let totalMajorExp = 0;
@@ -631,25 +639,48 @@ export function buildTeamExpSchedule({
     return added;
   }
 
+  function addAvailableBeforeBoss(stage, bossLabel) {
+    const added = [];
+    for (const state of pending) {
+      if (state.availableFrom !== stage || stateKeys.has(state.key)) continue;
+      if (state.candidate?.joinBeforeBoss !== bossLabel) continue;
+      states.push({ ...state });
+      stateKeys.add(state.key);
+      added.push(state.key);
+    }
+    return added;
+  }
+
   function allocate(amount, targetBoss) {
     return allocator === 'boss-aware'
       ? allocateBossAwareExp(states, amount, targetBoss, levelUtility)
       : allocateBalancedExp(states, amount);
   }
 
+  function configuredMapsBeforeBoss(stage, bossLabel) {
+    const available = new Set(expWorld.stageMapOrder?.get(stage) || []);
+    const windows = expWorld.expTiming?.windows || [];
+    const maps = [];
+    for (const window of windows) {
+      if (Number(window.stage) !== Number(stage) || window.beforeBoss !== bossLabel) continue;
+      for (const map of window.maps || []) {
+        if (available.has(map) && !processedMaps.has(map) && !maps.includes(map)) maps.push(map);
+      }
+    }
+    return maps;
+  }
+
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const stage = Number(boss.stage);
     const firstBattleInStage = !stageStarted.has(stage);
+    const nextBoss = routeBosses[battleIndex + 1] || null;
+    const lastBattleInStage = !nextBoss || Number(nextBoss.stage) !== stage;
 
-    // Stage 0 candidates (starter and early-route catches) can naturally receive
-    // pre-Falkner route EXP. For later stages, the conservative default avoids
-    // retroactively granting the entire stage's map EXP to a Pokémon whose
-    // acquisition happens somewhere inside that same stage.
-    if (
-      firstBattleInStage &&
-      (stage === 0 || sameStageJoinPolicy === 'before-map-exp')
-    ) {
-      addAvailable(stage);
+    if (firstBattleInStage) {
+      stageStarted.add(stage);
+      if (stage === 0 || sameStageJoinPolicy === 'before-map-exp') {
+        addAvailable(stage);
+      }
     }
 
     let mapExpBefore = 0;
@@ -657,50 +688,81 @@ export function buildTeamExpSchedule({
     let mapTrainerCount = 0;
     const mapSegments = [];
     let joinedAfterMapExp = [];
-    if (firstBattleInStage) {
-      stageStarted.add(stage);
-      if (profile === 'normal-route' || profile === 'all-accessible') {
-        if (sameStageJoinPolicy === 'map-order' && stage > 0) {
-          const maps = expWorld.stageMapOrder?.get(stage) || [];
-          for (const map of maps) {
-            // Wild/source-backed candidates can join when their acquisition map
-            // is reached; they may then receive EXP from trainers on that map
-            // and later maps, but never from earlier maps in the same stage.
-            const joinedBeforeMapExp = addAvailable(stage, map);
-            const source = singleMapResources(expWorld, map, excludedMapTrainerKeys);
-            mapExpBefore += source.totalExp;
-            mapMoneyBefore += source.totalMoney;
-            mapTrainerCount += source.trainers.length;
-            const allocation = allocate(source.totalExp, boss);
-            totalAllocatedExp += allocation.allocated;
-            totalUnallocatedExp += allocation.unallocated;
-            mapSegments.push({
-              map,
-              joinedBeforeMapExp,
-              trainerCount: source.trainers.length,
-              exp: source.totalExp,
-              money: source.totalMoney,
-            });
-          }
-        } else {
-          const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
-          mapExpBefore = source.totalExp;
-          mapMoneyBefore = source.totalMoney;
-          mapTrainerCount = source.trainers.length;
-          const allocation = allocate(mapExpBefore, boss);
-          totalAllocatedExp += allocation.allocated;
-          totalUnallocatedExp += allocation.unallocated;
+
+    if (sameStageJoinPolicy === 'map-order') {
+      const joinedBeforeBossWindow = addAvailableBeforeBoss(stage, boss.label);
+      let maps = configuredMapsBeforeBoss(stage, boss.label);
+
+      // Any accessible map not explicitly assigned in exp-timing.json is
+      // conservatively delayed until the last scored boss in its stage.
+      if (lastBattleInStage) {
+        const stageMaps = expWorld.stageMapOrder?.get(stage) || [];
+        for (const map of stageMaps) {
+          if (!processedMaps.has(map) && !maps.includes(map)) maps.push(map);
         }
+      }
+
+      for (const map of maps) {
+        const joinedBeforeMapExp = [
+          ...joinedBeforeBossWindow.splice(0),
+          ...addAvailable(stage, map),
+        ];
+        const source = profile === 'major'
+          ? { totalExp: 0, totalMoney: 0, trainers: [] }
+          : singleMapResources(expWorld, map, excludedMapTrainerKeys);
+        mapExpBefore += source.totalExp;
+        mapMoneyBefore += source.totalMoney;
+        mapTrainerCount += source.trainers.length;
+        const allocation = allocate(source.totalExp, boss);
+        totalAllocatedExp += allocation.allocated;
+        totalUnallocatedExp += allocation.unallocated;
+        processedMaps.add(map);
+        mapSegments.push({
+          map,
+          joinedBeforeMapExp,
+          trainerCount: source.trainers.length,
+          exp: source.totalExp,
+          money: source.totalMoney,
+        });
+      }
+
+      // If a boss window has no map bucket, preserve explicit manual joins in
+      // diagnostics instead of silently losing them.
+      if (joinedBeforeBossWindow.length) {
+        mapSegments.push({
+          map: null,
+          joinedBeforeMapExp: joinedBeforeBossWindow,
+          trainerCount: 0,
+          exp: 0,
+          money: 0,
+          reason: 'manual-before-boss',
+        });
+      }
+
+      if (profile !== 'major') {
         totalMapExp += mapExpBefore;
         totalMapMoney += mapMoneyBefore;
         currentMoney += mapMoneyBefore;
       }
-    }
 
-    // Manual gifts/statics without a mapped acquisition point conservatively
-    // join after the stage's map EXP; every stage candidate still exists for
-    // the stage's scored boss battle.
-    joinedAfterMapExp = addAvailable(stage);
+      // Remaining same-stage candidates with no reliable map/window are
+      // delayed until the final scored boss of the stage.
+      if (lastBattleInStage) joinedAfterMapExp = addAvailable(stage);
+    } else if (firstBattleInStage) {
+      if (profile === 'normal-route' || profile === 'all-accessible') {
+        const source = stageMapResources(expWorld, stage, excludedMapTrainerKeys);
+        mapExpBefore = source.totalExp;
+        mapMoneyBefore = source.totalMoney;
+        mapTrainerCount = source.trainers.length;
+        const allocation = allocate(mapExpBefore, boss);
+        totalAllocatedExp += allocation.allocated;
+        totalUnallocatedExp += allocation.unallocated;
+        totalMapExp += mapExpBefore;
+        totalMapMoney += mapMoneyBefore;
+        currentMoney += mapMoneyBefore;
+      }
+      joinedAfterMapExp = addAvailable(stage);
+    }
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const aceGapBefore = aceGapForStates(states, Number(boss.aceLevel));
