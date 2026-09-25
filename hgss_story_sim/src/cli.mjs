@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { candidateMovePool, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -682,6 +682,21 @@ async function cmdSwitchSmoke() {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdTutorSmoke() {
+  const moveAccess = await loadMoveAccess();
+  const before = candidateMovePool('Quilava', 17, 1, moveAccess);
+  const after = candidateMovePool('Quilava', 19, 2, moveAccess);
+
+  if (before.includes('Headbutt')) {
+    throw new Error('Headbutt tutor became available before Ilex Forest');
+  }
+  if (!after.includes('Headbutt')) {
+    throw new Error('Expected stage-2 Quilava to be compatible with reusable Headbutt tutor');
+  }
+
+  console.log(JSON.stringify({ before, after }, null, 2));
+}
+
 async function cmdHmSmoke() {
   const story = await loadStory();
   const [pool, moveAccess] = await Promise.all([
@@ -840,6 +855,7 @@ const commands = {
   search: cmdSearch,
   optimize: cmdOptimize,
   'switch-smoke': cmdSwitchSmoke,
+  'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,
   'shop-tm-smoke': cmdShopTmSmoke,
@@ -848,7 +864,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, switch-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
