@@ -64,7 +64,9 @@ The search output now includes:
 - persistent one-use TM ownership plan;
 - `catchUpLevels`: a first acquisition-level burden metric.
 
-`catchUpLevels` is deliberately kept separate from win rate for now, so a future Pareto search can compare battle strength against grinding burden rather than hiding an arbitrary weight inside one score.
+`catchUpLevels` is deliberately kept separate from win rate for now, so Pareto output can compare battle strength against grinding burden rather than hiding an arbitrary weight inside one score.
+
+Final beam survivors can be rescored across multiple deterministic RNG seeds with `--final-runs=N`; the CI preliminary optimizer uses 10 runs per boss for the finalists.
 
 ## Setup
 
@@ -93,7 +95,7 @@ npm run simulate -- --runs=20
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
 
 # HG/SS × all three starters; candidate screening is reused per version
-npm run optimize -- --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --beam-width=3 --candidate-cap=12 --team-size=6
+npm run optimize -- --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=3 --candidate-cap=12 --team-size=6
 
 # simple/prefix search
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=prefix --runs=1 --limit=100 --team-size=6
