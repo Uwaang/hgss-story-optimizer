@@ -95,6 +95,7 @@ export function extractBosses(source, bossConfig) {
       label: boss.label,
       kind: boss.kind || 'boss',
       sourceRef: boss.sourceRef || null,
+      appliesToStarter: boss.appliesToStarter || null,
       trainerId,
       trainerClassId,
       trainerGender,
