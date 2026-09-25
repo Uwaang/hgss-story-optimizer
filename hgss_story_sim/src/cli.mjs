@@ -18,6 +18,14 @@ async function readJson(relativePath) {
   return JSON.parse(await fs.readFile(path.join(ROOT, relativePath), 'utf8'));
 }
 
+async function loadMoveAccess() {
+  const config = await readJson('config/move-access.json');
+  if (!Array.isArray(config.reusableMachines)) {
+    throw new Error('move-access.json must contain reusableMachines[]');
+  }
+  return config;
+}
+
 function arg(name, fallback) {
   const prefix = `--${name}=`;
   const found = process.argv.find(x => x.startsWith(prefix));
