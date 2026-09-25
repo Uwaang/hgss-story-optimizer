@@ -71,17 +71,21 @@ function speciesValues(value, version) {
   const resolved = resolveVersioned(value, version);
   if (Array.isArray(resolved)) return resolved.flatMap(item => speciesValues(item, version));
   if (typeof resolved === 'string') return [speciesConstant(resolved)];
+  if (resolved && typeof resolved === 'object') {
+    return Object.values(resolved).flatMap(item => speciesValues(item, version));
+  }
   return [];
 }
 
-function levelRange(value) {
-  if (Number.isFinite(Number(value))) {
-    const level = Number(value);
+function levelRange(value, version) {
+  const resolved = resolveVersioned(value, version);
+  if (Number.isFinite(Number(resolved))) {
+    const level = Number(resolved);
     return { min: level, max: level };
   }
-  if (value && typeof value === 'object') {
-    const min = Number(value.min);
-    const max = Number(value.max);
+  if (resolved && typeof resolved === 'object') {
+    const min = Number(resolveVersioned(resolved.min, version));
+    const max = Number(resolveVersioned(resolved.max, version));
     if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
   }
   return { min: null, max: null };
@@ -89,7 +93,7 @@ function levelRange(value) {
 
 function averageWildExpForSlot(slot, version, expYieldBySpecies) {
   const species = speciesValues(slot?.species, version);
-  const range = levelRange(slot?.level);
+  const range = levelRange(slot?.level, version);
   if (!species.length || range.min === null || range.max === null) return 0;
 
   const lo = Math.min(range.min, range.max);
