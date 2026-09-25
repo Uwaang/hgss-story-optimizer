@@ -220,6 +220,8 @@ Push commits containing `[optimize]` run the `all` resource profile across HG/SS
 
 The current CI optimization profile uses beam width 4, candidate cap 16, and 10-run finalist rescoring.
 
+Final comparison runs are executed on the same commit for both `all` and `core` resource profiles so move-selection changes do not contaminate the comparison.
+
 ## Next milestones
 
 1. Verify and add remaining mandatory Rocket/event encounters.
