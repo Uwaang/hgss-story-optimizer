@@ -1,0 +1,42 @@
+{
+  "description": "Additional story maps used only for trainer-EXP supply. These do not affect Pokémon acquisition availability.",
+  "additionalStages": [
+    {"stage": 0, "maps": ["T22GYM0101"]},
+    {"stage": 1, "maps": ["T23GYM0102"]},
+    {"stage": 2, "maps": ["T25GYM0101"]},
+    {"stage": 3, "maps": ["T27GYM0101"]},
+    {"stage": 4, "maps": ["T24GYM0101"]},
+    {"stage": 5, "maps": ["T26GYM0101"]},
+    {
+      "stage": 6,
+      "maps": [
+        "T28GYM0101",
+        "D35R0101",
+        "D35R0102",
+        "D35R0103",
+        "D35R0104"
+      ]
+    },
+    {
+      "stage": 7,
+      "maps": [
+        "T30GYM0101",
+        "D23R0101",
+        "D23R0102",
+        "D23R0103",
+        "D23R0104",
+        "D23R0105",
+        "D23R0106",
+        "D37R0101",
+        "D37R0102",
+        "D37R0103",
+        "D37R0104"
+      ]
+    }
+  ],
+  "notes": [
+    "Gym map codes are sourced from each leader's story script filename.",
+    "Mahogany and Radio Tower map codes are sourced from the Rocket story scripts and adjacent floor numbering.",
+    "This profile still represents an accessible-trainer envelope, not a proven normal-route trainer subset."
+  ]
+}
