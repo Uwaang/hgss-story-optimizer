@@ -115,6 +115,10 @@ async function loadExpContext(
   const normalizedEntryLevelPolicy = normalizeEntryLevelPolicy(entryLevelPolicy);
   const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
   const normalizedExpAllocator = normalizeExpAllocator(expAllocator);
+  const bossAwareSoftLevelScale = Number(arg('soft-level-scale', '8'));
+  if (!Number.isFinite(bossAwareSoftLevelScale) || bossAwareSoftLevelScale <= 0) {
+    throw new Error(`Invalid --soft-level-scale: ${bossAwareSoftLevelScale}`);
+  }
   if (profile === 'ace') {
     return {
       profile,
@@ -122,6 +126,7 @@ async function loadExpContext(
       entryLevelPolicy: normalizedEntryLevelPolicy,
       sameStageJoinPolicy: normalizedSameStageJoinPolicy,
       expAllocator: normalizedExpAllocator,
+      bossAwareSoftLevelScale,
       world: null,
     };
   }
@@ -146,6 +151,7 @@ async function loadExpContext(
     entryLevelPolicy: normalizedEntryLevelPolicy,
     sameStageJoinPolicy: normalizedSameStageJoinPolicy,
     expAllocator: normalizedExpAllocator,
+    bossAwareSoftLevelScale,
     world,
   };
 }
@@ -464,6 +470,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'map-order',
         allocator: expContext?.expAllocator || 'balanced',
         levelUtility: candidateBossUtility,
+        bossAwareSoftLevelScale: expContext?.bossAwareSoftLevelScale || 8,
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -2245,10 +2252,13 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
     throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
   }
-  const softLevels = Object.values(bossAwareSoft.finalLevels).map(Number);
-  if (softLevels.length && Math.max(...softLevels) - Math.min(...softLevels) > 8) {
+  const levelSpread = schedule => {
+    const levels = Object.values(schedule.finalLevels).map(Number);
+    return levels.length ? Math.max(...levels) - Math.min(...levels) : 0;
+  };
+  if (!(levelSpread(bossAwareSoft) < levelSpread(bossAware))) {
     throw new Error(
-      `Boss-aware-soft exceeded its 8-level training gap: ${JSON.stringify(bossAwareSoft.finalLevels)}`
+      `Boss-aware-soft did not reduce level spread: soft=${levelSpread(bossAwareSoft)}, unrestricted=${levelSpread(bossAware)}`
     );
   }
 
@@ -2257,7 +2267,8 @@ async function cmdExpAllocatorSmoke() {
     balanced: { allocator: balanced.allocator, finalLevels: balanced.finalLevels },
     bossAwareSoft: {
       allocator: bossAwareSoft.allocator,
-      levelGap: bossAwareSoft.bossAwareSoftLevelGap,
+      levelPenaltyScale: bossAwareSoft.bossAwareSoftLevelScale,
+      levelSpread: levelSpread(bossAwareSoft),
       finalLevels: bossAwareSoft.finalLevels,
     },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
