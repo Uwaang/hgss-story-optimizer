@@ -23,6 +23,9 @@ async function loadMoveAccess() {
   if (!Array.isArray(config.reusableMachines)) {
     throw new Error('move-access.json must contain reusableMachines[]');
   }
+  if (!Array.isArray(config.singleUseMachines)) {
+    throw new Error('move-access.json must contain singleUseMachines[]');
+  }
   return config;
 }
 
@@ -329,6 +332,47 @@ async function cmdHmSmoke() {
   }, null, 2));
 }
 
+async function cmdTmSmoke() {
+  const story = await loadStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story),
+    loadMoveAccess(),
+  ]);
+  const names = ['Pidgey', 'Hoothoot'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`${name} not found in canonical pool`);
+    return candidate;
+  });
+
+  const singleUsePlan = planSingleUseMachines(team, story.bosses, moveAccess);
+  const tm51Owners = Object.entries(singleUsePlan)
+    .filter(([, machines]) => machines.some(machine => machine.machine === 'TM51'))
+    .map(([owner]) => owner);
+
+  if (tm51Owners.length !== 1) {
+    throw new Error(`Expected exactly one TM51 owner, got ${tm51Owners.length}`);
+  }
+
+  const before = materializeCandidateTeam(team, 0, 13, { moveAccess, singleUsePlan });
+  const after = materializeCandidateTeam(team, 1, 17, { moveAccess, singleUsePlan });
+  const beforeRoostUsers = before.filter(mon => mon.moves.includes('Roost')).length;
+  const afterRoostUsers = after.filter(mon => mon.moves.includes('Roost')).length;
+
+  if (beforeRoostUsers !== 0) {
+    throw new Error('Roost became available before Falkner reward');
+  }
+  if (afterRoostUsers > 1) {
+    throw new Error(`TM51 was consumed by more than one team member: ${afterRoostUsers}`);
+  }
+
+  console.log(JSON.stringify({
+    tm51Owners,
+    before: before.map(mon => ({ species: mon.species, moves: mon.moves })),
+    after: after.map(mon => ({ species: mon.species, moves: mon.moves })),
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -363,12 +407,13 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   'hm-smoke': cmdHmSmoke,
+  'tm-smoke': cmdTmSmoke,
   smoke: cmdSmoke,
 };
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, hm-smoke, extract, pool, validate, simulate, search');
+  console.error('Use one of: smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search');
   process.exitCode = 2;
 } else {
   await commands[command]();
