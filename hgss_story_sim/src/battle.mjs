@@ -1,4 +1,5 @@
-import { BattleStream, Dex, Teams, getPlayerStreams } from 'pokemon-showdown';
+import Showdown from 'pokemon-showdown';
+const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
 
 const dex = Dex.mod('gen4');
