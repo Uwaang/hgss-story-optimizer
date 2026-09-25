@@ -77,6 +77,25 @@ Growth-rate-aware EXP uses the six Gen 4 curves (Fast, Medium Fast, Medium Slow,
 
 Pareto output removes teams that are simultaneously no better in win rate and no cheaper in EXP/money/coins.
 
+
+### Resource profiles
+
+Purchased moves are now an explicit search profile instead of being forced onto every team:
+
+- `core`: level-up moves + reusable HMs/tutors + free single-use story TMs; no Department Store or Game Corner purchases
+- `money`: `core` + repeatable money-purchased Department Store TMs
+- `all`: `money` + Game Corner coin TMs
+
+This matters because the optimizer can now compare a practical no-shopping party against high-resource variants instead of assuming every useful purchasable TM is always bought.
+
+Examples:
+
+```bash
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --final-runs=10
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=money --final-runs=10
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --final-runs=10
+```
+
 ## Search
 
 `prefix` exists mainly as a deterministic regression path.
@@ -197,7 +216,7 @@ GitHub Actions currently checks:
 - HG/SS canonical pools
 - prefix and beam-search smoke
 
-Push commits containing `[optimize]` additionally run HG/SS × all three starters and retain the JSON result as an Actions artifact.
+Push commits containing `[optimize]` run the `all` resource profile across HG/SS × all three starters. `[optimize-core]` runs the same search with no purchasable TMs. Both retain JSON results as Actions artifacts.
 
 The current CI optimization profile uses beam width 4, candidate cap 16, and 10-run finalist rescoring.
 
