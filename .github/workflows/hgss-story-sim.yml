@@ -37,6 +37,8 @@ jobs:
         run: npm run validate
       - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Reusable HM timing smoke test
+        run: npm run hm-smoke
       - name: Full Johto route smoke test
         run: npm run simulate -- --runs=1
       - name: Canonical acquisition pool smoke test
