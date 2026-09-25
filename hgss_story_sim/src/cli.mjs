@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -160,6 +160,9 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const rows = [];
   const catchUp = estimateCatchUpLevels(candidates, bosses);
   const singleUsePlan = planSingleUseMachines(candidates, bosses, moveAccess);
+  const purchasable = planPurchasableMachines(candidates, bosses, moveAccess, singleUsePlan);
+  const purchasablePlan = purchasable.assignments;
+  const purchaseCosts = purchasable.costs;
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const boss of bosses) {
@@ -167,7 +170,7 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
       candidates,
       boss.stage,
       boss.aceLevel,
-      { moveAccess, singleUsePlan },
+      { moveAccess, singleUsePlan, purchasablePlan },
     );
     if (!playerTeam.length) {
       weightedRuns += runs;
@@ -202,6 +205,8 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
     catchUpUnknown: catchUp.unknown,
     catchUpDetails: catchUp.details,
     singleUsePlan,
+    purchasablePlan,
+    purchaseCosts,
     rows,
   };
 }
@@ -327,14 +332,22 @@ function findStarterCandidate(candidates, requested) {
 function paretoFront(rows) {
   return rows.filter((row, index) => !rows.some((other, otherIndex) => {
     if (index === otherIndex) return false;
+    const rowMoney = Number(row.purchaseCosts?.money || 0);
+    const rowCoins = Number(row.purchaseCosts?.coins || 0);
+    const otherMoney = Number(other.purchaseCosts?.money || 0);
+    const otherCoins = Number(other.purchaseCosts?.coins || 0);
     const atLeastAsGood =
       other.score >= row.score &&
       other.catchUpLevels <= row.catchUpLevels &&
-      other.catchUpUnknown <= row.catchUpUnknown;
+      other.catchUpUnknown <= row.catchUpUnknown &&
+      otherMoney <= rowMoney &&
+      otherCoins <= rowCoins;
     const strictlyBetter =
       other.score > row.score ||
       other.catchUpLevels < row.catchUpLevels ||
-      other.catchUpUnknown < row.catchUpUnknown;
+      other.catchUpUnknown < row.catchUpUnknown ||
+      otherMoney < rowMoney ||
+      otherCoins < rowCoins;
     return atLeastAsGood && strictlyBetter;
   }));
 }
@@ -346,6 +359,8 @@ function searchResultRow(team, evaluation) {
     catchUpUnknown: evaluation.catchUpUnknown,
     team: team.map(x => x.species),
     singleUsePlan: evaluation.singleUsePlan,
+    purchasablePlan: evaluation.purchasablePlan,
+    purchaseCosts: evaluation.purchaseCosts,
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
       winRate: row.winRate,
@@ -704,6 +719,51 @@ async function cmdHmSmoke() {
   }, null, 2));
 }
 
+async function cmdShopTmSmoke() {
+  const story = await loadStory();
+  const moveAccess = await loadMoveAccess();
+  const team = [
+    { species: 'Cyndaquil', availableFrom: 0, familyId: 'Cyndaquil' },
+    { species: 'Growlithe', availableFrom: 2, familyId: 'Growlithe' },
+  ];
+  const singleUsePlan = planSingleUseMachines(team, story.bosses, moveAccess);
+  const purchasable = planPurchasableMachines(team, story.bosses, moveAccess, singleUsePlan);
+  const owners = Object.entries(purchasable.assignments)
+    .filter(([, machines]) => machines.some(machine => machine.machine === 'TM38'))
+    .map(([owner]) => owner);
+
+  if (owners.length < 2) {
+    throw new Error(`Expected purchasable TM38 to support multiple owners, got ${owners.length}`);
+  }
+  if (Number(purchasable.costs.money || 0) < 11000) {
+    throw new Error(`Expected at least two Fire Blast purchases (11000), got ${purchasable.costs.money || 0}`);
+  }
+
+  const before = materializeCandidateTeam(team, 1, 17, {
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan: purchasable.assignments,
+  });
+  const after = materializeCandidateTeam(team, 2, 19, {
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan: purchasable.assignments,
+  });
+  if (before.some(mon => mon.moves.includes('Fire Blast'))) {
+    throw new Error('Goldenrod shop TM38 became available before stage 2');
+  }
+  if (after.filter(mon => mon.moves.includes('Fire Blast')).length < 1) {
+    throw new Error('Expected at least one stage-2 team member to use purchased Fire Blast');
+  }
+
+  console.log(JSON.stringify({
+    owners,
+    purchaseCosts: purchasable.costs,
+    before: before.map(mon => ({ species: mon.species, moves: mon.moves })),
+    after: after.map(mon => ({ species: mon.species, moves: mon.moves })),
+  }, null, 2));
+}
+
 async function cmdTmSmoke() {
   const story = await loadStory();
   const [pool, moveAccess] = await Promise.all([
@@ -782,12 +842,13 @@ const commands = {
   'switch-smoke': cmdSwitchSmoke,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,
+  'shop-tm-smoke': cmdShopTmSmoke,
   smoke: cmdSmoke,
 };
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, switch-smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, switch-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
