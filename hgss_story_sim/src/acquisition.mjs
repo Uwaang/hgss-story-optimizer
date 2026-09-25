@@ -412,6 +412,7 @@ export async function buildCanonicalCandidatePool({
     const manualLevel = Number(manual.level);
     const enriched = {
       ...manual,
+      joinBeforeBoss: manual.beforeBoss || null,
       familyId: familyRoot(speciesConst, parentByTarget),
       growthRate: growthBySpecies.get(speciesConst) || null,
       catchRate: catchRateBySpecies.get(speciesConst) ?? null,
@@ -447,6 +448,7 @@ export async function buildCanonicalCandidatePool({
           : enriched.entryLevelMax;
       }
       if (manual.exclusiveGroup) existing.exclusiveGroup = manual.exclusiveGroup;
+      if (manual.beforeBoss) existing.joinBeforeBoss = manual.beforeBoss;
       existing.captureSearch = bestCaptureSource(existing.sources);
     }
   }
