@@ -1606,6 +1606,109 @@ async function cmdExpRouteSmoke() {
   }, null, 2));
 }
 
+async function cmdExpEnvelope() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const runs = Number(arg('runs', '3'));
+  const requestedTeam = String(arg(
+    'team',
+    'Cyndaquil,Mareep,Geodude,Zubat,Lapras,Tentacool'
+  )).split(',').map(value => value.trim()).filter(Boolean);
+
+  const story = await loadStory();
+  const pool = await loadCanonicalPool(version, story);
+  const team = requestedTeam.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species.toLowerCase() === name.toLowerCase());
+    if (!candidate) throw new Error(`EXP-envelope candidate not found: ${name}`);
+    return candidate;
+  });
+  const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
+
+  const profiles = [
+    { name: 'major', expProfile: 'major', grindPolicy: 'none' },
+    { name: 'natural', expProfile: 'all-accessible', grindPolicy: 'none' },
+    { name: 'acePaid', expProfile: 'all-accessible', grindPolicy: 'ace-paid' },
+  ];
+
+  const results = {};
+  for (const profile of profiles) {
+    const expContext = await loadExpContext(
+      story,
+      profile.expProfile,
+      version,
+      profile.grindPolicy,
+    );
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+    );
+    results[profile.name] = searchResultRow(team, evaluation);
+  }
+
+  console.log(JSON.stringify({
+    version,
+    resourceProfile,
+    spendPolicy,
+    runsPerBoss: runs,
+    team: team.map(mon => mon.species),
+    results,
+  }, null, 2));
+}
+
+async function cmdExpEnvelopeSmoke() {
+  const version = 'HEARTGOLD';
+  const story = await loadStory();
+  const pool = await loadCanonicalPool(version, story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing EXP-envelope smoke candidate: ${name}`);
+    return candidate;
+  });
+  const moveAccess = await loadMoveAccess('core', 'natural');
+
+  const evaluations = {};
+  for (const [name, expProfile, grindPolicy] of [
+    ['major', 'major', 'none'],
+    ['natural', 'all-accessible', 'none'],
+    ['acePaid', 'all-accessible', 'ace-paid'],
+  ]) {
+    const expContext = await loadExpContext(story, expProfile, version, grindPolicy);
+    evaluations[name] = await evaluateCandidates(
+      team,
+      story.bosses,
+      1,
+      moveAccess,
+      expContext,
+    );
+  }
+
+  if (!(evaluations.natural.expSchedule.totalNaturalExp > evaluations.major.expSchedule.totalNaturalExp)) {
+    throw new Error('Natural EXP envelope should exceed major-only EXP supply');
+  }
+  if (!(evaluations.acePaid.expSchedule.totalGrindExp > 0)) {
+    throw new Error('Ace-paid envelope should record non-zero grind EXP');
+  }
+  if (!(evaluations.acePaid.expSchedule.totalExpectedGrindBattles > 0)) {
+    throw new Error('Ace-paid envelope should record expected wild battles');
+  }
+
+  console.log(JSON.stringify(Object.fromEntries(
+    Object.entries(evaluations).map(([name, evaluation]) => [name, {
+      score: evaluation.score,
+      worstBossWinRate: evaluation.worstBossWinRate,
+      finalLevels: evaluation.finalLevels,
+      totalNaturalExp: evaluation.expSchedule.totalNaturalExp,
+      totalGrindExp: evaluation.expSchedule.totalGrindExp,
+      expectedGrindBattles: evaluation.expSchedule.totalExpectedGrindBattles,
+    }])
+  ), null, 2));
+}
+
 async function cmdExpBudget() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
@@ -1970,6 +2073,8 @@ const commands = {
   'move-score-smoke': cmdMoveScoreSmoke,
   'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
+  'exp-envelope': cmdExpEnvelope,
+  'exp-envelope-smoke': cmdExpEnvelopeSmoke,
   'exp-budget': cmdExpBudget,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'capture-smoke': cmdCaptureSmoke,
@@ -1985,7 +2090,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
