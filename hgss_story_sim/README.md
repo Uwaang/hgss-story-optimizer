@@ -7,31 +7,63 @@ This module searches for strong Pokémon HeartGold/SoulSilver story parties by c
 ### Battle fidelity
 
 - Boss rosters are fetched from pinned `pret/pokeheartgold` commit `9d8b7591f09b65804da2fb2dfd56f320633e0d36`.
-- The route currently covers all 8 Johto Gym Leaders, the Elite Four, and Champion Lance.
+- The current route covers all 8 Johto Gym Leaders, the Elite Four, and Champion Lance.
 - Explicit trainer moves and held items are mapped into Showdown Gen 4 sets.
 - NPC IVs reproduce HGSS's `floor(difficulty * 31 / 255)` formula.
-- Trainer class/gender metadata and the HGSS LCRNG path are used to reproduce deterministic NPC personality, nature, and ability slot.
-- Battles are deterministic by seed and can be repeated for comparison.
-- Candidate levels are currently normalized to each boss's ace level.
+- Trainer class/gender metadata and the HGSS LCRNG path reproduce deterministic NPC personality, nature, and ability slot.
+- Battles are deterministic by seed and can be repeated.
+- Candidate levels are still normalized to each boss's ace level for the battle itself.
 
-### Acquisition modeling
+### Acquisition and evolution
 
-Two complementary paths are kept intentionally:
+The main canonical pool is built from the game data rather than a handwritten tier list.
 
-1. **Canonical generated pool** — the main search path.
-   - Wild availability comes from `gs_enc_data.json`.
-   - HeartGold/SoulSilver version differences are resolved from the source data.
-   - Story-accessible maps and encounter-method unlocks are defined in `config/story-access.canonical.json`.
-   - Gifts/statics/headbutt exceptions are added as auditable manual acquisitions.
-   - Unambiguous level evolutions are derived from `evo.json`.
-   - Duplicate evolution families and mutually exclusive starters are rejected.
+- Wild availability comes from `gs_enc_data.json`.
+- HeartGold/SoulSilver version differences are resolved from the source data.
+- Story-accessible maps and method unlocks are defined in `config/story-access.canonical.json`.
+- Gifts/statics/headbutt exceptions are auditable manual acquisitions.
+- Unambiguous level evolutions are derived from `evo.json`.
+- Duplicate evolution families and mutually exclusive starters are rejected.
+- Wild encounter min/max levels are retained as `entryLevelMin/Max`.
+- Verified manual acquisition levels are recorded where source scripts make them explicit.
 
-2. **Curated source-validated pool** — a small regression/reference path.
-   - Each candidate in `candidates.example.json` points to a source id in `config/story-access.json`.
-   - The validator checks the pinned encounter/headbutt/script source before accepting the candidate.
-   - This caught and corrected earlier modeling errors such as Mareep being available before Falkner and Gyarados appearing before Magikarp can reach level 20.
+The current conservative canonical route produces **92 candidate acquisitions** for HeartGold and **92** for SoulSilver, with version-specific stage distributions.
 
-The current canonical generator produces **92 candidate acquisitions** for both HeartGold and SoulSilver on the conservative Johto route. The stage distribution differs where the versions differ.
+A smaller curated pool remains as a regression/reference path; every candidate points to encounter/headbutt/script evidence and is validated against the pinned source.
+
+### Move access
+
+Move selection is stage-aware.
+
+- Level-up moves come from Gen 4 learnsets.
+- Johto HMs are modeled as reusable machines with story acquisition stages.
+- A first source-backed set of one-use story TMs is modeled, including the Johto Gym rewards plus early TM70/TM05.
+- Each one-use TM gets a persistent owner within a candidate team; the same TM cannot be assigned to multiple members.
+- Machine compatibility is checked against Gen 4 learnsets.
+
+This is intentionally conservative: the full set of overworld/shop/Game Corner/Tutor moves is not modeled yet.
+
+### Search
+
+Two strategies are available:
+
+- `prefix`: deterministic regression/simple search over the first legal combinations.
+- `beam`: actual battle simulations first screen individual candidates, then iteratively keep the strongest partial teams.
+
+A starter can be fixed:
+
+```bash
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
+```
+
+The search output now includes:
+
+- aggregate boss win rate;
+- boss-by-boss results;
+- persistent one-use TM ownership plan;
+- `catchUpLevels`: a first acquisition-level burden metric.
+
+`catchUpLevels` is deliberately kept separate from win rate for now, so a future Pareto search can compare battle strength against grinding burden rather than hiding an arbitrary weight inside one score.
 
 ## Setup
 
@@ -44,53 +76,33 @@ npm install
 
 ## Commands
 
-Validate the curated source-backed acquisition examples:
-
 ```bash
+# source-backed curated validation
 npm run validate
-```
 
-Inspect the generated canonical candidate pool:
-
-```bash
+# inspect canonical pools
 npm run pool -- --version=HEARTGOLD
 npm run pool -- --version=SOULSILVER
 npm run pool -- --version=HEARTGOLD --full=true
-```
 
-Run the curated baseline team through the full Johto/E4/Lance route:
-
-```bash
+# curated baseline through all 13 bosses
 npm run simulate -- --runs=20
-```
 
-Search teams from the generated HeartGold pool:
+# canonical beam search, fixed starter
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --runs=3 --screen-runs=1 --beam-width=8 --candidate-cap=24 --team-size=6
 
-```bash
-npm run search -- --pool=canonical --version=HEARTGOLD --runs=5 --limit=100 --team-size=6
-```
+# simple/prefix search
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=prefix --runs=1 --limit=100 --team-size=6
 
-SoulSilver works the same way:
-
-```bash
-npm run search -- --pool=canonical --version=SOULSILVER --runs=5 --limit=100 --team-size=6
-```
-
-Print the extracted boss dataset:
-
-```bash
-npm run extract
-```
-
-Run the quick battle smoke test:
-
-```bash
+# regression checks
 npm run smoke
+npm run hm-smoke
+npm run tm-smoke
 ```
 
 ## Story stages
 
-`availableFrom` is the zero-based index in `config/story-bosses.json`:
+`availableFrom` is the zero-based position in `config/story-bosses.json`:
 
 - 0 Falkner
 - 1 Bugsy
@@ -106,36 +118,39 @@ npm run smoke
 - 11 Karen
 - 12 Lance
 
-A candidate can only participate from its acquisition stage onward.
-
 ## Current approximations
 
 This is not yet a bit-perfect HGSS story emulator.
 
 - Trainer bag-item use is not modeled.
-- Battle decisions use a deterministic greedy policy rather than the exact HGSS AI-flag implementation.
-- Story map/method unlock stages are deliberately conservative and still curated rather than derived from a full map-event reachability graph.
-- Friendship, stone, trade, move-known, and location-based evolutions are conservative/manual; only unambiguous level evolutions are automatic.
-- TM/HM/tutor acquisition timing and one-use TM competition are not yet included in move selection.
-- Equal-level normalization does not model the actual EXP curve or grinding time.
-- Search currently optimizes aggregate boss win rate only; it does not yet produce a Pareto frontier over grinding, acquisition timing, TM cost, or real-time convenience.
+- Battle decisions use a deterministic greedy policy rather than the exact HGSS AI flags.
+- Story map/method unlock stages are conservative curated checkpoints, not a full map-event reachability graph.
+- Friendship, stone, trade, move-known, and location evolutions remain conservative/manual.
+- Only a subset of story TMs is modeled; shops, many overworld TMs, and tutors still need coverage.
+- Equal-level battle normalization is still used; `catchUpLevels` only records an entry-level burden and is not a full EXP/time simulator.
+- Beam search is heuristic, not a proof of the globally optimal team.
+- Search does not yet emit a true Pareto frontier.
 
 ## CI coverage
 
-The GitHub Actions workflow currently verifies all of these paths:
+GitHub Actions verifies:
 
 - dependency install and syntax checks;
 - curated source-backed acquisition validation;
 - a real Falkner battle;
+- reusable-HM timing;
+- one-use TM ownership;
 - one full pass over all 13 Johto/E4/Lance bosses;
-- HeartGold canonical candidate generation;
-- SoulSilver canonical candidate generation;
-- a canonical-pool team-search smoke test.
+- HeartGold and SoulSilver canonical pools;
+- canonical prefix-search smoke;
+- beam-search smoke.
 
-## Next fidelity milestones
+A heavier six-search preliminary optimization (HG/SS × three starters) only runs on push commits whose message contains `[optimize]`.
 
-1. Add TM/HM/tutor acquisition constraints and resource ownership.
-2. Add EXP/grinding-time cost.
-3. Port the relevant HGSS trainer item-use and AI behavior.
-4. Replace brute-force-prefix search with a better optimizer (beam/genetic/branch-and-bound) and Pareto objectives.
-5. Extend beyond Lance through Kanto and Red.
+## Next milestones
+
+1. Expand source-backed TM/shop/tutor coverage.
+2. Turn entry-level burden into a better EXP/grinding-time model and Pareto objective.
+3. Improve trainer AI/item-use fidelity.
+4. Increase optimizer breadth and compare multiple search strategies.
+5. Extend through Kanto and Red.
