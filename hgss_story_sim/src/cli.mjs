@@ -324,6 +324,21 @@ function findStarterCandidate(candidates, requested) {
   return candidate;
 }
 
+function paretoFront(rows) {
+  return rows.filter((row, index) => !rows.some((other, otherIndex) => {
+    if (index === otherIndex) return false;
+    const atLeastAsGood =
+      other.score >= row.score &&
+      other.catchUpLevels <= row.catchUpLevels &&
+      other.catchUpUnknown <= row.catchUpUnknown;
+    const strictlyBetter =
+      other.score > row.score ||
+      other.catchUpLevels < row.catchUpLevels ||
+      other.catchUpUnknown < row.catchUpUnknown;
+    return atLeastAsGood && strictlyBetter;
+  }));
+}
+
 function searchResultRow(team, evaluation) {
   return {
     score: evaluation.score,
@@ -409,6 +424,7 @@ async function runBeamSearch({
     if (!beam.length) break;
   }
 
+  const top = beam.map(state => searchResultRow(state.team, state.evaluation));
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
@@ -416,9 +432,12 @@ async function runBeamSearch({
       species: row.candidate.species,
       availableFrom: row.candidate.availableFrom,
       score: row.evaluation.score,
+      catchUpLevels: row.evaluation.catchUpLevels,
+      catchUpUnknown: row.evaluation.catchUpUnknown,
     })),
     evaluatedTeams: cache.size,
-    top: beam.map(state => searchResultRow(state.team, state.evaluation)),
+    paretoFront: paretoFront(top),
+    top,
   };
 }
 
@@ -505,6 +524,7 @@ async function cmdSearch() {
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
+    paretoFront: paretoFront(results),
     top: results.slice(0, 20),
   }, null, 2));
 }
