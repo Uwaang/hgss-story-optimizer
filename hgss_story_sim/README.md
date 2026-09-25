@@ -214,6 +214,20 @@ npm run optimize -- \
 
 Optimization output includes provenance, route size, team members, battle-by-battle win rates, TM ownership, purchase costs and Pareto results. It can be written to JSON and retained as a GitHub Actions artifact.
 
+Search-width sensitivity can be measured directly instead of assuming one beam configuration is sufficient:
+
+```bash
+npm run convergence -- \
+  --version=HEARTGOLD \
+  --starter=Cyndaquil \
+  --exp-profile=normal-route \
+  --beam-widths=4,8,16 \
+  --candidate-caps=16,24,32 \
+  --final-runs=3
+```
+
+The report uses the largest requested search as a reference and records top-team overlap, score deltas, and evaluated-team counts for each width/cap pair. Stable top teams across this grid are stronger evidence than a single beam-search result.
+
 ## Setup
 
 Requires Node.js 22.18+.
