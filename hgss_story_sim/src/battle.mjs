@@ -569,6 +569,61 @@ function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
   return speciesName;
 }
 
+export function candidateBossUtility(candidate, boss, level) {
+  const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const stage = Number(boss?.stage || 0);
+  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return 0;
+
+  const candidateMoves = levelUpMovePool(species.name, actualLevel);
+  const usableCandidateMoves = candidateMoves.length ? candidateMoves : ['Tackle'];
+  const foes = boss?.trainer?.party || [];
+  if (!foes.length) return actualLevel;
+
+  let total = 0;
+  for (const foe of foes) {
+    const foeName = constantToName(foe.species, 'SPECIES_');
+    const foeSpecies = dex.species.get(foeName);
+    if (!foeSpecies.exists) continue;
+
+    let bestOffense = 1;
+    for (const moveName of usableCandidateMoves) {
+      const move = dex.moves.get(moveName);
+      if (!move.exists) continue;
+      let score = candidateMoveScore(species, moveName);
+      if (move.category !== 'Status') {
+        if (!dex.getImmunity(move.type, foeSpecies)) score = 0;
+        else score *= 2 ** dex.getEffectiveness(move, foeSpecies);
+      } else {
+        score *= 0.25;
+      }
+      bestOffense = Math.max(bestOffense, score);
+    }
+
+    const foeMoves = Array.isArray(foe.moves) && foe.moves.length
+      ? foe.moves
+          .filter(move => move && move !== 'MOVE_NONE')
+          .map(move => constantToName(move, 'MOVE_'))
+      : levelUpMoves(foeSpecies.name, Number(foe.level || boss.aceLevel || actualLevel));
+    let incomingThreat = 1;
+    for (const moveName of foeMoves.length ? foeMoves : ['Tackle']) {
+      const move = dex.moves.get(moveName);
+      if (!move.exists || move.category === 'Status') continue;
+      let score = candidateMoveScore(foeSpecies, moveName);
+      if (!dex.getImmunity(move.type, species)) score = 0;
+      else score *= 2 ** dex.getEffectiveness(move, species);
+      incomingThreat = Math.max(incomingThreat, score);
+    }
+
+    total += bestOffense / Math.max(30, incomingThreat);
+  }
+
+  const levelRatio = actualLevel / Math.max(1, Number(boss?.aceLevel || actualLevel));
+  const levelFactor = Math.max(0.25, Math.min(2.0, levelRatio ** 1.4));
+  return (total / foes.length) * levelFactor;
+}
+
 export function materializeCandidateTeam(candidates, stage, level, options = {}) {
   const moveAccess = options.moveAccess || null;
   const singleUsePlan = options.singleUsePlan || {};
