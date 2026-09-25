@@ -164,6 +164,7 @@ export function deriveLevelEvolutionStages(candidates, bosses, evolutionRows) {
       if (changed) {
         transitions.push({
           stage: boss.stage,
+          level: Number(evo?.param || boss.aceLevel),
           species: constantToName(currentConst, 'SPECIES_'),
           derived: 'level-evolution',
         });
