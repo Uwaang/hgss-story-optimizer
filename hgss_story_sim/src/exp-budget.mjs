@@ -467,14 +467,25 @@ export function allocateBalancedExp(states, amount) {
   return { allocated, unallocated: remaining };
 }
 
-export function allocateBossAwareExp(states, amount, boss, levelUtility) {
+function allocateBossAwareExpInternal(
+  states,
+  amount,
+  boss,
+  levelUtility,
+  { maxTrainingGap = null } = {},
+) {
   let remaining = Math.max(0, Math.floor(Number(amount || 0)));
   let allocated = 0;
   const eligible = states.filter(state => !state.unknown && state.level < 100);
 
   while (remaining > 0 && eligible.length) {
+    const minimumLevel = Math.min(...eligible.map(state => state.level));
+    const trainingPool = Number.isFinite(Number(maxTrainingGap))
+      ? eligible.filter(state => state.level <= minimumLevel + Number(maxTrainingGap))
+      : eligible;
+
     let best = null;
-    for (const state of eligible) {
+    for (const state of trainingPool) {
       const nextThreshold = expAtLevel(state.growthRate, state.level + 1);
       if (nextThreshold === null) continue;
       const need = Math.max(1, nextThreshold - state.exp);
@@ -508,6 +519,26 @@ export function allocateBossAwareExp(states, amount, boss, levelUtility) {
   }
 
   return { allocated, unallocated: remaining };
+}
+
+export function allocateBossAwareExp(states, amount, boss, levelUtility) {
+  return allocateBossAwareExpInternal(states, amount, boss, levelUtility);
+}
+
+export function allocateBossAwareSoftExp(
+  states,
+  amount,
+  boss,
+  levelUtility,
+  maxTrainingGap = 8,
+) {
+  return allocateBossAwareExpInternal(
+    states,
+    amount,
+    boss,
+    levelUtility,
+    { maxTrainingGap },
+  );
 }
 
 function stageMapResources(expWorld, stage, excludedKeys) {
@@ -583,6 +614,7 @@ export function buildTeamExpSchedule({
   sameStageJoinPolicy = 'map-order',
   allocator = 'balanced',
   levelUtility = null,
+  bossAwareSoftLevelGap = 8,
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -596,11 +628,16 @@ export function buildTeamExpSchedule({
   if (!['map-order', 'before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
     throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
   }
-  if (!['balanced', 'boss-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware'].includes(allocator)) {
     throw new Error(`Unknown EXP allocator: ${allocator}`);
   }
-  if (allocator === 'boss-aware' && typeof levelUtility !== 'function') {
-    throw new Error('boss-aware EXP allocator requires levelUtility(candidate, boss, level)');
+  if (allocator !== 'balanced' && typeof levelUtility !== 'function') {
+    throw new Error(
+      `${allocator} EXP allocator requires levelUtility(candidate, boss, level)`
+    );
+  }
+  if (!Number.isInteger(Number(bossAwareSoftLevelGap)) || Number(bossAwareSoftLevelGap) < 0) {
+    throw new Error(`Invalid boss-aware-soft level gap: ${bossAwareSoftLevelGap}`);
   }
 
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
@@ -652,9 +689,19 @@ export function buildTeamExpSchedule({
   }
 
   function allocate(amount, targetBoss) {
-    return allocator === 'boss-aware'
-      ? allocateBossAwareExp(states, amount, targetBoss, levelUtility)
-      : allocateBalancedExp(states, amount);
+    if (allocator === 'boss-aware') {
+      return allocateBossAwareExp(states, amount, targetBoss, levelUtility);
+    }
+    if (allocator === 'boss-aware-soft') {
+      return allocateBossAwareSoftExp(
+        states,
+        amount,
+        targetBoss,
+        levelUtility,
+        bossAwareSoftLevelGap,
+      );
+    }
+    return allocateBalancedExp(states, amount);
   }
 
   function configuredMapsBeforeBoss(stage, bossLabel) {
@@ -831,7 +878,12 @@ export function buildTeamExpSchedule({
     allocator,
     allocatorDescription: allocator === 'boss-aware'
       ? 'boss-aware matchup utility per EXP-to-next-level'
-      : 'balanced-lowest-level-first',
+      : allocator === 'boss-aware-soft'
+        ? `boss-aware utility with max training gap ${bossAwareSoftLevelGap}`
+        : 'balanced-lowest-level-first',
+    bossAwareSoftLevelGap: allocator === 'boss-aware-soft'
+      ? Number(bossAwareSoftLevelGap)
+      : null,
     totalMapExp,
     totalMajorExp,
     totalNaturalExp: totalMapExp + totalMajorExp,
