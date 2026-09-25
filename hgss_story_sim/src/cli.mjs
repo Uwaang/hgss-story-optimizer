@@ -1232,6 +1232,82 @@ async function cmdRouteSmoke() {
   console.log(JSON.stringify(output, null, 2));
 }
 
+async function cmdExpRouteSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude', 'Zubat', 'Lapras', 'Tentacool'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing EXP-route smoke candidate: ${name}`);
+    return candidate;
+  });
+  const moveAccess = await loadMoveAccess('core');
+
+  const [naturalContext, paidContext] = await Promise.all([
+    loadExpContext(story, 'all-accessible', 'HEARTGOLD', 'none'),
+    loadExpContext(story, 'all-accessible', 'HEARTGOLD', 'ace-paid'),
+  ]);
+  const natural = await evaluateCandidates(team, story.bosses, 1, moveAccess, naturalContext);
+  const paid = await evaluateCandidates(team, story.bosses, 1, moveAccess, paidContext);
+
+  if (natural.routeBattleCount !== 21 || paid.routeBattleCount !== 21) {
+    throw new Error(
+      `EXP-route smoke expected 21 battles, got natural=${natural.routeBattleCount}, paid=${paid.routeBattleCount}`
+    );
+  }
+  const firstNatural = natural.rows[0];
+  const firstPaid = paid.rows[0];
+  if (!firstNatural || !firstPaid) throw new Error('Missing Falkner EXP-route result');
+
+  const naturalLevels = Object.values(firstNatural.playerLevels || {}).map(Number);
+  const paidLevels = Object.values(firstPaid.playerLevels || {}).map(Number);
+  if (!naturalLevels.length || !paidLevels.length) throw new Error('Missing player levels in EXP-route result');
+  if (naturalLevels.every(level => level === Number(firstNatural.aceLevel))) {
+    throw new Error('Natural EXP route unexpectedly normalized every Falkner mon to ace level');
+  }
+  if (!paidLevels.every(level => level === Number(firstPaid.aceLevel))) {
+    throw new Error(
+      `ace-paid route failed to buy Falkner ace level: ${JSON.stringify(firstPaid.playerLevels)}`
+    );
+  }
+  if (!(Number(paid.expSchedule?.totalGrindExp || 0) > 0)) {
+    throw new Error('ace-paid route recorded no grind EXP');
+  }
+  if (!(Number(paid.expSchedule?.totalExpectedGrindBattles || 0) > 0)) {
+    throw new Error('ace-paid route recorded no expected grind battles');
+  }
+
+  console.log(JSON.stringify({
+    natural: {
+      score: natural.score,
+      firstBattle: {
+        boss: firstNatural.boss,
+        aceLevel: firstNatural.aceLevel,
+        playerLevels: firstNatural.playerLevels,
+        winRate: firstNatural.winRate,
+      },
+      finalLevels: natural.finalLevels,
+      totalNaturalExp: natural.expSchedule?.totalNaturalExp,
+    },
+    acePaid: {
+      score: paid.score,
+      firstBattle: {
+        boss: firstPaid.boss,
+        aceLevel: firstPaid.aceLevel,
+        playerLevels: firstPaid.playerLevels,
+        winRate: firstPaid.winRate,
+        bestWildGrind: paid.expSchedule?.battles?.[0]?.bestWildGrind,
+        grindExpBefore: paid.expSchedule?.battles?.[0]?.grindExpBefore,
+        expectedGrindBattles: paid.expSchedule?.battles?.[0]?.expectedGrindBattles,
+      },
+      finalLevels: paid.finalLevels,
+      totalNaturalExp: paid.expSchedule?.totalNaturalExp,
+      totalGrindExp: paid.expSchedule?.totalGrindExp,
+      totalExpectedGrindBattles: paid.expSchedule?.totalExpectedGrindBattles,
+    },
+  }, null, 2));
+}
+
 async function cmdExpBudget() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
@@ -1597,6 +1673,7 @@ const commands = {
   'route-smoke': cmdRouteSmoke,
   'exp-budget': cmdExpBudget,
   'exp-budget-smoke': cmdExpBudgetSmoke,
+  'exp-route-smoke': cmdExpRouteSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'tutor-smoke': cmdTutorSmoke,
@@ -1608,7 +1685,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
