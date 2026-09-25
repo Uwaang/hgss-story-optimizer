@@ -4,7 +4,12 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { hgssTrainerToShowdownTeam, materializeCandidateTeam, simulateMatchup } from './battle.mjs';
-import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
+import {
+  deriveLevelEvolutionStages,
+  loadPretAvailabilityData,
+  teamRespectsExclusiveGroups,
+  validateAndResolveCandidates,
+} from './availability.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -18,30 +23,62 @@ function arg(name, fallback) {
   return found ? found.slice(prefix.length) : fallback;
 }
 
-async function loadStory() {
+async function loadBossContext() {
   const config = await readJson('config/story-bosses.json');
   const source = await loadPretTrainerData(config.sourceCommit);
-  return { config, source, bosses: extractBosses(source, config) };
+  return {
+    config,
+    bosses: extractBosses(source, config),
+  };
 }
 
-async function loadBosses() {
-  return (await loadStory()).bosses;
-}
-
-async function loadCanonicalPool(version) {
-  const { config, bosses } = await loadStory();
-  const access = await readJson('config/story-access.canonical.json');
-  return buildCanonicalCandidatePool({
-    commit: config.sourceCommit,
-    bosses,
-    access,
-    version,
+function selectByNames(candidates, names) {
+  if (!Array.isArray(names) || !names.length) return candidates;
+  const byName = new Map(candidates.map(candidate => [candidate.species, candidate]));
+  return names.map(name => {
+    const candidate = byName.get(name);
+    if (!candidate) throw new Error(`Baseline candidate not found: ${name}`);
+    return candidate;
   });
 }
 
+async function loadResolvedPool(poolPath, context) {
+  const [pool, access, availability] = await Promise.all([
+    readJson(poolPath),
+    readJson('config/story-access.json'),
+    loadPretAvailabilityData(context.config.sourceCommit),
+  ]);
+
+  const validation = await validateAndResolveCandidates(
+    pool.candidates || [],
+    access,
+    availability,
+    context.config.sourceCommit,
+  );
+  if (!validation.ok) {
+    const failures = validation.rows.filter(row => !row.ok);
+    throw new Error(`Candidate source validation failed: ${JSON.stringify(failures)}`);
+  }
+
+  const candidates = deriveLevelEvolutionStages(
+    validation.candidates,
+    context.bosses,
+    availability.evolutions,
+  );
+
+  return {
+    pool,
+    access,
+    availability,
+    validation,
+    candidates,
+    baseline: selectByNames(candidates, pool.baselineTeam),
+  };
+}
+
 async function cmdExtract() {
-  const bosses = await loadBosses();
-  const compact = bosses.map(boss => ({
+  const context = await loadBossContext();
+  const compact = context.bosses.map(boss => ({
     stage: boss.stage,
     key: boss.key,
     label: boss.label,
@@ -79,41 +116,40 @@ async function evaluateCandidates(candidates, bosses, runs) {
   };
 }
 
-async function cmdPool() {
-  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
-  const full = arg('full', 'false') === 'true';
-  const pool = await loadCanonicalPool(version);
-  if (full) {
-    console.log(JSON.stringify(pool, null, 2));
-    return;
-  }
-  const byStage = {};
-  for (const mon of pool.candidates) {
-    byStage[mon.availableFrom] = (byStage[mon.availableFrom] || 0) + 1;
-  }
+async function cmdValidate() {
+  const poolPath = arg('pool', 'config/candidates.example.json');
+  const context = await loadBossContext();
+  const resolved = await loadResolvedPool(poolPath, context);
   console.log(JSON.stringify({
-    version: pool.version,
-    sourceCommit: pool.sourceCommit,
-    accessMode: pool.accessMode,
-    candidateCount: pool.candidates.length,
-    newCandidatesByStage: byStage,
-    firstTwenty: pool.candidates.slice(0, 20).map(mon => ({
-      species: mon.species,
-      availableFrom: mon.availableFrom,
-      familyId: mon.familyId,
-      speciesByStage: mon.speciesByStage,
-      sourceTypes: [...new Set(mon.sources.map(x => x.type))],
+    sourceCommit: context.config.sourceCommit,
+    pool: poolPath,
+    sources: resolved.validation.rows,
+    derivedCandidates: resolved.candidates.map(candidate => ({
+      species: candidate.species,
+      availableFrom: candidate.availableFrom,
+      exclusiveGroup: candidate.exclusiveGroup || null,
+      speciesByStage: candidate.speciesByStage || [],
+      sourceEvidence: candidate.sourceEvidence,
     })),
+    baselineTeam: resolved.baseline.map(candidate => candidate.species),
   }, null, 2));
 }
 
 async function cmdSimulate() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const runs = Number(arg('runs', '20'));
-  const pool = await readJson(poolPath);
-  const bosses = await loadBosses();
-  const result = await evaluateCandidates(pool.candidates, bosses, runs);
-  console.log(JSON.stringify({ pool: poolPath, runsPerBoss: runs, ...result }, null, 2));
+  const context = await loadBossContext();
+  const resolved = await loadResolvedPool(poolPath, context);
+  if (!teamRespectsExclusiveGroups(resolved.baseline)) {
+    throw new Error('baselineTeam violates exclusiveGroup constraints');
+  }
+  const result = await evaluateCandidates(resolved.baseline, context.bosses, runs);
+  console.log(JSON.stringify({
+    pool: poolPath,
+    baselineTeam: resolved.baseline.map(candidate => candidate.species),
+    runsPerBoss: runs,
+    ...result,
+  }, null, 2));
 }
 
 function * combinations(values, choose, start = 0, prefix = []) {
@@ -131,36 +167,51 @@ function * combinations(values, choose, start = 0, prefix = []) {
 
 async function cmdSearch() {
   const poolPath = arg('pool', 'config/candidates.example.json');
-  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const runs = Number(arg('runs', '5'));
   const teamSize = Number(arg('team-size', '6'));
   const limit = Number(arg('limit', '100'));
-  const pool = poolPath === 'canonical' ? await loadCanonicalPool(version) : await readJson(poolPath);
-  const bosses = await loadBosses();
-  if (pool.candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
+  const context = await loadBossContext();
+  const resolved = await loadResolvedPool(poolPath, context);
+  const candidates = resolved.candidates;
+
+  if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
+
   const results = [];
   let tested = 0;
-  for (const team of combinations(pool.candidates, teamSize)) {
-    if (!validateCandidateTeam(team)) continue;
-    const evaluation = await evaluateCandidates(team, bosses, runs);
+  let rejectedByConstraints = 0;
+  for (const team of combinations(candidates, teamSize)) {
+    if (!teamRespectsExclusiveGroups(team)) {
+      rejectedByConstraints += 1;
+      continue;
+    }
+    const evaluation = await evaluateCandidates(team, context.bosses, runs);
     results.push({
       score: evaluation.score,
       team: team.map(x => x.species),
-      bosses: evaluation.rows.map(row => ({ boss: row.boss, winRate: row.winRate, skipped: row.skipped || false })),
+      bosses: evaluation.rows.map(row => ({
+        boss: row.boss,
+        winRate: row.winRate,
+        skipped: row.skipped || false,
+      })),
     });
     tested += 1;
     if (tested >= limit) break;
   }
   results.sort((a, b) => b.score - a.score);
-  console.log(JSON.stringify({ tested, runsPerBoss: runs, top: results.slice(0, 20) }, null, 2));
+  console.log(JSON.stringify({
+    tested,
+    rejectedByConstraints,
+    runsPerBoss: runs,
+    top: results.slice(0, 20),
+  }, null, 2));
 }
 
 async function cmdSmoke() {
-  const bosses = await loadBosses();
-  const falkner = bosses[0];
+  const context = await loadBossContext();
+  const falkner = context.bosses[0];
   const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
-  const pool = await readJson('config/candidates.example.json');
-  const playerTeam = materializeCandidateTeam(pool.candidates, falkner.stage, falkner.aceLevel);
+  const resolved = await loadResolvedPool('config/candidates.example.json', context);
+  const playerTeam = materializeCandidateTeam(resolved.baseline, falkner.stage, falkner.aceLevel);
   const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
   console.log(JSON.stringify({
     source: falkner.key,
@@ -175,14 +226,15 @@ async function cmdSmoke() {
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
-  pool: cmdPool,
+  validate: cmdValidate,
   simulate: cmdSimulate,
   search: cmdSearch,
   smoke: cmdSmoke,
 };
+
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, extract, pool, simulate, search');
+  console.error('Use one of: smoke, extract, validate, simulate, search');
   process.exitCode = 2;
 } else {
   await commands[command]();
