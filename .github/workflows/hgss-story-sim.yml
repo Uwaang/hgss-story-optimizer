@@ -43,6 +43,8 @@ jobs:
         run: npm run hm-smoke
       - name: Single-use TM ownership smoke test
         run: npm run tm-smoke
+      - name: Purchasable TM cost smoke test
+        run: npm run shop-tm-smoke
       - name: Full Johto route smoke test
         run: npm run simulate -- --runs=1
       - name: Canonical acquisition pool smoke test
