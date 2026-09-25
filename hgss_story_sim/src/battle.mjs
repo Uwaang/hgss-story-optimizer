@@ -113,6 +113,13 @@ function canLearnGen4Machine(species, moveName) {
   return (learnset[move.id] || []).some(source => /^4M/.test(source));
 }
 
+function canLearnGen4Tutor(species, moveName) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return false;
+  const learnset = dex.species.getLearnsetData(species.id).learnset || {};
+  return (learnset[move.id] || []).some(source => /^4T/.test(source));
+}
+
 function candidateMoveScore(species, moveName) {
   const move = dex.moves.get(moveName);
   if (!move.exists) return -Infinity;
@@ -159,6 +166,10 @@ export function candidateMovePool(speciesName, level, stage, moveAccess = null, 
   for (const machine of moveAccess?.reusableMachines || []) {
     if (Number(machine.availableFrom) > stage) continue;
     if (canLearnGen4Machine(species, machine.move)) moves.add(machine.move);
+  }
+  for (const tutor of moveAccess?.reusableTutors || []) {
+    if (Number(tutor.availableFrom) > stage) continue;
+    if (canLearnGen4Tutor(species, tutor.move)) moves.add(tutor.move);
   }
   for (const machine of extraMachines || []) {
     const descriptor = typeof machine === 'string' ? { move: machine, availableFrom: 0 } : machine;
