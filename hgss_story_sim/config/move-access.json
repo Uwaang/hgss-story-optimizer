@@ -279,5 +279,15 @@
       "source": "Goldenrod Game Corner prize counter",
       "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0910_T25SP0101.s"
     }
+  ],
+  "reusableTutors": [
+    {
+      "move": "Headbutt",
+      "availableFrom": 2,
+      "currency": "none",
+      "unitCost": 0,
+      "source": "Ilex Forest Headbutt tutor",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0092_D36R0101.s"
+    }
   ]
 }
