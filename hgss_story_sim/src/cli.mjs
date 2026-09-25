@@ -297,6 +297,38 @@ function storyBattlesForCandidates(bosses, candidates) {
   );
 }
 
+function summarizeCaptureSearch(candidates) {
+  let expectedEncounters = 0;
+  let unknown = 0;
+  let headbuttLowerBounds = 0;
+  const details = [];
+
+  for (const candidate of candidates) {
+    const capture = candidate.captureSearch || { mode: 'unknown', expectedEncounters: null };
+    const value = Number(capture.expectedEncounters);
+    if (Number.isFinite(value)) {
+      expectedEncounters += Math.max(0, value);
+    } else {
+      unknown += 1;
+    }
+    if (capture.mode === 'headbutt-lower-bound') headbuttLowerBounds += 1;
+    details.push({
+      species: candidate.species,
+      mode: capture.mode,
+      expectedEncounters: Number.isFinite(value) ? value : null,
+      source: capture.source || null,
+      catchRate: candidate.catchRate ?? null,
+    });
+  }
+
+  return {
+    expectedEncounters,
+    unknown,
+    headbuttLowerBounds,
+    details,
+  };
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -312,6 +344,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         grindPolicy: expContext?.grindPolicy || 'none',
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
+  const captureSearch = summarizeCaptureSearch(candidates);
   const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
   const purchasable = planPurchasableMachines(candidates, routeBosses, moveAccess, singleUsePlan);
   const purchasablePlan = purchasable.assignments;
@@ -392,6 +425,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     catchUpExp: catchUp.totalExp,
     catchUpExpUnknown: catchUp.expUnknown,
     catchUpDetails: catchUp.details,
+    captureSearch,
     singleUsePlan,
     purchasablePlan,
     purchaseCosts,
@@ -485,6 +519,8 @@ async function cmdPool() {
       availableFrom: mon.availableFrom,
       familyId: mon.familyId,
       growthRate: mon.growthRate ?? null,
+      catchRate: mon.catchRate ?? null,
+      captureSearch: mon.captureSearch ?? null,
       entryLevelMin: mon.entryLevelMin ?? null,
       entryLevelMax: mon.entryLevelMax ?? null,
       speciesByStage: mon.speciesByStage,
@@ -626,12 +662,18 @@ function paretoFront(rows) {
     const otherExp = rowExpBurden(other);
     const rowUnknown = rowExpUnknown(row);
     const otherUnknown = rowExpUnknown(other);
+    const rowCapture = Number(row.captureSearch?.expectedEncounters || 0);
+    const otherCapture = Number(other.captureSearch?.expectedEncounters || 0);
+    const rowCaptureUnknown = Number(row.captureSearch?.unknown || 0);
+    const otherCaptureUnknown = Number(other.captureSearch?.unknown || 0);
 
     const atLeastAsGood =
       other.score >= row.score &&
       other.worstBossWinRate >= row.worstBossWinRate &&
       otherExp <= rowExp &&
       otherUnknown <= rowUnknown &&
+      otherCapture <= rowCapture &&
+      otherCaptureUnknown <= rowCaptureUnknown &&
       otherMoney <= rowMoney &&
       otherCoins <= rowCoins;
     const strictlyBetter =
@@ -639,6 +681,8 @@ function paretoFront(rows) {
       other.worstBossWinRate > row.worstBossWinRate ||
       otherExp < rowExp ||
       otherUnknown < rowUnknown ||
+      otherCapture < rowCapture ||
+      otherCaptureUnknown < rowCaptureUnknown ||
       otherMoney < rowMoney ||
       otherCoins < rowCoins;
     return atLeastAsGood && strictlyBetter;
@@ -655,6 +699,7 @@ function searchResultRow(team, evaluation) {
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
     expBurden: evaluationExpBurden(evaluation),
     expBurdenUnknown: evaluationExpUnknown(evaluation),
+    captureSearch: evaluation.captureSearch,
     team: team.map(x => x.species),
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
@@ -706,12 +751,18 @@ function evaluationDominates(a, b) {
   const bExp = evaluationExpBurden(b);
   const aUnknown = evaluationExpUnknown(a);
   const bUnknown = evaluationExpUnknown(b);
+  const aCapture = Number(a.captureSearch?.expectedEncounters || 0);
+  const bCapture = Number(b.captureSearch?.expectedEncounters || 0);
+  const aCaptureUnknown = Number(a.captureSearch?.unknown || 0);
+  const bCaptureUnknown = Number(b.captureSearch?.unknown || 0);
 
   const atLeastAsGood =
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
     aExp <= bExp &&
     aUnknown <= bUnknown &&
+    aCapture <= bCapture &&
+    aCaptureUnknown <= bCaptureUnknown &&
     aMoney <= bMoney &&
     aCoins <= bCoins;
   const strictlyBetter =
@@ -719,6 +770,8 @@ function evaluationDominates(a, b) {
     a.worstBossWinRate > b.worstBossWinRate ||
     aExp < bExp ||
     aUnknown < bUnknown ||
+    aCapture < bCapture ||
+    aCaptureUnknown < bCaptureUnknown ||
     aMoney < bMoney ||
     aCoins < bCoins;
   return atLeastAsGood && strictlyBetter;
@@ -757,6 +810,14 @@ function selectMultiObjectiveBeam(states, width) {
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
+  const byCapture = [...front].sort((a, b) =>
+    Number(a.evaluation.captureSearch?.expectedEncounters || 0) -
+      Number(b.evaluation.captureSearch?.expectedEncounters || 0) ||
+    Number(a.evaluation.captureSearch?.unknown || 0) -
+      Number(b.evaluation.captureSearch?.unknown || 0) ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
   const byMoney = [...front].sort((a, b) =>
     Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0) ||
     b.evaluation.score - a.evaluation.score ||
@@ -776,6 +837,7 @@ function selectMultiObjectiveBeam(states, width) {
   add(byScore[0]);
   add(byWorstBoss[0]);
   add(byExp[0]);
+  add(byCapture[0]);
   add(byMoney[0]);
   add(byCoins[0]);
 
@@ -821,6 +883,7 @@ function selectCandidateScreenRows(rows, width) {
     (a, b) => b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate,
     (a, b) => Number(a.evaluation.expSchedule?.totalGrindExp || 0) - Number(b.evaluation.expSchedule?.totalGrindExp || 0),
     (a, b) => evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation),
+    (a, b) => Number(a.evaluation.captureSearch?.expectedEncounters || 0) - Number(b.evaluation.captureSearch?.expectedEncounters || 0),
     (a, b) => Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0),
     (a, b) => Number(a.evaluation.purchaseCosts?.coins || 0) - Number(b.evaluation.purchaseCosts?.coins || 0),
     (a, b) => a.candidate.availableFrom - b.candidate.availableFrom,
@@ -1269,6 +1332,50 @@ async function cmdRouteSmoke() {
   console.log(JSON.stringify(output, null, 2));
 }
 
+async function cmdCaptureSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const get = name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Capture-smoke candidate not found: ${name}`);
+    return candidate;
+  };
+
+  const mareep = get('Mareep');
+  const lapras = get('Lapras');
+  const heracross = get('Heracross');
+
+  if (mareep.captureSearch?.mode !== 'wild' ||
+      !(Number(mareep.captureSearch?.expectedEncounters) > 0)) {
+    throw new Error(`Mareep wild search cost invalid: ${JSON.stringify(mareep.captureSearch)}`);
+  }
+  if (lapras.captureSearch?.mode !== 'fixed-or-gift' ||
+      Number(lapras.captureSearch?.expectedEncounters) !== 0) {
+    throw new Error(`Lapras fixed encounter cost invalid: ${JSON.stringify(lapras.captureSearch)}`);
+  }
+  if (heracross.captureSearch?.mode !== 'headbutt-lower-bound' ||
+      !(Number(heracross.captureSearch?.expectedEncounters) > 0)) {
+    throw new Error(`Heracross Headbutt lower bound invalid: ${JSON.stringify(heracross.captureSearch)}`);
+  }
+
+  console.log(JSON.stringify({
+    Mareep: {
+      captureSearch: mareep.captureSearch,
+      catchRate: mareep.catchRate,
+      entryLevelMin: mareep.entryLevelMin,
+      entryLevelMax: mareep.entryLevelMax,
+    },
+    Lapras: {
+      captureSearch: lapras.captureSearch,
+      catchRate: lapras.catchRate,
+    },
+    Heracross: {
+      captureSearch: heracross.captureSearch,
+      catchRate: heracross.catchRate,
+    },
+  }, null, 2));
+}
+
 async function cmdExpRouteSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -1710,6 +1817,7 @@ const commands = {
   'route-smoke': cmdRouteSmoke,
   'exp-budget': cmdExpBudget,
   'exp-budget-smoke': cmdExpBudgetSmoke,
+  'capture-smoke': cmdCaptureSmoke,
   'exp-route-smoke': cmdExpRouteSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
@@ -1722,7 +1830,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
