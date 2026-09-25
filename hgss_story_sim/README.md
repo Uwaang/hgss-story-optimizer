@@ -12,6 +12,7 @@ This module searches for strong Pokémon HeartGold/SoulSilver story parties by c
 - NPC IVs reproduce HGSS's `floor(difficulty * 31 / 255)` formula.
 - Trainer class/gender metadata and the HGSS LCRNG path reproduce deterministic NPC personality, nature, and ability slot.
 - Battles are deterministic by seed and can be repeated.
+- The player-side policy can voluntarily switch when a bench matchup is materially better; the NPC side remains attack-focused to avoid inventing aggressive trainer switching.
 - Candidate levels are still normalized to each boss's ace level for the battle itself.
 
 ### Acquisition and evolution
@@ -129,7 +130,7 @@ npm run tm-smoke
 This is not yet a bit-perfect HGSS story emulator.
 
 - Trainer bag-item use is not modeled.
-- Battle decisions use a deterministic greedy policy rather than the exact HGSS AI flags.
+- Battle decisions use a deterministic heuristic policy (including conservative player switching) rather than an exhaustive optimal controller or exact HGSS AI flags.
 - Story map/method unlock stages are conservative curated checkpoints, not a full map-event reachability graph.
 - Friendship, stone, trade, move-known, and location evolutions remain conservative/manual.
 - Only a subset of story TMs is modeled; shops, many overworld TMs, and tutors still need coverage.
@@ -144,6 +145,7 @@ GitHub Actions verifies:
 - dependency install and syntax checks;
 - curated source-backed acquisition validation;
 - a real Falkner battle;
+- a targeted player-side matchup-switch case;
 - reusable-HM timing;
 - one-use TM ownership;
 - one full pass over all 13 Johto/E4/Lance bosses;
