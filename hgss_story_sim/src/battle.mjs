@@ -417,9 +417,13 @@ function scoreMove(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove.move);
   if (!move.exists || requestedMove.disabled) return -Infinity;
   if (move.category === 'Status') {
-    const useful = new Set(['recover', 'roost', 'synthesis', 'hypnosis', 'thunderwave', 'toxic', 'willowisp', 'swordsdance', 'dragondance', 'calmmind']);
+    const useful = new Set([
+      'recover', 'roost', 'synthesis', 'hypnosis', 'thunderwave',
+      'toxic', 'willowisp', 'swordsdance', 'dragondance', 'calmmind',
+    ]);
     return useful.has(move.id) ? 18 : 2;
   }
+
   const immunity = dex.getImmunity(move.type, target);
   if (!immunity) return 0;
   const typeMod = dex.getEffectiveness(move, target);
@@ -427,7 +431,22 @@ function scoreMove(active, target, requestedMove) {
   const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   const priority = move.priority > 0 ? 1.05 : 1;
-  return Math.max(move.basePower || 1, 1) * effectiveness * stab * accuracy * priority;
+
+  const fixedDamage = typeof move.damage === 'number' ? move.damage : null;
+  if (fixedDamage !== null) {
+    return fixedDamage * effectiveness * accuracy * priority;
+  }
+
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
+  const statRatio = attack / defense;
+  const power = Math.max(move.basePower || 1, 1);
+
+  // This is a ranking heuristic, not a replacement for Showdown's damage
+  // calculation. The battle engine still resolves the real move and damage.
+  return power * statRatio * effectiveness * stab * accuracy * priority;
 }
 
 function battleMonMoveScore(mon, target) {
