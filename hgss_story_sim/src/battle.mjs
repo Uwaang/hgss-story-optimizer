@@ -385,7 +385,7 @@ function bestVoluntarySwitch(request, side, foeActive, active, activeRequest) {
   return null;
 }
 
-function selectChoice(request, battleStream, sideId) {
+function selectChoice(request, battleStream, sideId, stats = null) {
   if (request.wait) return null;
   if (request.teamPreview) return 'default';
   const battle = battleStream.battle;
@@ -420,8 +420,14 @@ function selectChoice(request, battleStream, sideId) {
       if (!activeRequest) return 'pass';
       const active = activeBattleMons[i];
       if (sideId === 'p1' && request.active.length === 1) {
-        const switchChoice = bestVoluntarySwitch(request, side, foeActive, active, activeRequest);
-        if (switchChoice) return switchChoice;
+        const turn = Number(battle?.turn || 0);
+        const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
+        const underSwitchCap = Number(stats?.voluntarySwitches || 0) < 6;
+        const cooldownReady = turn - lastSwitchTurn >= 3;
+        if (underSwitchCap && cooldownReady) {
+          const switchChoice = bestVoluntarySwitch(request, side, foeActive, active, activeRequest);
+          if (switchChoice) return switchChoice;
+        }
       }
       const legal = activeRequest.moves
         .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
@@ -440,9 +446,12 @@ async function runGreedyAi(playerStream, battleStream, sideId, stats) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|request|')) continue;
       const request = JSON.parse(line.slice('|request|'.length));
-      const choice = selectChoice(request, battleStream, sideId);
+      const choice = selectChoice(request, battleStream, sideId, stats);
       if (choice) {
-        if (choice.startsWith('switch ') && !request.forceSwitch) stats.voluntarySwitches += 1;
+        if (choice.startsWith('switch ') && !request.forceSwitch) {
+          stats.voluntarySwitches += 1;
+          stats.lastVoluntarySwitchTurn = Number(battleStream.battle?.turn || 0);
+        }
         await playerStream.write(choice);
       }
     }
@@ -452,8 +461,8 @@ async function runGreedyAi(playerStream, battleStream, sideId, stats) {
 export async function runBattle(p1Team, p2Team, seed = 1) {
   const battleStream = new BattleStream();
   const streams = getPlayerStreams(battleStream);
-  const p1Stats = { voluntarySwitches: 0 };
-  const p2Stats = { voluntarySwitches: 0 };
+  const p1Stats = { voluntarySwitches: 0, lastVoluntarySwitchTurn: -999 };
+  const p2Stats = { voluntarySwitches: 0, lastVoluntarySwitchTurn: -999 };
   const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats).catch(() => undefined);
   const p2Task = runGreedyAi(streams.p2, battleStream, 'p2', p2Stats).catch(() => undefined);
   const resultPromise = (async () => {
