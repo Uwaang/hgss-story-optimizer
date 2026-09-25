@@ -140,13 +140,18 @@ export async function buildCanonicalCandidatePool({
   if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
     throw new Error('version must be HEARTGOLD or SOULSILVER');
   }
-  const [encounterJson, headbuttJson, evoJson] = await Promise.all([
+  const [encounterJson, headbuttJson, evoJson, personalJson] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/arc/headbutt.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/evo.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
   ]);
   const encounterByMap = buildEncounterIndex(encounterJson.encounters || []);
   const headbuttByMap = new Map((headbuttJson.tables || []).map(x => [x.Map, x]));
+  const growthBySpecies = new Map((personalJson.baseStats || []).map(row => [
+    `SPECIES_${row.species}`,
+    row.growthRate,
+  ]));
   const evoByBase = new Map((evoJson.evoTable || []).map(x => [x.baseSpecies, x.evos || []]));
   const parentByTarget = new Map();
   for (const row of evoJson.evoTable || []) {
@@ -230,6 +235,7 @@ export async function buildCanonicalCandidatePool({
       species: constantToName(row.speciesConst, 'SPECIES_'),
       availableFrom: row.availableFrom,
       familyId: familyRoot(row.speciesConst, parentByTarget),
+      growthRate: growthBySpecies.get(row.speciesConst) || null,
       entryLevelMin: row.entryLevelMin,
       entryLevelMax: row.entryLevelMax,
       speciesByStage: buildLevelEvolutionStages(row.speciesConst, row.availableFrom, bosses, evoByBase),
@@ -244,6 +250,7 @@ export async function buildCanonicalCandidatePool({
     const enriched = {
       ...manual,
       familyId: familyRoot(speciesConst, parentByTarget),
+      growthRate: growthBySpecies.get(speciesConst) || null,
       entryLevelMin: Number.isFinite(manualLevel) ? manualLevel : null,
       entryLevelMax: Number.isFinite(manualLevel) ? manualLevel : null,
       speciesByStage: buildLevelEvolutionStages(speciesConst, manual.availableFrom, bosses, evoByBase),
@@ -290,6 +297,7 @@ export async function buildCanonicalCandidatePool({
       'Only unambiguous EVO_LEVEL evolutions are auto-applied; friendship, stone, trade, move, and location evolutions remain conservative.',
       'Headbutt/static/gift exceptions are represented as manual acquisitions with provenance notes.',
       'Wild candidate entry-level ranges are derived from the same encounter slots and retained for catch-up/grinding metrics.',
+      'Species growth rates are read from files/poketool/personal/personal.json for EXP-aware burden metrics.',
     ],
     candidates,
   };
