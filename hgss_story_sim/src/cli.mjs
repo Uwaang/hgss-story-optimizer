@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
@@ -91,6 +91,14 @@ function normalizeSameStageJoinPolicy(value) {
   return policy;
 }
 
+function normalizeExpAllocator(value) {
+  const allocator = String(value || 'balanced').toLowerCase();
+  if (!['balanced', 'boss-aware'].includes(allocator)) {
+    throw new Error(`Unknown EXP allocator: ${value}. Use balanced or boss-aware.`);
+  }
+  return allocator;
+}
+
 async function loadExpContext(
   story,
   expProfile,
@@ -98,17 +106,20 @@ async function loadExpContext(
   grindPolicy = 'none',
   entryLevelPolicy = 'midpoint',
   sameStageJoinPolicy = 'after-map-exp',
+  expAllocator = 'balanced',
 ) {
   const profile = normalizeExpProfile(expProfile);
   const normalizedGrindPolicy = normalizeGrindPolicy(grindPolicy);
   const normalizedEntryLevelPolicy = normalizeEntryLevelPolicy(entryLevelPolicy);
   const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
+  const normalizedExpAllocator = normalizeExpAllocator(expAllocator);
   if (profile === 'ace') {
     return {
       profile,
       grindPolicy: 'none',
       entryLevelPolicy: normalizedEntryLevelPolicy,
       sameStageJoinPolicy: normalizedSameStageJoinPolicy,
+      expAllocator: normalizedExpAllocator,
       world: null,
     };
   }
@@ -130,6 +141,7 @@ async function loadExpContext(
     grindPolicy: normalizedGrindPolicy,
     entryLevelPolicy: normalizedEntryLevelPolicy,
     sameStageJoinPolicy: normalizedSameStageJoinPolicy,
+    expAllocator: normalizedExpAllocator,
     world,
   };
 }
@@ -446,6 +458,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         grindPolicy: expContext?.grindPolicy || 'none',
         entryLevelPolicy: expContext?.entryLevelPolicy || 'midpoint',
         sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'after-map-exp',
+        allocator: expContext?.expAllocator || 'balanced',
+        levelUtility: candidateBossUtility,
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -706,6 +720,7 @@ async function cmdSimulate() {
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -725,6 +740,7 @@ async function cmdSimulate() {
       grindPolicy,
       entryLevelPolicy,
       sameStageJoinPolicy,
+      expAllocator,
     ),
   ]);
   const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext, grindPolicy);
@@ -737,6 +753,7 @@ async function cmdSimulate() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    expAllocator,
     runsPerBoss: runs,
     ...result,
   }, null, 2));
@@ -1172,6 +1189,7 @@ async function cmdSearch() {
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const story = await loadStory();
 
   let candidates;
@@ -1192,6 +1210,7 @@ async function cmdSearch() {
       grindPolicy,
       entryLevelPolicy,
       sameStageJoinPolicy,
+      expAllocator,
     ),
   ]);
 
@@ -1288,6 +1307,7 @@ async function cmdConvergence() {
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const beamWidths = String(arg('beam-widths', '4,8,16'))
     .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
   const candidateCaps = String(arg('candidate-caps', '16,24,32'))
@@ -1307,6 +1327,7 @@ async function cmdConvergence() {
       grindPolicy,
       entryLevelPolicy,
       sameStageJoinPolicy,
+      expAllocator,
     ),
   ]);
   const candidates = pool.candidates;
@@ -1380,6 +1401,7 @@ async function cmdConvergence() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    expAllocator,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -1416,6 +1438,7 @@ async function cmdOptimize() {
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -1430,6 +1453,7 @@ async function cmdOptimize() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    expAllocator,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -1925,6 +1949,7 @@ async function cmdExpBudget() {
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   if (profile === 'ace') {
     throw new Error('exp-budget requires --exp-profile=major, normal-route, or all-accessible');
   }
@@ -1957,6 +1982,8 @@ async function cmdExpBudget() {
     grindPolicy,
     entryLevelPolicy,
     sameStageJoinPolicy,
+    allocator: expAllocator,
+    levelUtility: candidateBossUtility,
   });
 
   console.log(JSON.stringify({
@@ -2058,6 +2085,52 @@ async function cmdExpBudgetSmoke() {
       firstBattle: acePaid.battles[0],
       finalLevels: acePaid.finalLevels,
     },
+  }, null, 2));
+}
+
+async function cmdExpAllocatorSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude', 'Zubat', 'Lapras', 'Tentacool'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing allocator-smoke candidate: ${name}`);
+    return candidate;
+  });
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(story, 'normal-route', 'HEARTGOLD');
+
+  const balanced = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'balanced',
+  });
+  const bossAware = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware',
+    levelUtility: candidateBossUtility,
+  });
+
+  if (balanced.totalNaturalExp !== bossAware.totalNaturalExp) {
+    throw new Error(
+      `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${bossAware.totalNaturalExp}`
+    );
+  }
+  if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
+    throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
+  }
+
+  console.log(JSON.stringify({
+    totalNaturalExp: balanced.totalNaturalExp,
+    balanced: { allocator: balanced.allocator, finalLevels: balanced.finalLevels },
+    bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
   }, null, 2));
 }
 
@@ -2299,6 +2372,7 @@ const commands = {
   'exp-envelope-smoke': cmdExpEnvelopeSmoke,
   'exp-budget': cmdExpBudget,
   'exp-budget-smoke': cmdExpBudgetSmoke,
+  'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'capture-smoke': cmdCaptureSmoke,
   'exp-route-smoke': cmdExpRouteSmoke,
   'exp-smoke': cmdExpSmoke,
@@ -2312,7 +2386,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-allocator-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
