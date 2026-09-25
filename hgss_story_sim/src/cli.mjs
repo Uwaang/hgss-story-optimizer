@@ -73,10 +73,45 @@ function normalizeGrindPolicy(value) {
   return policy;
 }
 
-async function loadExpContext(story, expProfile, version = 'HEARTGOLD', grindPolicy = 'none') {
+function normalizeEntryLevelPolicy(value) {
+  const policy = String(value || 'midpoint').toLowerCase();
+  if (!['min', 'midpoint', 'max'].includes(policy)) {
+    throw new Error(`Unknown entry-level policy: ${value}. Use min, midpoint, or max.`);
+  }
+  return policy;
+}
+
+function normalizeSameStageJoinPolicy(value) {
+  const policy = String(value || 'after-map-exp').toLowerCase();
+  if (!['after-map-exp', 'before-map-exp'].includes(policy)) {
+    throw new Error(
+      `Unknown same-stage join policy: ${value}. Use after-map-exp or before-map-exp.`
+    );
+  }
+  return policy;
+}
+
+async function loadExpContext(
+  story,
+  expProfile,
+  version = 'HEARTGOLD',
+  grindPolicy = 'none',
+  entryLevelPolicy = 'midpoint',
+  sameStageJoinPolicy = 'after-map-exp',
+) {
   const profile = normalizeExpProfile(expProfile);
   const normalizedGrindPolicy = normalizeGrindPolicy(grindPolicy);
-  if (profile === 'ace') return { profile, grindPolicy: 'none', world: null };
+  const normalizedEntryLevelPolicy = normalizeEntryLevelPolicy(entryLevelPolicy);
+  const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
+  if (profile === 'ace') {
+    return {
+      profile,
+      grindPolicy: 'none',
+      entryLevelPolicy: normalizedEntryLevelPolicy,
+      sameStageJoinPolicy: normalizedSameStageJoinPolicy,
+      world: null,
+    };
+  }
   const [baseAccess, expAccess] = await Promise.all([
     readJson('config/story-access.canonical.json'),
     readJson('config/exp-access.json'),
@@ -90,7 +125,13 @@ async function loadExpContext(story, expProfile, version = 'HEARTGOLD', grindPol
     trainerSource: story.source,
     version,
   });
-  return { profile, grindPolicy: normalizedGrindPolicy, world };
+  return {
+    profile,
+    grindPolicy: normalizedGrindPolicy,
+    entryLevelPolicy: normalizedEntryLevelPolicy,
+    sameStageJoinPolicy: normalizedSameStageJoinPolicy,
+    world,
+  };
 }
 
 async function loadMoveAccess(resourceProfile = 'all', spendPolicy = 'unbounded') {
@@ -403,6 +444,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         expWorld: expContext.world,
         profile: expProfile,
         grindPolicy: expContext?.grindPolicy || 'none',
+        entryLevelPolicy: expContext?.entryLevelPolicy || 'midpoint',
+        sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'after-map-exp',
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -661,6 +704,8 @@ async function cmdSimulate() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -673,7 +718,14 @@ async function cmdSimulate() {
 
   const [moveAccess, expContext] = await Promise.all([
     loadMoveAccess(resourceProfile, spendPolicy),
-    loadExpContext(story, expProfile, 'HEARTGOLD', grindPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      'HEARTGOLD',
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+    ),
   ]);
   const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext, grindPolicy);
   console.log(JSON.stringify({
@@ -683,6 +735,8 @@ async function cmdSimulate() {
     spendPolicy,
     expProfile,
     grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
     runsPerBoss: runs,
     ...result,
   }, null, 2));
@@ -1116,6 +1170,8 @@ async function cmdSearch() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
   const story = await loadStory();
 
   let candidates;
@@ -1129,7 +1185,14 @@ async function cmdSearch() {
   const requiredCandidate = findStarterCandidate(candidates, starterName);
   const [moveAccess, expContext] = await Promise.all([
     loadMoveAccess(resourceProfile, spendPolicy),
-    loadExpContext(story, expProfile, version, grindPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+    ),
   ]);
 
   if (strategy === 'beam') {
@@ -1156,6 +1219,8 @@ async function cmdSearch() {
       spendPolicy,
       expProfile,
       grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -1200,6 +1265,8 @@ async function cmdSearch() {
     spendPolicy,
     expProfile,
     grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -1227,6 +1294,8 @@ async function cmdOptimize() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'unbounded'));
   const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -1239,6 +1308,8 @@ async function cmdOptimize() {
     spendPolicy,
     expProfile,
     grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -1251,7 +1322,14 @@ async function cmdOptimize() {
   for (const version of versions) {
     const [pool, expContext] = await Promise.all([
       loadCanonicalPool(version, story),
-      loadExpContext(story, expProfile, version, grindPolicy),
+      loadExpContext(
+        story,
+        expProfile,
+        version,
+        grindPolicy,
+        entryLevelPolicy,
+        sameStageJoinPolicy,
+      ),
     ]);
     const candidates = pool.candidates;
     const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
@@ -1725,8 +1803,10 @@ async function cmdExpBudget() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const profile = normalizeExpProfile(arg('exp-profile', 'all-accessible'));
   const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'after-map-exp'));
   if (profile === 'ace') {
-    throw new Error('exp-budget requires --exp-profile=major or all-accessible');
+    throw new Error('exp-budget requires --exp-profile=major, normal-route, or all-accessible');
   }
   const requestedTeam = String(arg(
     'team',
@@ -1741,13 +1821,22 @@ async function cmdExpBudget() {
     return candidate;
   });
   const route = storyBattlesForCandidates(story.bosses, team);
-  const expContext = await loadExpContext(story, profile, version, grindPolicy);
+  const expContext = await loadExpContext(
+    story,
+    profile,
+    version,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+  );
   const schedule = buildTeamExpSchedule({
     candidates: team,
     routeBosses: route,
     expWorld: expContext.world,
     profile,
     grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
   });
 
   console.log(JSON.stringify({
