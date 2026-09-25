@@ -10,7 +10,8 @@
     "search": "node src/cli.mjs search",
     "smoke": "node src/cli.mjs smoke",
     "pool": "node src/cli.mjs pool",
-    "validate": "node src/cli.mjs validate"
+    "validate": "node src/cli.mjs validate",
+    "hm-smoke": "node src/cli.mjs hm-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
