@@ -263,8 +263,9 @@ function candidateKey(candidate) {
   return candidate.familyId || candidate.species;
 }
 
-export function planSingleUseMachines(candidates, bosses, moveAccess = null) {
+export function planSingleUseMachines(candidates, bosses, moveAccess = null, options = {}) {
   const assignments = {};
+  const levelsByBattle = Array.isArray(options.levelsByBattle) ? options.levelsByBattle : null;
   const machines = [...(moveAccess?.singleUseMachines || [])]
     .sort((a, b) => Number(a.availableFrom) - Number(b.availableFrom) || String(a.machine).localeCompare(String(b.machine)));
 
@@ -278,17 +279,20 @@ export function planSingleUseMachines(candidates, bosses, moveAccess = null) {
       let totalGain = 0;
       let legalSomewhere = false;
 
-      for (const boss of bosses) {
+      for (const [bossIndex, boss] of bosses.entries()) {
         if (boss.stage < Number(candidate.availableFrom || 0)) continue;
         if (boss.stage < Number(machine.availableFrom || 0)) continue;
 
-        const speciesName = candidateSpeciesAtStage(candidate, boss.stage);
+        const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
+          ? Number(levelsByBattle[bossIndex][key])
+          : Number(boss.aceLevel);
+        const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
         const species = dex.species.get(speciesName);
         if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
         legalSomewhere = true;
 
-        const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, existing);
-        const after = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, [...existing, machine]);
+        const before = selectCandidateMoves(speciesName, actualLevel, boss.stage, moveAccess, existing);
+        const after = selectCandidateMoves(speciesName, actualLevel, boss.stage, moveAccess, [...existing, machine]);
         totalGain += Math.max(0, moveSetScore(speciesName, after) - moveSetScore(speciesName, before));
       }
 
@@ -317,7 +321,7 @@ function planPurchasableMachinesBudgeted(
   bosses,
   moveAccess,
   singleUsePlan,
-  { maxMoneyEquivalent, moneyPerCoin = 20 },
+  { maxMoneyEquivalent, moneyPerCoin = 20, levelsByBattle = null },
 ) {
   const limit = Math.max(0, Number(maxMoneyEquivalent || 0));
   const machines = [...(moveAccess?.purchasableMachines || [])]
@@ -357,20 +361,23 @@ function planPurchasableMachinesBudgeted(
 
         let totalGain = 0;
         let legalSomewhere = false;
-        for (const boss of bosses) {
+        for (const [bossIndex, boss] of bosses.entries()) {
           if (boss.stage < Number(state.candidate.availableFrom || 0)) continue;
           if (boss.stage < Number(machine.availableFrom || 0)) continue;
 
-          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage);
+          const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[state.key]))
+            ? Number(levelsByBattle[bossIndex][state.key])
+            : Number(boss.aceLevel);
+          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage, actualLevel);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
 
           const current = [...state.owned, ...state.purchased];
-          const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, current);
+          const before = selectCandidateMoves(speciesName, actualLevel, boss.stage, moveAccess, current);
           const after = selectCandidateMoves(
             speciesName,
-            boss.aceLevel,
+            actualLevel,
             boss.stage,
             moveAccess,
             [...current, machine],
@@ -437,12 +444,14 @@ export function planPurchasableMachines(
       {
         maxMoneyEquivalent,
         moneyPerCoin: Number(options.moneyPerCoin || 20),
+        levelsByBattle: Array.isArray(options.levelsByBattle) ? options.levelsByBattle : null,
       },
     );
   }
 
   const assignments = {};
   const costs = {};
+  const levelsByBattle = Array.isArray(options.levelsByBattle) ? options.levelsByBattle : null;
   const machines = [...(moveAccess?.purchasableMachines || [])]
     .sort((a, b) =>
       Number(a.availableFrom) - Number(b.availableFrom) ||
@@ -467,18 +476,21 @@ export function planPurchasableMachines(
         let totalGain = 0;
         let legalSomewhere = false;
 
-        for (const boss of bosses) {
+        for (const [bossIndex, boss] of bosses.entries()) {
           if (boss.stage < Number(candidate.availableFrom || 0)) continue;
           if (boss.stage < Number(machine.availableFrom || 0)) continue;
 
-          const speciesName = candidateSpeciesAtStage(candidate, boss.stage);
+          const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
+            ? Number(levelsByBattle[bossIndex][key])
+            : Number(boss.aceLevel);
+          const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
 
           const current = [...owned, ...purchased];
-          const before = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, current);
-          const after = selectCandidateMoves(speciesName, boss.aceLevel, boss.stage, moveAccess, [...current, machine]);
+          const before = selectCandidateMoves(speciesName, actualLevel, boss.stage, moveAccess, current);
+          const after = selectCandidateMoves(speciesName, actualLevel, boss.stage, moveAccess, [...current, machine]);
           totalGain += Math.max(0, moveSetScore(speciesName, after) - moveSetScore(speciesName, before));
         }
 
