@@ -157,7 +157,8 @@
       "availableFrom": 1,
       "source": "gift-egg",
       "note": "Mystery Egg received after Falkner; assumes hatching before Bugsy.",
-      "level": 1
+      "level": 1,
+      "beforeBoss": "Bugsy"
     },
     {
       "species": "Heracross",
@@ -178,7 +179,8 @@
       "availableFrom": 3,
       "source": "gift",
       "note": "Bill gift after meeting Bill in Ecruteak and returning to Goldenrod.",
-      "level": 5
+      "level": 5,
+      "beforeBoss": "Morty"
     },
     {
       "species": "Sudowoodo",
@@ -186,7 +188,8 @@
       "source": "static",
       "note": "Route 36 static encounter after Whitney.",
       "level": 20,
-      "map": "R36"
+      "map": "R36",
+      "beforeBoss": "Silver (Burned Tower)"
     },
     {
       "species": "Shuckle",
@@ -202,7 +205,8 @@
       "source": "static",
       "note": "Friday Union Cave B2F encounter; Surf required.",
       "level": 20,
-      "map": "D25R0103"
+      "map": "D25R0103",
+      "beforeBoss": "Chuck"
     },
     {
       "species": "Gyarados",
@@ -226,7 +230,8 @@
       "source": "gift",
       "note": "Mt. Mortar gift; conservative placement after Rising Badge/Waterfall access.",
       "level": 10,
-      "map": "D42R0101"
+      "map": "D42R0101",
+      "beforeBoss": "Silver (Victory Road)"
     }
   ]
 }
