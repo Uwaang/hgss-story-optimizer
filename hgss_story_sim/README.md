@@ -83,7 +83,14 @@ EXP supply profiles:
 - `normal-route`: canonical-route map envelope plus the 21 major battles; this intentionally excludes the extra Gym/Rocket maps used only by the upper envelope
 - `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
 
-Late-joining Pokémon never receive EXP from earlier stages. For stages after Falkner, the conservative default also prevents a newly obtainable Pokémon from retroactively receiving that stage's full map-EXP bucket before it joins. Natural EXP is allocated with a deterministic **lowest-level-first balanced policy**.
+Late-joining Pokémon never receive EXP from earlier stages. For stages after Falkner, the conservative default also prevents a newly obtainable Pokémon from retroactively receiving that stage's full map-EXP bucket before it joins.
+
+Natural EXP supports two deterministic allocation policies:
+
+- `balanced` (default): lowest-level-first, then lowest progress within the current level;
+- `boss-aware`: prioritizes the next level with the best next-boss matchup utility per EXP-to-next-level, including type matchups, level-up move breakpoints and level-based evolutions.
+
+The boss-aware score is intentionally a cheap training heuristic rather than a nested battle simulation, so search cost stays tractable. Use `--exp-allocator=balanced|boss-aware` to compare sensitivity.
 
 Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=after-map-exp|before-map-exp`; the latter restores the previous optimistic same-stage behavior.
 
@@ -289,7 +296,7 @@ This is not yet a bit-perfect HGSS story emulator.
 - overworld TM coverage is incomplete;
 - `normal-route` is a canonical-map envelope, not yet a trainer-by-trainer proof of the exact mandatory/on-route subset;
 - `all-accessible` is an accessible-trainer EXP/money upper envelope;
-- EXP allocation is a deterministic balanced policy rather than a jointly optimized switch-training schedule;
+- EXP allocation can be balanced or boss-aware, but neither is a globally optimized switch-training schedule;
 - midpoint encounter levels reduce the previous max-level optimism, but encounter-level choice is still an explicit modeling policy;
 - the natural spending budget assumes all modeled pre-Whitney prize money can be reserved for TMs and does not yet subtract routine Poké Ball/healing-item purchases;
 - beam search is heuristic and does not prove the global optimum;
@@ -302,6 +309,7 @@ GitHub Actions currently checks:
 - syntax and source-backed acquisition validation
 - exact growth-curve smoke
 - source-backed natural EXP supply and real per-Pokémon battle levels
+- balanced vs boss-aware EXP allocation
 - paid-grind EXP / expected-wild-battle accounting
 - starter-specific 21-battle route selection
 - real battle completion
