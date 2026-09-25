@@ -1,15 +1,70 @@
 {
   "notes": "Source-backed example pool. Acquisition evidence is defined in story-access.json and validated against the pinned pret source. Level-based evolutions are derived automatically from evo.json; speciesByStage is reserved for explicitly modeled non-level evolutions.",
   "candidates": [
-    {"species": "Chikorita", "source": "starter-chikorita", "exclusiveGroup": "starter"},
-    {"species": "Cyndaquil", "source": "starter-cyndaquil", "exclusiveGroup": "starter"},
-    {"species": "Totodile", "source": "starter-totodile", "exclusiveGroup": "starter"},
-    {"species": "Zubat", "source": "zubat-dark-cave-r31", "speciesByStage": [{"stage": 4, "species": "Crobat", "derived": "friendship-approximation"}]},
-    {"species": "Mareep", "source": "mareep-route32"},
-    {"species": "Magikarp", "source": "magikarp-route32-old-rod"},
-    {"species": "Heracross", "source": "heracross-route33-headbutt"},
-    {"species": "Eevee", "source": "eevee-bill-goldenrod", "speciesByStage": [{"stage": 4, "species": "Espeon", "derived": "friendship-time-approximation"}]},
-    {"species": "Lapras", "source": "lapras-union-cave"},
-    {"species": "Swinub", "source": "swinub-ice-path"}
+    {
+      "species": "Chikorita",
+      "source": "starter-chikorita",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Cyndaquil",
+      "source": "starter-cyndaquil",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Totodile",
+      "source": "starter-totodile",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Zubat",
+      "source": "zubat-dark-cave-r31",
+      "speciesByStage": [
+        {
+          "stage": 4,
+          "species": "Crobat",
+          "derived": "friendship-approximation"
+        }
+      ]
+    },
+    {
+      "species": "Mareep",
+      "source": "mareep-route32"
+    },
+    {
+      "species": "Magikarp",
+      "source": "magikarp-route32-old-rod"
+    },
+    {
+      "species": "Heracross",
+      "source": "heracross-route33-headbutt"
+    },
+    {
+      "species": "Eevee",
+      "source": "eevee-bill-goldenrod",
+      "speciesByStage": [
+        {
+          "stage": 4,
+          "species": "Espeon",
+          "derived": "friendship-time-approximation"
+        }
+      ]
+    },
+    {
+      "species": "Lapras",
+      "source": "lapras-union-cave"
+    },
+    {
+      "species": "Swinub",
+      "source": "swinub-ice-path"
+    }
+  ],
+  "baselineTeam": [
+    "Cyndaquil",
+    "Zubat",
+    "Mareep",
+    "Magikarp",
+    "Heracross",
+    "Eevee"
   ]
 }
