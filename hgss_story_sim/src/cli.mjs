@@ -297,11 +297,21 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
   const worstBossWinRate = rows.length
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
+  const finalBattle = routeBosses[routeBosses.length - 1] || null;
+  const finalTeam = finalBattle
+    ? materializeCandidateTeam(
+        candidates,
+        finalBattle.stage,
+        finalBattle.aceLevel,
+        { moveAccess, singleUsePlan, purchasablePlan },
+      ).map(mon => mon.species)
+    : [];
 
   return {
     score: meanWinRate,
     worstBossWinRate,
     routeStarter,
+    finalTeam,
     routeBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
@@ -470,6 +480,7 @@ function searchResultRow(team, evaluation) {
     catchUpExp: evaluation.catchUpExp,
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
     team: team.map(x => x.species),
+    finalTeam: evaluation.finalTeam,
     routeStarter: evaluation.routeStarter,
     routeBattleCount: evaluation.routeBattleCount,
     singleUsePlan: evaluation.singleUsePlan,
