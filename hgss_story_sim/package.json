@@ -26,7 +26,9 @@
     "exp-budget-smoke": "node src/cli.mjs exp-budget-smoke",
     "exp-route-smoke": "node src/cli.mjs exp-route-smoke",
     "capture-smoke": "node src/cli.mjs capture-smoke",
-    "resource-budget-smoke": "node src/cli.mjs resource-budget-smoke"
+    "resource-budget-smoke": "node src/cli.mjs resource-budget-smoke",
+    "exp-envelope": "node src/cli.mjs exp-envelope",
+    "exp-envelope-smoke": "node src/cli.mjs exp-envelope-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
