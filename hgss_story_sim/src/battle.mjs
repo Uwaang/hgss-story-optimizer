@@ -141,8 +141,8 @@ function effectiveMovePower(move) {
 function moveStrategicMultiplier(move) {
   let multiplier = 1;
 
-  if (move.self?.volatileStatus === 'mustrecharge') multiplier *= 0.52;
-  if (move.flags?.charge) multiplier *= 0.55;
+  if (move.self?.volatileStatus === 'mustrecharge') multiplier *= 0.45;
+  if (move.flags?.charge) multiplier *= 0.45;
   if (move.selfdestruct) multiplier *= 0.42;
 
   if (Array.isArray(move.recoil) && Number(move.recoil[1]) > 0) {
