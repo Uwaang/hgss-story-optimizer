@@ -1,0 +1,47 @@
+{
+  "notes": "Reusable HM moves available during the current Johto story route. availableFrom is the boss-stage index in story-bosses.json and models when the HM can be taught for battle, not necessarily when its field action can be used.",
+  "reusableMachines": [
+    {
+      "machine": "HM01",
+      "move": "Cut",
+      "availableFrom": 2,
+      "note": "Ilex Forest Farfetch'd quest, after Bugsy and before Whitney."
+    },
+    {
+      "machine": "HM06",
+      "move": "Rock Smash",
+      "availableFrom": 3,
+      "note": "Route 36 progression after Whitney, before Morty."
+    },
+    {
+      "machine": "HM03",
+      "move": "Surf",
+      "availableFrom": 3,
+      "note": "Ecruteak Dance Theater reward before Morty. Fog Badge is only required for field use."
+    },
+    {
+      "machine": "HM04",
+      "move": "Strength",
+      "availableFrom": 4,
+      "note": "Olivine City, reachable after Morty and before Chuck."
+    },
+    {
+      "machine": "HM02",
+      "move": "Fly",
+      "availableFrom": 5,
+      "note": "Received after defeating Chuck."
+    },
+    {
+      "machine": "HM05",
+      "move": "Whirlpool",
+      "availableFrom": 6,
+      "note": "Team Rocket Hideout reward during Mahogany progression before Pryce."
+    },
+    {
+      "machine": "HM07",
+      "move": "Waterfall",
+      "availableFrom": 7,
+      "note": "Ice Path pickup before Clair."
+    }
+  ]
+}
