@@ -1,32 +1,37 @@
-# HGSS story simulator MVP
+# HGSS story simulator
 
-This module evaluates candidate HeartGold/SoulSilver story parties by repeatedly running the original HGSS boss rosters through Pokemon Showdown's Gen 4 headless battle simulator.
+This module searches for strong Pokémon HeartGold/SoulSilver story parties by combining pinned `pret/pokeheartgold` game data with Pokémon Showdown's Gen 4 headless battle simulator.
 
-## What is already modeled
+## Current coverage
 
-- Original HGSS trainer rosters are fetched from a pinned `pret/pokeheartgold` commit.
-- Trainer IDs are resolved from `include/constants/trainers.h`; no manually copied boss stats are required.
-- The default route contains the 8 Johto Gym Leaders, Elite Four, and Champion Lance.
-- Explicit HGSS held items and moves are mapped into Showdown sets.
-- HGSS trainer IVs use the original formula from `CreateNPCTrainerParty`: `floor(difficulty * 31 / 255)` for every stat.
-- HGSS trainer class/gender metadata is parsed from the same pinned source, and the original LCRNG path is reproduced to derive deterministic NPC personality, nature, and ability slot.
-- If a trainer/candidate has no explicit moves, Gen 4 level-up moves are reconstructed from Pokemon Showdown learnsets.
-- Candidate availability can be staged with `availableFrom`, and evolutions can be represented with `speciesByStage`, so a late-game form is not used against an early Gym.
-- Candidate levels are normalized to each boss's ace level for the first MVP, avoiding a hidden grinding assumption.
-- Battles are deterministic by seed and can be repeated for Monte Carlo-style comparison.
-- `search` enumerates candidate-team combinations and ranks them by aggregate boss win rate.
+### Battle fidelity
 
-## Important MVP approximations
+- Boss rosters are fetched from pinned `pret/pokeheartgold` commit `9d8b7591f09b65804da2fb2dfd56f320633e0d36`.
+- The route currently covers all 8 Johto Gym Leaders, the Elite Four, and Champion Lance.
+- Explicit trainer moves and held items are mapped into Showdown Gen 4 sets.
+- NPC IVs reproduce HGSS's `floor(difficulty * 31 / 255)` formula.
+- Trainer class/gender metadata and the HGSS LCRNG path are used to reproduce deterministic NPC personality, nature, and ability slot.
+- Battles are deterministic by seed and can be repeated for comparison.
+- Candidate levels are currently normalized to each boss's ace level.
 
-This is not yet a bit-perfect HGSS emulator. The current branch intentionally separates the pieces that still need fidelity work:
+### Acquisition modeling
 
-1. Trainer bag-item usage (Potion, Full Restore, etc.) is not modeled by Pokemon Showdown.
-2. The battle policy is a simple deterministic greedy policy, not HGSS's exact AI-flag implementation.
-3. Candidate acquisition stages in `candidates.example.json` are illustrative. A real optimization run should replace them with verified HGSS encounter/gift/evolution availability.
-4. TM/HM/tutor availability and one-use TM competition are not modeled yet. Candidate moves default to level-up moves unless explicitly supplied.
-5. Normalizing player levels to the boss ace level measures party efficiency at comparable levels; it does not yet model the HGSS EXP curve or required grinding time.
+Two complementary paths are kept intentionally:
 
-These limitations make the MVP useful for comparative experiments, but its output should not yet be called the definitive optimal HGSS story party.
+1. **Canonical generated pool** — the main search path.
+   - Wild availability comes from `gs_enc_data.json`.
+   - HeartGold/SoulSilver version differences are resolved from the source data.
+   - Story-accessible maps and encounter-method unlocks are defined in `config/story-access.canonical.json`.
+   - Gifts/statics/headbutt exceptions are added as auditable manual acquisitions.
+   - Unambiguous level evolutions are derived from `evo.json`.
+   - Duplicate evolution families and mutually exclusive starters are rejected.
+
+2. **Curated source-validated pool** — a small regression/reference path.
+   - Each candidate in `candidates.example.json` points to a source id in `config/story-access.json`.
+   - The validator checks the pinned encounter/headbutt/script source before accepting the candidate.
+   - This caught and corrected earlier modeling errors such as Mareep being available before Falkner and Gyarados appearing before Magikarp can reach level 20.
+
+The current canonical generator produces **92 candidate acquisitions** for both HeartGold and SoulSilver on the conservative Johto route. The stage distribution differs where the versions differ.
 
 ## Setup
 
@@ -39,10 +44,36 @@ npm install
 
 ## Commands
 
-Verify that the pinned HGSS data can be read and converted:
+Validate the curated source-backed acquisition examples:
 
 ```bash
-npm run smoke
+npm run validate
+```
+
+Inspect the generated canonical candidate pool:
+
+```bash
+npm run pool -- --version=HEARTGOLD
+npm run pool -- --version=SOULSILVER
+npm run pool -- --version=HEARTGOLD --full=true
+```
+
+Run the curated baseline team through the full Johto/E4/Lance route:
+
+```bash
+npm run simulate -- --runs=20
+```
+
+Search teams from the generated HeartGold pool:
+
+```bash
+npm run search -- --pool=canonical --version=HEARTGOLD --runs=5 --limit=100 --team-size=6
+```
+
+SoulSilver works the same way:
+
+```bash
+npm run search -- --pool=canonical --version=SOULSILVER --runs=5 --limit=100 --team-size=6
 ```
 
 Print the extracted boss dataset:
@@ -51,52 +82,60 @@ Print the extracted boss dataset:
 npm run extract
 ```
 
-Evaluate the example candidate party against all bosses, 20 runs per boss:
+Run the quick battle smoke test:
 
 ```bash
-npm run simulate -- --runs=20
+npm run smoke
 ```
 
-Search candidate combinations. The defaults intentionally stay small because each team triggers many full battles:
+## Story stages
 
-```bash
-npm run search -- --runs=5 --limit=100 --team-size=6
-```
+`availableFrom` is the zero-based index in `config/story-bosses.json`:
 
-Use a custom pool:
+- 0 Falkner
+- 1 Bugsy
+- 2 Whitney
+- 3 Morty
+- 4 Chuck
+- 5 Jasmine
+- 6 Pryce
+- 7 Clair
+- 8 Will
+- 9 Koga
+- 10 Bruno
+- 11 Karen
+- 12 Lance
 
-```bash
-npm run search -- --pool=config/my-candidates.json --runs=20 --limit=1000
-```
+A candidate can only participate from its acquisition stage onward.
 
-## Candidate format
+## Current approximations
 
-```json
-{
-  "candidates": [
-    {
-      "species": "Mareep",
-      "availableFrom": 0,
-      "speciesByStage": [{"stage": 1, "species": "Flaaffy"}, {"stage": 4, "species": "Ampharos"}],
-      "moves": ["Thunderbolt", "Signal Beam", "Thunder Wave", "Light Screen"],
-      "item": "Magnet"
-    }
-  ]
-}
-```
+This is not yet a bit-perfect HGSS story emulator.
 
-`availableFrom` is the zero-based position in `config/story-bosses.json`. `speciesByStage` can change the species/form used at later story stages. If `moves` is omitted, the simulator derives the last four Gen 4 level-up moves available at the boss level.
-
-## Next fidelity milestones
-
-- Port the relevant HGSS AI flags and trainer item-use rules.
-- Build verified encounter/gift/evolution availability data by route and badge count.
-- Add TM/HM/tutor acquisition constraints and one-use TM ownership.
-- Replace equal-level normalization with an EXP/time cost model.
-- Add beam/genetic search and Pareto objectives for win rate, grinding, acquisition timing, and TM cost.
-- Extend after Lance to Kanto Gym Leaders and Red.
-
+- Trainer bag-item use is not modeled.
+- Battle decisions use a deterministic greedy policy rather than the exact HGSS AI-flag implementation.
+- Story map/method unlock stages are deliberately conservative and still curated rather than derived from a full map-event reachability graph.
+- Friendship, stone, trade, move-known, and location-based evolutions are conservative/manual; only unambiguous level evolutions are automatic.
+- TM/HM/tutor acquisition timing and one-use TM competition are not yet included in move selection.
+- Equal-level normalization does not model the actual EXP curve or grinding time.
+- Search currently optimizes aggregate boss win rate only; it does not yet produce a Pareto frontier over grinding, acquisition timing, TM cost, or real-time convenience.
 
 ## CI coverage
 
-The branch CI performs both a single Falkner battle smoke test and a one-run pass across all 13 Johto/E4/Lance bosses. This catches data-mapping and battle-stream regressions across the current story route.
+The GitHub Actions workflow currently verifies all of these paths:
+
+- dependency install and syntax checks;
+- curated source-backed acquisition validation;
+- a real Falkner battle;
+- one full pass over all 13 Johto/E4/Lance bosses;
+- HeartGold canonical candidate generation;
+- SoulSilver canonical candidate generation;
+- a canonical-pool team-search smoke test.
+
+## Next fidelity milestones
+
+1. Add TM/HM/tutor acquisition constraints and resource ownership.
+2. Add EXP/grinding-time cost.
+3. Port the relevant HGSS trainer item-use and AI behavior.
+4. Replace brute-force-prefix search with a better optimizer (beam/genetic/branch-and-bound) and Pareto objectives.
+5. Extend beyond Lance through Kanto and Red.
