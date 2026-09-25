@@ -1,0 +1,212 @@
+{
+  "mode": "canonical",
+  "description": "Conservative intended Johto story route. Maps are cumulative by stage; optional early detours such as Safari Zone are intentionally excluded.",
+  "methodUnlockStage": {
+    "land": 0,
+    "old_rod": 1,
+    "good_rod": 3,
+    "rock_smash": 3,
+    "surf": 4,
+    "super_rod": 99
+  },
+  "stages": [
+    {
+      "stage": 0,
+      "before": "Falkner",
+      "addMaps": [
+        "R29",
+        "R30",
+        "R31",
+        "R46",
+        "D42R0102",
+        "D15R0102",
+        "D15R0103"
+      ]
+    },
+    {
+      "stage": 1,
+      "before": "Bugsy",
+      "addMaps": [
+        "R32",
+        "D25R0101",
+        "D25R0102",
+        "D25R0103",
+        "R33",
+        "D26R0102",
+        "D26R0103"
+      ]
+    },
+    {
+      "stage": 2,
+      "before": "Whitney",
+      "addMaps": [
+        "D36R0101",
+        "R34",
+        "R35",
+        "D22R0101",
+        "R36"
+      ]
+    },
+    {
+      "stage": 3,
+      "before": "Morty",
+      "addMaps": [
+        "R37",
+        "D18R0101",
+        "D18R0102",
+        "R38",
+        "R39"
+      ]
+    },
+    {
+      "stage": 4,
+      "before": "Chuck",
+      "addMaps": [
+        "W40",
+        "W41",
+        "T24"
+      ]
+    },
+    {
+      "stage": 5,
+      "before": "Jasmine",
+      "addMaps": []
+    },
+    {
+      "stage": 6,
+      "before": "Pryce",
+      "addMaps": [
+        "R42",
+        "D38R0101",
+        "R43",
+        "T29"
+      ]
+    },
+    {
+      "stage": 7,
+      "before": "Clair",
+      "addMaps": [
+        "R44",
+        "D39R0101",
+        "D39R0102",
+        "D39R0103",
+        "D39R0104",
+        "R45",
+        "D42R0101"
+      ]
+    },
+    {
+      "stage": 8,
+      "before": "Will",
+      "addMaps": [
+        "D44R0102",
+        "R27",
+        "R26",
+        "D45R0101",
+        "D43R0101",
+        "D43R0102",
+        "D43R0103"
+      ]
+    },
+    {
+      "stage": 9,
+      "before": "Koga",
+      "addMaps": []
+    },
+    {
+      "stage": 10,
+      "before": "Bruno",
+      "addMaps": []
+    },
+    {
+      "stage": 11,
+      "before": "Karen",
+      "addMaps": []
+    },
+    {
+      "stage": 12,
+      "before": "Lance",
+      "addMaps": []
+    }
+  ],
+  "manualAcquisitions": [
+    {
+      "species": "Chikorita",
+      "availableFrom": 0,
+      "source": "starter",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Cyndaquil",
+      "availableFrom": 0,
+      "source": "starter",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Totodile",
+      "availableFrom": 0,
+      "source": "starter",
+      "exclusiveGroup": "starter"
+    },
+    {
+      "species": "Togepi",
+      "availableFrom": 1,
+      "source": "gift-egg",
+      "note": "Mystery Egg received after Falkner; assumes hatching before Bugsy."
+    },
+    {
+      "species": "Heracross",
+      "availableFrom": 2,
+      "source": "headbutt",
+      "note": "Headbutt becomes available in Ilex Forest after Bugsy."
+    },
+    {
+      "species": "Spearow",
+      "availableFrom": 2,
+      "source": "gift",
+      "note": "Kenya from the Route 35/Goldenrod gate delivery quest."
+    },
+    {
+      "species": "Eevee",
+      "availableFrom": 3,
+      "source": "gift",
+      "note": "Bill gift after meeting Bill in Ecruteak and returning to Goldenrod."
+    },
+    {
+      "species": "Sudowoodo",
+      "availableFrom": 3,
+      "source": "static",
+      "note": "Route 36 static encounter after Whitney."
+    },
+    {
+      "species": "Shuckle",
+      "availableFrom": 4,
+      "source": "gift",
+      "note": "Shuckie loan in Cianwood."
+    },
+    {
+      "species": "Lapras",
+      "availableFrom": 4,
+      "source": "static",
+      "note": "Friday Union Cave B2F encounter; Surf required."
+    },
+    {
+      "species": "Gyarados",
+      "availableFrom": 6,
+      "source": "static",
+      "note": "Red Gyarados at Lake of Rage."
+    },
+    {
+      "species": "Dratini",
+      "availableFrom": 8,
+      "source": "gift",
+      "note": "Dragon's Den gift after Clair."
+    },
+    {
+      "species": "Tyrogue",
+      "availableFrom": 8,
+      "source": "gift",
+      "note": "Mt. Mortar gift; conservative placement after Rising Badge/Waterfall access."
+    }
+  ]
+}
