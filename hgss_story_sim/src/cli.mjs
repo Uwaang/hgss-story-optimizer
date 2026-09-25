@@ -587,6 +587,34 @@ function findStarterCandidate(candidates, requested) {
   return candidate;
 }
 
+function evaluationExpBurden(evaluation) {
+  if (evaluation?.expProfile && evaluation.expProfile !== 'ace') {
+    return Number(evaluation.expSchedule?.totalGrindExp || 0);
+  }
+  return Number(evaluation?.catchUpExp || 0);
+}
+
+function evaluationExpUnknown(evaluation) {
+  if (evaluation?.expProfile && evaluation.expProfile !== 'ace') {
+    return Number(evaluation.expSchedule?.unknownEntryLevels?.length || 0);
+  }
+  return Number(evaluation?.catchUpExpUnknown || 0);
+}
+
+function rowExpBurden(row) {
+  if (row?.expProfile && row.expProfile !== 'ace') {
+    return Number(row.naturalExp?.totalGrindExp || 0);
+  }
+  return Number(row?.catchUpExp || 0);
+}
+
+function rowExpUnknown(row) {
+  if (row?.expProfile && row.expProfile !== 'ace') {
+    return Number(row.naturalExp?.unknownEntryLevels?.length || 0);
+  }
+  return Number(row?.catchUpExpUnknown || 0);
+}
+
 function paretoFront(rows) {
   return rows.filter((row, index) => !rows.some((other, otherIndex) => {
     if (index === otherIndex) return false;
@@ -594,20 +622,23 @@ function paretoFront(rows) {
     const rowCoins = Number(row.purchaseCosts?.coins || 0);
     const otherMoney = Number(other.purchaseCosts?.money || 0);
     const otherCoins = Number(other.purchaseCosts?.coins || 0);
+    const rowExp = rowExpBurden(row);
+    const otherExp = rowExpBurden(other);
+    const rowUnknown = rowExpUnknown(row);
+    const otherUnknown = rowExpUnknown(other);
+
     const atLeastAsGood =
       other.score >= row.score &&
       other.worstBossWinRate >= row.worstBossWinRate &&
-      other.catchUpExp <= row.catchUpExp &&
-      other.catchUpExpUnknown <= row.catchUpExpUnknown &&
-      Number(other.naturalExp?.totalGrindExp || 0) <= Number(row.naturalExp?.totalGrindExp || 0) &&
+      otherExp <= rowExp &&
+      otherUnknown <= rowUnknown &&
       otherMoney <= rowMoney &&
       otherCoins <= rowCoins;
     const strictlyBetter =
       other.score > row.score ||
       other.worstBossWinRate > row.worstBossWinRate ||
-      other.catchUpExp < row.catchUpExp ||
-      other.catchUpExpUnknown < row.catchUpExpUnknown ||
-      Number(other.naturalExp?.totalGrindExp || 0) < Number(row.naturalExp?.totalGrindExp || 0) ||
+      otherExp < rowExp ||
+      otherUnknown < rowUnknown ||
       otherMoney < rowMoney ||
       otherCoins < rowCoins;
     return atLeastAsGood && strictlyBetter;
@@ -622,6 +653,8 @@ function searchResultRow(team, evaluation) {
     catchUpUnknown: evaluation.catchUpUnknown,
     catchUpExp: evaluation.catchUpExp,
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
+    expBurden: evaluationExpBurden(evaluation),
+    expBurdenUnknown: evaluationExpUnknown(evaluation),
     team: team.map(x => x.species),
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
@@ -669,21 +702,23 @@ function evaluationDominates(a, b) {
   const aCoins = Number(a.purchaseCosts?.coins || 0);
   const bMoney = Number(b.purchaseCosts?.money || 0);
   const bCoins = Number(b.purchaseCosts?.coins || 0);
+  const aExp = evaluationExpBurden(a);
+  const bExp = evaluationExpBurden(b);
+  const aUnknown = evaluationExpUnknown(a);
+  const bUnknown = evaluationExpUnknown(b);
 
   const atLeastAsGood =
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
-    a.catchUpExp <= b.catchUpExp &&
-    a.catchUpExpUnknown <= b.catchUpExpUnknown &&
-    Number(a.expSchedule?.totalGrindExp || 0) <= Number(b.expSchedule?.totalGrindExp || 0) &&
+    aExp <= bExp &&
+    aUnknown <= bUnknown &&
     aMoney <= bMoney &&
     aCoins <= bCoins;
   const strictlyBetter =
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
-    a.catchUpExp < b.catchUpExp ||
-    a.catchUpExpUnknown < b.catchUpExpUnknown ||
-    Number(a.expSchedule?.totalGrindExp || 0) < Number(b.expSchedule?.totalGrindExp || 0) ||
+    aExp < bExp ||
+    aUnknown < bUnknown ||
     aMoney < bMoney ||
     aCoins < bCoins;
   return atLeastAsGood && strictlyBetter;
@@ -714,11 +749,11 @@ function selectMultiObjectiveBeam(states, width) {
 
   const byScore = [...front].sort((a, b) =>
     b.evaluation.score - a.evaluation.score ||
-    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
   const byExp = [...front].sort((a, b) =>
-    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
@@ -749,7 +784,7 @@ function selectMultiObjectiveBeam(states, width) {
   if (selected.length < width) {
     const fallback = [...states].sort((a, b) =>
       b.evaluation.score - a.evaluation.score ||
-      a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+      evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
       stateTieKey(a).localeCompare(stateTieKey(b))
     );
     for (const state of fallback) add(state);
@@ -785,7 +820,7 @@ function selectCandidateScreenRows(rows, width) {
     (a, b) => b.evaluation.score - a.evaluation.score,
     (a, b) => b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate,
     (a, b) => Number(a.evaluation.expSchedule?.totalGrindExp || 0) - Number(b.evaluation.expSchedule?.totalGrindExp || 0),
-    (a, b) => a.evaluation.catchUpExp - b.evaluation.catchUpExp,
+    (a, b) => evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation),
     (a, b) => Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0),
     (a, b) => Number(a.evaluation.purchaseCosts?.coins || 0) - Number(b.evaluation.purchaseCosts?.coins || 0),
     (a, b) => a.candidate.availableFrom - b.candidate.availableFrom,
@@ -800,7 +835,7 @@ function selectCandidateScreenRows(rows, width) {
 
   const byScore = [...front].sort((a, b) =>
     b.evaluation.score - a.evaluation.score ||
-    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
   );
   for (const row of byScore) add(row);
@@ -887,7 +922,7 @@ async function runBeamSearch({
   }
   finalStates.sort((a, b) =>
     b.evaluation.score - a.evaluation.score ||
-    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
   );
 
@@ -904,6 +939,8 @@ async function runBeamSearch({
       catchUpUnknown: row.evaluation.catchUpUnknown,
       catchUpExp: row.evaluation.catchUpExp,
       catchUpExpUnknown: row.evaluation.catchUpExpUnknown,
+      expBurden: evaluationExpBurden(row.evaluation),
+      expBurdenUnknown: evaluationExpUnknown(row.evaluation),
     })),
     evaluatedTeams: cache.size,
     finalRescoredTeams: finalStates.length,
