@@ -112,6 +112,16 @@ jobs:
           name: hgss-exp-major-optimization
           path: hgss_story_sim/results/exp-major.json
           if-no-files-found: error
+      - name: Normal-route EXP starter optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        run: npm run optimize -- --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/exp-normal-route.json
+      - name: Upload normal-route EXP optimization
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-exp-normal-route-optimization
+          path: hgss_story_sim/results/exp-normal-route.json
+          if-no-files-found: error
       - name: Natural-EXP starter optimization
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[optimize-exp]')
         run: npm run optimize -- --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=none --versions=HEARTGOLD,SOULSILVER --starters=Chikorita,Cyndaquil,Totodile --runs=1 --screen-runs=1 --final-runs=10 --beam-width=4 --candidate-cap=16 --team-size=6 --output=results/exp-natural.json
