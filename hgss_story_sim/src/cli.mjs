@@ -1332,8 +1332,24 @@ async function cmdConvergence() {
     .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
   const candidateCaps = String(arg('candidate-caps', '16,24,32'))
     .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
-  if (!beamWidths.length || !candidateCaps.length) {
-    throw new Error('convergence requires positive --beam-widths and --candidate-caps');
+  const pairArg = String(arg('pairs', '')).trim();
+  let configurations = [];
+  if (pairArg) {
+    configurations = pairArg.split(',').map(value => {
+      const [beamWidth, candidateCap] = value.split(':').map(Number);
+      if (!Number.isInteger(beamWidth) || beamWidth <= 0 ||
+          !Number.isInteger(candidateCap) || candidateCap <= 0) {
+        throw new Error(`Invalid convergence pair: ${value}. Use beam:candidate, e.g. 4:16`);
+      }
+      return { beamWidth, candidateCap };
+    });
+  } else {
+    if (!beamWidths.length || !candidateCaps.length) {
+      throw new Error('convergence requires positive --beam-widths and --candidate-caps');
+    }
+    configurations = candidateCaps.flatMap(candidateCap =>
+      beamWidths.map(beamWidth => ({ beamWidth, candidateCap }))
+    );
   }
 
   const story = await loadStory();
@@ -1363,40 +1379,38 @@ async function cmdConvergence() {
 
   const rows = [];
   const sharedEvaluationCache = new Map();
-  for (const candidateCap of candidateCaps) {
-    for (const beamWidth of beamWidths) {
-      const result = await runBeamSearch({
-        candidates,
-        story,
-        moveAccess,
-        runs,
-        teamSize,
-        beamWidth,
-        candidateCap,
-        screenRuns,
-        finalRuns,
-        requiredCandidate,
-        screenRowsOverride: screenRows,
-        expContext,
-        grindPolicy,
-        evaluationCache: sharedEvaluationCache,
-      });
-      const top = result.top[0] || null;
-      rows.push({
-        beamWidth,
-        candidateCap,
-        evaluatedTeams: result.evaluatedTeams,
-        cachedEvaluationsTotal: result.cachedEvaluationsTotal,
-        finalRescoredTeams: result.finalRescoredTeams,
-        team: top?.team || [],
-        finalTeam: top?.finalTeam || [],
-        score: top?.score ?? null,
-        worstBossWinRate: top?.worstBossWinRate ?? null,
-        expBurden: top?.expBurden ?? null,
-        captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
-        resourceBurden: top ? rowResourceBurden(top) : null,
-      });
-    }
+  for (const { beamWidth, candidateCap } of configurations) {
+    const result = await runBeamSearch({
+      candidates,
+      story,
+      moveAccess,
+      runs,
+      teamSize,
+      beamWidth,
+      candidateCap,
+      screenRuns,
+      finalRuns,
+      requiredCandidate,
+      screenRowsOverride: screenRows,
+      expContext,
+      grindPolicy,
+      evaluationCache: sharedEvaluationCache,
+    });
+    const top = result.top[0] || null;
+    rows.push({
+      beamWidth,
+      candidateCap,
+      evaluatedTeams: result.evaluatedTeams,
+      cachedEvaluationsTotal: result.cachedEvaluationsTotal,
+      finalRescoredTeams: result.finalRescoredTeams,
+      team: top?.team || [],
+      finalTeam: top?.finalTeam || [],
+      score: top?.score ?? null,
+      worstBossWinRate: top?.worstBossWinRate ?? null,
+      expBurden: top?.expBurden ?? null,
+      captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
+      resourceBurden: top ? rowResourceBurden(top) : null,
+    });
   }
 
   const baseline = rows
@@ -1429,6 +1443,7 @@ async function cmdConvergence() {
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
     teamSize,
+    configurations,
     baseline: baseline ? {
       beamWidth: baseline.beamWidth,
       candidateCap: baseline.candidateCap,
