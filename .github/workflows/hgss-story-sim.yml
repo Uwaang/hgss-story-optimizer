@@ -37,6 +37,8 @@ jobs:
         run: npm run validate
       - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Player matchup switching smoke test
+        run: npm run switch-smoke
       - name: Reusable HM timing smoke test
         run: npm run hm-smoke
       - name: Single-use TM ownership smoke test
