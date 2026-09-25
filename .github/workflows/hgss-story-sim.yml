@@ -40,6 +40,8 @@ jobs:
         run: npm run exp-smoke
       - name: Natural EXP budget smoke test
         run: npm run exp-budget-smoke
+      - name: EXP envelope comparison smoke test
+        run: npm run exp-envelope-smoke
       - name: Capture-search cost smoke test
         run: npm run capture-smoke
       - name: EXP-aware real-battle smoke test
