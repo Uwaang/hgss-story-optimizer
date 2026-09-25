@@ -109,51 +109,103 @@ async function cmdExtract() {
   console.log(JSON.stringify(compact, null, 2));
 }
 
+function expAtLevel(growthRate, level) {
+  const n = Math.max(1, Math.min(100, Math.floor(Number(level))));
+  const rate = String(growthRate || '').replace(/^GROWTH_/, '');
+
+  if (rate === 'MEDIUM_FAST') return n ** 3;
+  if (rate === 'FAST') return Math.floor((4 * n ** 3) / 5);
+  if (rate === 'SLOW') return Math.floor((5 * n ** 3) / 4);
+  if (rate === 'MEDIUM_SLOW') {
+    if (n <= 1) return 0;
+    return Math.floor((6 * n ** 3) / 5 - 15 * n ** 2 + 100 * n - 140);
+  }
+  if (rate === 'ERRATIC') {
+    if (n <= 50) return Math.floor((n ** 3 * (100 - n)) / 50);
+    if (n <= 68) return Math.floor((n ** 3 * (150 - n)) / 100);
+    if (n <= 98) return Math.floor((n ** 3 * Math.floor((1911 - 10 * n) / 3)) / 500);
+    return Math.floor((n ** 3 * (160 - n)) / 100);
+  }
+  if (rate === 'FLUCTUATING') {
+    if (n <= 15) return Math.floor((n ** 3 * (Math.floor((n + 1) / 3) + 24)) / 50);
+    if (n <= 36) return Math.floor((n ** 3 * (n + 14)) / 50);
+    return Math.floor((n ** 3 * (Math.floor(n / 2) + 32)) / 50);
+  }
+  return null;
+}
+
 function estimateCatchUpLevels(candidates, bosses) {
   const details = [];
   let total = 0;
   let unknown = 0;
+  let totalExp = 0;
+  let expUnknown = 0;
 
   for (const candidate of candidates) {
+    const availableFrom = Number(candidate.availableFrom || 0);
+    const growthRate = candidate.growthRate || null;
+
     // Stage-0 members are assumed to level naturally during the opening route.
-    if (Number(candidate.availableFrom || 0) <= 0) {
+    if (availableFrom <= 0) {
       details.push({
         species: candidate.species,
-        availableFrom: Number(candidate.availableFrom || 0),
+        availableFrom,
+        growthRate,
         entryLevelMax: candidate.entryLevelMax ?? null,
         targetLevel: bosses[0]?.aceLevel ?? null,
         catchUpLevels: 0,
+        catchUpExp: 0,
         assumedNaturalOpening: true,
       });
       continue;
     }
 
-    const firstBoss = bosses.find(boss => boss.stage >= Number(candidate.availableFrom || 0));
+    const firstBoss = bosses.find(boss => boss.stage >= availableFrom);
     const entryLevel = Number(candidate.entryLevelMax);
     if (!firstBoss || !Number.isFinite(entryLevel)) {
       unknown += 1;
+      expUnknown += 1;
       details.push({
         species: candidate.species,
-        availableFrom: Number(candidate.availableFrom || 0),
+        availableFrom,
+        growthRate,
         entryLevelMax: candidate.entryLevelMax ?? null,
         targetLevel: firstBoss?.aceLevel ?? null,
         catchUpLevels: null,
+        catchUpExp: null,
       });
       continue;
     }
 
-    const deficit = Math.max(0, Number(firstBoss.aceLevel) - entryLevel);
+    const targetLevel = Number(firstBoss.aceLevel);
+    const deficit = Math.max(0, targetLevel - entryLevel);
     total += deficit;
+
+    let catchUpExp = 0;
+    if (deficit > 0) {
+      const startExp = expAtLevel(growthRate, entryLevel);
+      const targetExp = expAtLevel(growthRate, targetLevel);
+      if (startExp === null || targetExp === null) {
+        catchUpExp = null;
+        expUnknown += 1;
+      } else {
+        catchUpExp = Math.max(0, targetExp - startExp);
+        totalExp += catchUpExp;
+      }
+    }
+
     details.push({
       species: candidate.species,
-      availableFrom: Number(candidate.availableFrom || 0),
+      availableFrom,
+      growthRate,
       entryLevelMax: entryLevel,
-      targetLevel: firstBoss.aceLevel,
+      targetLevel,
       catchUpLevels: deficit,
+      catchUpExp,
     });
   }
 
-  return { total, unknown, details };
+  return { total, unknown, totalExp, expUnknown, details };
 }
 
 async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
@@ -203,6 +255,8 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
     score: weightedRuns ? weightedWins / weightedRuns : 0,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
+    catchUpExp: catchUp.totalExp,
+    catchUpExpUnknown: catchUp.expUnknown,
     catchUpDetails: catchUp.details,
     singleUsePlan,
     purchasablePlan,
@@ -338,14 +392,14 @@ function paretoFront(rows) {
     const otherCoins = Number(other.purchaseCosts?.coins || 0);
     const atLeastAsGood =
       other.score >= row.score &&
-      other.catchUpLevels <= row.catchUpLevels &&
-      other.catchUpUnknown <= row.catchUpUnknown &&
+      other.catchUpExp <= row.catchUpExp &&
+      other.catchUpExpUnknown <= row.catchUpExpUnknown &&
       otherMoney <= rowMoney &&
       otherCoins <= rowCoins;
     const strictlyBetter =
       other.score > row.score ||
-      other.catchUpLevels < row.catchUpLevels ||
-      other.catchUpUnknown < row.catchUpUnknown ||
+      other.catchUpExp < row.catchUpExp ||
+      other.catchUpExpUnknown < row.catchUpExpUnknown ||
       otherMoney < rowMoney ||
       otherCoins < rowCoins;
     return atLeastAsGood && strictlyBetter;
@@ -357,6 +411,8 @@ function searchResultRow(team, evaluation) {
     score: evaluation.score,
     catchUpLevels: evaluation.catchUpLevels,
     catchUpUnknown: evaluation.catchUpUnknown,
+    catchUpExp: evaluation.catchUpExp,
+    catchUpExpUnknown: evaluation.catchUpExpUnknown,
     team: team.map(x => x.species),
     singleUsePlan: evaluation.singleUsePlan,
     purchasablePlan: evaluation.purchasablePlan,
@@ -455,7 +511,7 @@ async function runBeamSearch({
   }
   finalStates.sort((a, b) =>
     b.evaluation.score - a.evaluation.score ||
-    a.evaluation.catchUpLevels - b.evaluation.catchUpLevels ||
+    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
     a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
   );
 
@@ -469,6 +525,8 @@ async function runBeamSearch({
       score: row.evaluation.score,
       catchUpLevels: row.evaluation.catchUpLevels,
       catchUpUnknown: row.evaluation.catchUpUnknown,
+      catchUpExp: row.evaluation.catchUpExp,
+      catchUpExpUnknown: row.evaluation.catchUpExpUnknown,
     })),
     evaluatedTeams: cache.size,
     finalRescoredTeams: finalStates.length,
@@ -644,6 +702,26 @@ async function cmdOptimize() {
     console.error(`wrote optimization result: ${absolutePath}`);
   }
   console.log(serialized);
+}
+
+async function cmdExpSmoke() {
+  const expected = {
+    MEDIUM_FAST: 8000,
+    ERRATIC: 12800,
+    FLUCTUATING: 5440,
+    MEDIUM_SLOW: 5460,
+    FAST: 6400,
+    SLOW: 10000,
+  };
+  const actual = Object.fromEntries(
+    Object.keys(expected).map(rate => [rate, expAtLevel(rate, 20)])
+  );
+  for (const [rate, value] of Object.entries(expected)) {
+    if (actual[rate] !== value) {
+      throw new Error(`Growth table mismatch for ${rate} Lv20: expected ${value}, got ${actual[rate]}`);
+    }
+  }
+  console.log(JSON.stringify({ level: 20, expected, actual }, null, 2));
 }
 
 async function cmdSwitchSmoke() {
@@ -854,6 +932,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -864,7 +943,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
