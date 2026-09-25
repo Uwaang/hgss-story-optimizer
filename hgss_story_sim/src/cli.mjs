@@ -354,6 +354,20 @@ function searchResultRow(team, evaluation) {
   };
 }
 
+async function screenCandidates(candidates, story, moveAccess, screenRuns) {
+  const rows = [];
+  for (const candidate of candidates) {
+    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess);
+    rows.push({ candidate, evaluation });
+  }
+  rows.sort((a, b) =>
+    b.evaluation.score - a.evaluation.score ||
+    a.candidate.availableFrom - b.candidate.availableFrom ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+  return rows;
+}
+
 async function runBeamSearch({
   candidates,
   story,
@@ -364,17 +378,9 @@ async function runBeamSearch({
   candidateCap,
   screenRuns,
   requiredCandidate,
+  screenRowsOverride = null,
 }) {
-  const screenRows = [];
-  for (const candidate of candidates) {
-    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess);
-    screenRows.push({ candidate, evaluation });
-  }
-  screenRows.sort((a, b) =>
-    b.evaluation.score - a.evaluation.score ||
-    a.candidate.availableFrom - b.candidate.availableFrom ||
-    a.candidate.species.localeCompare(b.candidate.species)
-  );
+  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns);
 
   let screened = screenRows.slice(0, Math.min(candidateCap, screenRows.length)).map(row => row.candidate);
   if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
@@ -529,6 +535,65 @@ async function cmdSearch() {
   }, null, 2));
 }
 
+async function cmdOptimize() {
+  const versions = String(arg('versions', 'HEARTGOLD,SOULSILVER'))
+    .split(',')
+    .map(value => value.trim().toUpperCase())
+    .filter(Boolean);
+  const starters = String(arg('starters', 'Chikorita,Cyndaquil,Totodile'))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const runs = Number(arg('runs', '1'));
+  const screenRuns = Number(arg('screen-runs', '1'));
+  const beamWidth = Number(arg('beam-width', '3'));
+  const candidateCap = Number(arg('candidate-cap', '12'));
+  const teamSize = Number(arg('team-size', '6'));
+
+  const story = await loadStory();
+  const moveAccess = await loadMoveAccess();
+  const output = {
+    runsPerBoss: runs,
+    screenRunsPerBoss: screenRuns,
+    beamWidth,
+    candidateCap,
+    teamSize,
+    versions: {},
+  };
+
+  for (const version of versions) {
+    const pool = await loadCanonicalPool(version, story);
+    const candidates = pool.candidates;
+    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns);
+    output.versions[version] = {};
+
+    for (const starterName of starters) {
+      const requiredCandidate = findStarterCandidate(candidates, starterName);
+      const result = await runBeamSearch({
+        candidates,
+        story,
+        moveAccess,
+        runs,
+        teamSize,
+        beamWidth,
+        candidateCap,
+        screenRuns,
+        requiredCandidate,
+        screenRowsOverride: screenRows,
+      });
+      output.versions[version][requiredCandidate.species] = {
+        scannedCandidates: result.scannedCandidates,
+        screenedCandidates: result.screenedCandidates,
+        evaluatedTeams: result.evaluatedTeams,
+        paretoFront: result.paretoFront,
+        top: result.top,
+      };
+    }
+  }
+
+  console.log(JSON.stringify(output, null, 2));
+}
+
 async function cmdHmSmoke() {
   const story = await loadStory();
   const [pool, moveAccess] = await Promise.all([
@@ -640,6 +705,7 @@ const commands = {
   validate: cmdValidate,
   simulate: cmdSimulate,
   search: cmdSearch,
+  optimize: cmdOptimize,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,
   smoke: cmdSmoke,
@@ -647,7 +713,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search');
+  console.error('Use one of: smoke, hm-smoke, tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
