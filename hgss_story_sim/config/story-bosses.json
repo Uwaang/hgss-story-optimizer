@@ -1,0 +1,18 @@
+{
+  "sourceCommit": "9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "bosses": [
+    {"key": "TRAINER_LEADER_FALKNER_FALKNER", "label": "Falkner"},
+    {"key": "TRAINER_LEADER_BUGSY_BUGSY", "label": "Bugsy"},
+    {"key": "TRAINER_LEADER_WHITNEY", "label": "Whitney"},
+    {"key": "TRAINER_LEADER_MORTY_MORTY", "label": "Morty"},
+    {"key": "TRAINER_LEADER_CHUCK_CHUCK", "label": "Chuck"},
+    {"key": "TRAINER_LEADER_JASMINE_JASMINE", "label": "Jasmine"},
+    {"key": "TRAINER_LEADER_PRYCE_PRYCE", "label": "Pryce"},
+    {"key": "TRAINER_LEADER_CLAIR_CLAIR", "label": "Clair"},
+    {"key": "TRAINER_ELITE_FOUR_WILL_WILL", "label": "Will"},
+    {"key": "TRAINER_ELITE_FOUR_KOGA_KOGA", "label": "Koga"},
+    {"key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO", "label": "Bruno"},
+    {"key": "TRAINER_ELITE_FOUR_KAREN_KAREN", "label": "Karen"},
+    {"key": "TRAINER_CHAMPION_LANCE", "label": "Lance"}
+  ]
+}
