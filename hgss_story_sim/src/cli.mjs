@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
+import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
   loadPretAvailabilityData,
@@ -24,6 +25,26 @@ function normalizeResourceProfile(value) {
     throw new Error(`Unknown resource profile: ${value}. Use core, money, or all.`);
   }
   return profile;
+}
+
+function normalizeExpProfile(value) {
+  const profile = String(value || 'ace').toLowerCase();
+  if (!['ace', 'major', 'all-accessible'].includes(profile)) {
+    throw new Error(`Unknown EXP profile: ${value}. Use ace, major, or all-accessible.`);
+  }
+  return profile;
+}
+
+async function loadExpContext(story, expProfile) {
+  const profile = normalizeExpProfile(expProfile);
+  if (profile === 'ace') return { profile, world: null };
+  const access = await readJson('config/story-access.canonical.json');
+  const world = await buildExpWorld({
+    commit: story.config.sourceCommit,
+    access,
+    trainerSource: story.source,
+  });
+  return { profile, world };
 }
 
 async function loadMoveAccess(resourceProfile = 'all') {
@@ -243,10 +264,19 @@ function storyBattlesForCandidates(bosses, candidates) {
   );
 }
 
-async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess) {
+async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
   const routeStarter = storyStarterFromCandidates(candidates);
+  const expProfile = normalizeExpProfile(expContext?.profile || 'ace');
+  const expSchedule = expProfile === 'ace'
+    ? null
+    : buildTeamExpSchedule({
+        candidates,
+        routeBosses,
+        expWorld: expContext.world,
+        profile: expProfile,
+      });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
   const purchasable = planPurchasableMachines(candidates, routeBosses, moveAccess, singleUsePlan);
@@ -255,11 +285,12 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const [battleIndex, boss] of routeBosses.entries()) {
+    const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
     const playerTeam = materializeCandidateTeam(
       candidates,
       boss.stage,
       boss.aceLevel,
-      { moveAccess, singleUsePlan, purchasablePlan },
+      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate },
     );
     if (!playerTeam.length) {
       weightedRuns += runs;
@@ -289,6 +320,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     rows.push({
       boss: boss.label,
       aceLevel: boss.aceLevel,
+      playerLevels: Object.fromEntries(playerTeam.map(mon => [mon.species, mon.level])),
+      naturalExpBefore: expSchedule?.battles?.[battleIndex]?.mapExpBefore || 0,
       availableMons: playerTeam.map(x => x.species),
       ...result,
     });
@@ -298,20 +331,26 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
   const finalBattle = routeBosses[routeBosses.length - 1] || null;
-  const finalTeam = finalBattle
+  const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
+  const finalMaterialized = finalBattle
     ? materializeCandidateTeam(
         candidates,
         finalBattle.stage,
         finalBattle.aceLevel,
-        { moveAccess, singleUsePlan, purchasablePlan },
-      ).map(mon => mon.species)
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: finalLevelSnapshot },
+      )
     : [];
+  const finalTeam = finalMaterialized.map(mon => mon.species);
+  const finalLevels = Object.fromEntries(finalMaterialized.map(mon => [mon.species, mon.level]));
 
   return {
     score: meanWinRate,
     worstBossWinRate,
     routeStarter,
+    expProfile,
+    expSchedule,
     finalTeam,
+    finalLevels,
     routeBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
@@ -368,12 +407,12 @@ function resourceEvaluationBetter(a, b) {
   return Number(a.purchaseCosts?.coins || 0) < Number(b.purchaseCosts?.coins || 0);
 }
 
-async function evaluateCandidates(candidates, bosses, runs, moveAccess) {
+async function evaluateCandidates(candidates, bosses, runs, moveAccess, expContext = null) {
   const requestedResourceProfile = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
   let best = null;
 
   for (const variant of resourceMoveAccessVariants(moveAccess)) {
-    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant);
+    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant, expContext);
     const enriched = {
       ...evaluation,
       requestedResourceProfile,
@@ -456,6 +495,7 @@ async function cmdSimulate() {
   const poolPath = arg('pool', 'config/candidates.example.json');
   const runs = Number(arg('runs', '20'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   if (poolPath === 'canonical') {
     throw new Error('simulate requires an explicit team/baseline; use search --pool=canonical for generated candidates');
   }
@@ -466,12 +506,16 @@ async function cmdSimulate() {
     throw new Error('baselineTeam violates team constraints');
   }
 
-  const moveAccess = await loadMoveAccess(resourceProfile);
-  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess);
+  const [moveAccess, expContext] = await Promise.all([
+    loadMoveAccess(resourceProfile),
+    loadExpContext(story, expProfile),
+  ]);
+  const result = await evaluateCandidates(resolved.baseline, story.bosses, runs, moveAccess, expContext);
   console.log(JSON.stringify({
     pool: poolPath,
     baselineTeam: resolved.baseline.map(candidate => candidate.species),
     resourceProfile,
+    expProfile,
     runsPerBoss: runs,
     ...result,
   }, null, 2));
@@ -541,6 +585,14 @@ function searchResultRow(team, evaluation) {
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
     team: team.map(x => x.species),
     finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    expProfile: evaluation.expProfile,
+    naturalExp: evaluation.expSchedule ? {
+      totalNaturalExp: evaluation.expSchedule.totalNaturalExp,
+      totalMapExp: evaluation.expSchedule.totalMapExp,
+      totalMajorExp: evaluation.expSchedule.totalMajorExp,
+      unknownEntryLevels: evaluation.expSchedule.unknownEntryLevels,
+    } : null,
     routeStarter: evaluation.routeStarter,
     routeBattleCount: evaluation.routeBattleCount,
     requestedResourceProfile: evaluation.requestedResourceProfile,
@@ -556,10 +608,10 @@ function searchResultRow(team, evaluation) {
   };
 }
 
-async function screenCandidates(candidates, story, moveAccess, screenRuns) {
+async function screenCandidates(candidates, story, moveAccess, screenRuns, expContext = null) {
   const rows = [];
   for (const candidate of candidates) {
-    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess);
+    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess, expContext);
     rows.push({ candidate, evaluation });
   }
   rows.sort((a, b) =>
@@ -674,8 +726,9 @@ async function runBeamSearch({
   finalRuns,
   requiredCandidate,
   screenRowsOverride = null,
+  expContext = null,
 }) {
-  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns);
+  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns, expContext);
 
   const eligibleScreenRows = requiredCandidate
     ? screenRows.filter(row =>
@@ -694,7 +747,7 @@ async function runBeamSearch({
   async function evaluateTeam(team) {
     const key = team.map(candidateIdentity).sort().join('|') + `@runs=${runs}`;
     if (!cache.has(key)) {
-      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess));
+      cache.set(key, await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext));
     }
     return cache.get(key);
   }
@@ -733,7 +786,7 @@ async function runBeamSearch({
   for (const state of beam) {
     const evaluation = Number(finalRuns) === Number(runs)
       ? state.evaluation
-      : await evaluateCandidates(state.team, story.bosses, finalRuns, moveAccess);
+      : await evaluateCandidates(state.team, story.bosses, finalRuns, moveAccess, expContext);
     finalStates.push({ team: state.team, evaluation });
   }
   finalStates.sort((a, b) =>
@@ -777,6 +830,7 @@ async function cmdSearch() {
   const screenRuns = Number(arg('screen-runs', '1'));
   const finalRuns = Number(arg('final-runs', String(runs)));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
   const story = await loadStory();
 
   let candidates;
@@ -788,7 +842,10 @@ async function cmdSearch() {
 
   if (candidates.length < teamSize) throw new Error('Candidate pool is smaller than team-size');
   const requiredCandidate = findStarterCandidate(candidates, starterName);
-  const moveAccess = await loadMoveAccess(resourceProfile);
+  const [moveAccess, expContext] = await Promise.all([
+    loadMoveAccess(resourceProfile),
+    loadExpContext(story, expProfile),
+  ]);
 
   if (strategy === 'beam') {
     const result = await runBeamSearch({
@@ -802,6 +859,7 @@ async function cmdSearch() {
       screenRuns,
       finalRuns,
       requiredCandidate,
+      expContext,
     });
     console.log(JSON.stringify({
       pool: poolPath,
@@ -809,6 +867,7 @@ async function cmdSearch() {
       strategy,
       starter: requiredCandidate?.species || 'any',
       resourceProfile,
+      expProfile,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -837,7 +896,7 @@ async function cmdSearch() {
       rejectedByConstraints += 1;
       continue;
     }
-    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess);
+    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext);
     results.push(searchResultRow(team, evaluation));
     tested += 1;
     if (tested >= limit) break;
@@ -850,6 +909,7 @@ async function cmdSearch() {
     strategy,
     starter: requiredCandidate?.species || 'any',
     resourceProfile,
+    expProfile,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -874,15 +934,20 @@ async function cmdOptimize() {
   const candidateCap = Number(arg('candidate-cap', '12'));
   const teamSize = Number(arg('team-size', '6'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'ace'));
 
   const story = await loadStory();
-  const moveAccess = await loadMoveAccess(resourceProfile);
+  const [moveAccess, expContext] = await Promise.all([
+    loadMoveAccess(resourceProfile),
+    loadExpContext(story, expProfile),
+  ]);
   const output = {
     schemaVersion: 1,
     sourceCommit: story.config.sourceCommit,
     battleEngine: 'pokemon-showdown@0.11.11/gen4customgame',
     policy: 'greedy-moves+conservative-player-switching',
     resourceProfile,
+    expProfile,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -895,7 +960,7 @@ async function cmdOptimize() {
   for (const version of versions) {
     const pool = await loadCanonicalPool(version, story);
     const candidates = pool.candidates;
-    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns);
+    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext);
     output.versions[version] = {
       candidateCount: candidates.length,
       starters: {},
@@ -915,6 +980,7 @@ async function cmdOptimize() {
         finalRuns,
         requiredCandidate,
         screenRowsOverride: screenRows,
+        expContext,
       });
       output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
