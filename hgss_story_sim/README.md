@@ -69,6 +69,8 @@ The search output now includes:
 
 Final beam survivors can be rescored across multiple deterministic RNG seeds with `--final-runs=N`; the CI preliminary optimizer uses 10 runs per boss for the finalists.
 
+The current optimizer baseline also uses bounded voluntary switching (3-turn cooldown, maximum 6 voluntary switches per battle) to avoid switch-loop artifacts.
+
 ## Setup
 
 Requires Node.js 22.18+.
