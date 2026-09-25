@@ -155,16 +155,18 @@ export function deriveLevelEvolutionStages(candidates, bosses, evolutionRows) {
     for (const boss of bosses) {
       if (boss.stage < Number(candidate.availableFrom || 0)) continue;
       let changed = false;
+      let lastEvolutionLevel = null;
       for (;;) {
         const evo = levelEvolutionFor(evoBySpecies, currentConst, boss.aceLevel);
         if (!evo) break;
         currentConst = evo.target;
+        lastEvolutionLevel = Number(evo.param);
         changed = true;
       }
       if (changed) {
         transitions.push({
           stage: boss.stage,
-          level: Number(evo?.param || boss.aceLevel),
+          level: lastEvolutionLevel,
           species: constantToName(currentConst, 'SPECIES_'),
           derived: 'level-evolution',
         });
