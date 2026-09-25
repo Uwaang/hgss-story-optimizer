@@ -18,7 +18,8 @@
     "shop-tm-smoke": "node src/cli.mjs shop-tm-smoke",
     "tutor-smoke": "node src/cli.mjs tutor-smoke",
     "exp-smoke": "node src/cli.mjs exp-smoke",
-    "route-smoke": "node src/cli.mjs route-smoke"
+    "route-smoke": "node src/cli.mjs route-smoke",
+    "resource-smoke": "node src/cli.mjs resource-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
