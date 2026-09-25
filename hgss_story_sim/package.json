@@ -14,7 +14,8 @@
     "hm-smoke": "node src/cli.mjs hm-smoke",
     "tm-smoke": "node src/cli.mjs tm-smoke",
     "optimize": "node src/cli.mjs optimize",
-    "switch-smoke": "node src/cli.mjs switch-smoke"
+    "switch-smoke": "node src/cli.mjs switch-smoke",
+    "shop-tm-smoke": "node src/cli.mjs shop-tm-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
