@@ -67,7 +67,8 @@ Examples of modeled repeatable resources include Fire Blast / Blizzard / Thunder
 
 The optimizer reports several objectives separately instead of hiding them in one arbitrary score.
 
-- battle win rate
+- mean battle win rate
+- `worstBossWinRate`: the weakest major-story matchup, retained as a separate robustness objective
 - `catchUpExp`: EXP needed to bring a newly acquired member to the next relevant story battle level
 - `purchaseCosts.money`
 - `purchaseCosts.coins`
