@@ -70,7 +70,7 @@ function chooseAbility(species, override = 'TRPOKE_ABILITY_OVERRIDE_OFF', person
   return species.abilities['0'];
 }
 
-export function levelUpMoves(speciesName, level) {
+function levelUpMoveEntries(speciesName, level) {
   const species = dex.species.get(speciesName);
   if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
   const data = dex.species.getLearnsetData(species.id);
@@ -95,7 +95,102 @@ export function levelUpMoves(speciesName, level) {
     if (existing >= 0) unique.splice(existing, 1);
     unique.push({ name: moveName, level: entry.learnedAt });
   }
-  return unique.slice(-4).map(x => x.name);
+  return unique;
+}
+
+export function levelUpMoves(speciesName, level) {
+  return levelUpMoveEntries(speciesName, level).slice(-4).map(x => x.name);
+}
+
+export function levelUpMovePool(speciesName, level) {
+  return levelUpMoveEntries(speciesName, level).map(x => x.name);
+}
+
+function canLearnGen4Machine(species, moveName) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return false;
+  const learnset = dex.species.getLearnsetData(species.id).learnset || {};
+  return (learnset[move.id] || []).some(source => /^4M/.test(source));
+}
+
+function candidateMoveScore(species, moveName) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return -Infinity;
+  if (move.category === 'Status') {
+    const utility = {
+      recover: 92,
+      roost: 92,
+      milkdrink: 92,
+      synthesis: 85,
+      slackoff: 92,
+      thunderwave: 88,
+      willowisp: 88,
+      toxic: 84,
+      hypnosis: 74,
+      sleeppowder: 82,
+      swordsdance: 86,
+      dragondance: 94,
+      calmmind: 90,
+      nastyplot: 90,
+      agility: 70,
+      reflect: 60,
+      lightscreen: 60,
+      substitute: 58,
+    };
+    return utility[move.id] || 12;
+  }
+
+  const offensiveStat = move.category === 'Physical'
+    ? species.baseStats.atk
+    : species.baseStats.spa;
+  const stab = species.types.includes(move.type) ? 1.5 : 1;
+  const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
+  const priority = move.priority > 0 ? 1.08 : 1;
+  const fixedDamage = typeof move.damage === 'number' ? move.damage : 0;
+  const power = Math.max(move.basePower || 0, fixedDamage || 1);
+  return power * accuracy * stab * priority * (0.55 + offensiveStat / 120);
+}
+
+export function candidateMovePool(speciesName, level, stage, moveAccess = null) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
+
+  const moves = new Set(levelUpMovePool(species.name, level));
+  for (const machine of moveAccess?.reusableMachines || []) {
+    if (Number(machine.availableFrom) > stage) continue;
+    if (canLearnGen4Machine(species, machine.move)) moves.add(machine.move);
+  }
+  return [...moves];
+}
+
+export function selectCandidateMoves(speciesName, level, stage, moveAccess = null) {
+  const species = dex.species.get(speciesName);
+  const pool = candidateMovePool(speciesName, level, stage, moveAccess);
+  const scored = pool.map(name => ({
+    name,
+    move: dex.moves.get(name),
+    score: candidateMoveScore(species, name),
+  }));
+  scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const selected = [];
+  const damagingTypes = new Map();
+  for (const entry of scored) {
+    if (selected.length >= 4) break;
+    if (entry.move.category !== 'Status') {
+      const count = damagingTypes.get(entry.move.type) || 0;
+      if (count >= 2 && scored.length > 4) continue;
+      damagingTypes.set(entry.move.type, count + 1);
+    }
+    selected.push(entry.name);
+  }
+  if (selected.length < 4) {
+    for (const entry of scored) {
+      if (selected.length >= 4) break;
+      if (!selected.includes(entry.name)) selected.push(entry.name);
+    }
+  }
+  return selected;
 }
 
 export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
@@ -133,7 +228,8 @@ function candidateSpeciesAtStage(mon, stage) {
   return speciesName;
 }
 
-export function materializeCandidateTeam(candidates, stage, level) {
+export function materializeCandidateTeam(candidates, stage, level, options = {}) {
+  const moveAccess = options.moveAccess || null;
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
@@ -143,7 +239,7 @@ export function materializeCandidateTeam(candidates, stage, level) {
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : levelUpMoves(species.name, level);
+        : selectCandidateMoves(species.name, level, stage, moveAccess);
       return {
         name: species.name,
         species: species.name,
