@@ -83,8 +83,10 @@ Pareto output removes teams that are simultaneously no better in win rate and no
 Purchased moves are now an explicit search profile instead of being forced onto every team:
 
 - `core`: level-up moves + reusable HMs/tutors + free single-use story TMs; no Department Store or Game Corner purchases
-- `money`: `core` + repeatable money-purchased Department Store TMs
-- `all`: `money` + Game Corner coin TMs
+- `money`: permits both the `core` plan and repeatable money-purchased Department Store TMs
+- `all`: permits `core`, `money`, and Game Corner coin-TM plans
+
+Higher profiles are optional supersets rather than forced spending. For each candidate team, `money` keeps the better of core/money simulations and `all` keeps the better of core/money/all simulations (ties prefer the cheaper profile). CI enforces `all >= money >= core` on a real short-route simulation.
 
 This matters because the optimizer can now compare a practical no-shopping party against high-resource variants instead of assuming every useful purchasable TM is always bought.
 
@@ -231,3 +233,6 @@ The current comparison also penalizes recharge, charge-turn, recoil, crash and s
 3. Improve trainer item-use / AI fidelity.
 4. Broaden optimizer search and benchmark convergence.
 5. Extend through Kanto and Red.
+
+
+The final optimizer comparison after this monotonic-resource fix is triggered from the same commit for both `all` and `core`, so the outputs are directly comparable.
