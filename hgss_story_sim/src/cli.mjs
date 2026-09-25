@@ -93,8 +93,10 @@ function normalizeSameStageJoinPolicy(value) {
 
 function normalizeExpAllocator(value) {
   const allocator = String(value || 'balanced').toLowerCase();
-  if (!['balanced', 'boss-aware'].includes(allocator)) {
-    throw new Error(`Unknown EXP allocator: ${value}. Use balanced or boss-aware.`);
+  if (!['balanced', 'boss-aware-soft', 'boss-aware'].includes(allocator)) {
+    throw new Error(
+      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, or boss-aware.`
+    );
   }
   return allocator;
 }
@@ -2214,6 +2216,15 @@ async function cmdExpAllocatorSmoke() {
     grindPolicy: 'none',
     allocator: 'balanced',
   });
+  const bossAwareSoft = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware-soft',
+    levelUtility: candidateBossUtility,
+  });
   const bossAware = buildTeamExpSchedule({
     candidates: team,
     routeBosses: route,
@@ -2224,18 +2235,31 @@ async function cmdExpAllocatorSmoke() {
     levelUtility: candidateBossUtility,
   });
 
-  if (balanced.totalNaturalExp !== bossAware.totalNaturalExp) {
-    throw new Error(
-      `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${bossAware.totalNaturalExp}`
-    );
+  for (const schedule of [bossAwareSoft, bossAware]) {
+    if (balanced.totalNaturalExp !== schedule.totalNaturalExp) {
+      throw new Error(
+        `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${schedule.totalNaturalExp}`
+      );
+    }
   }
   if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
     throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
+  }
+  const softLevels = Object.values(bossAwareSoft.finalLevels).map(Number);
+  if (softLevels.length && Math.max(...softLevels) - Math.min(...softLevels) > 8) {
+    throw new Error(
+      `Boss-aware-soft exceeded its 8-level training gap: ${JSON.stringify(bossAwareSoft.finalLevels)}`
+    );
   }
 
   console.log(JSON.stringify({
     totalNaturalExp: balanced.totalNaturalExp,
     balanced: { allocator: balanced.allocator, finalLevels: balanced.finalLevels },
+    bossAwareSoft: {
+      allocator: bossAwareSoft.allocator,
+      levelGap: bossAwareSoft.bossAwareSoftLevelGap,
+      finalLevels: bossAwareSoft.finalLevels,
+    },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
   }, null, 2));
 }
