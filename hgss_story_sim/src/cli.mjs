@@ -758,6 +758,59 @@ function selectMultiObjectiveBeam(states, width) {
   return selected.slice(0, width);
 }
 
+function candidateScreenTieKey(row) {
+  return row.candidate.species;
+}
+
+function selectCandidateScreenRows(rows, width) {
+  if (rows.length <= width) return rows;
+
+  const front = rows.filter((row, index) =>
+    !rows.some((other, otherIndex) =>
+      index !== otherIndex && evaluationDominates(other.evaluation, row.evaluation)
+    )
+  );
+  const selected = [];
+  const seen = new Set();
+
+  function add(row) {
+    if (!row || selected.length >= width) return;
+    const key = candidateScreenTieKey(row);
+    if (seen.has(key)) return;
+    seen.add(key);
+    selected.push(row);
+  }
+
+  const sorters = [
+    (a, b) => b.evaluation.score - a.evaluation.score,
+    (a, b) => b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate,
+    (a, b) => Number(a.evaluation.expSchedule?.totalGrindExp || 0) - Number(b.evaluation.expSchedule?.totalGrindExp || 0),
+    (a, b) => a.evaluation.catchUpExp - b.evaluation.catchUpExp,
+    (a, b) => Number(a.evaluation.purchaseCosts?.money || 0) - Number(b.evaluation.purchaseCosts?.money || 0),
+    (a, b) => Number(a.evaluation.purchaseCosts?.coins || 0) - Number(b.evaluation.purchaseCosts?.coins || 0),
+    (a, b) => a.candidate.availableFrom - b.candidate.availableFrom,
+  ];
+
+  for (const sorter of sorters) {
+    const ordered = [...front].sort((a, b) =>
+      sorter(a, b) || candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+    );
+    add(ordered[0]);
+  }
+
+  const byScore = [...front].sort((a, b) =>
+    b.evaluation.score - a.evaluation.score ||
+    a.evaluation.catchUpExp - b.evaluation.catchUpExp ||
+    candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+  );
+  for (const row of byScore) add(row);
+
+  if (selected.length < width) {
+    for (const row of rows) add(row);
+  }
+  return selected.slice(0, width);
+}
+
 async function runBeamSearch({
   candidates,
   story,
@@ -780,8 +833,7 @@ async function runBeamSearch({
         candidateIdentity(row.candidate) === candidateIdentity(requiredCandidate)
       )
     : screenRows;
-  let screened = eligibleScreenRows
-    .slice(0, Math.min(candidateCap, eligibleScreenRows.length))
+  let screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap)
     .map(row => row.candidate);
   if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
     screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
