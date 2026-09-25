@@ -402,7 +402,15 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
-  const singleUsePlan = planSingleUseMachines(candidates, routeBosses, moveAccess);
+  const levelsByBattle = expSchedule
+    ? expSchedule.battles.map(battle => battle.levelsBefore || {})
+    : null;
+  const singleUsePlan = planSingleUseMachines(
+    candidates,
+    routeBosses,
+    moveAccess,
+    { levelsByBattle },
+  );
   const spendPolicy = normalizeSpendPolicy(moveAccess?.spendPolicy || 'unbounded');
   const naturalBudget = naturalPurchaseBudget(expSchedule);
   if (spendPolicy === 'natural' && naturalBudget === null) {
@@ -414,8 +422,12 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     moveAccess,
     singleUsePlan,
     spendPolicy === 'natural'
-      ? { maxMoneyEquivalent: naturalBudget, moneyPerCoin: MONEY_PER_COIN }
-      : {},
+      ? {
+          maxMoneyEquivalent: naturalBudget,
+          moneyPerCoin: MONEY_PER_COIN,
+          levelsByBattle,
+        }
+      : { levelsByBattle },
   );
   const purchasablePlan = purchasable.assignments;
   const purchaseCosts = purchasable.costs;
@@ -1365,14 +1377,15 @@ async function cmdResourceBudgetSmoke() {
   }
 
   const moveAccess = await loadMoveAccess('all', 'natural');
-  const singleUsePlan = planSingleUseMachines(team, route, moveAccess);
+  const levelsByBattle = schedule.battles.map(battle => battle.levelsBefore || {});
+  const singleUsePlan = planSingleUseMachines(team, route, moveAccess, { levelsByBattle });
   const budget = naturalPurchaseBudget(schedule);
   const budgeted = planPurchasableMachines(
     team,
     route,
     moveAccess,
     singleUsePlan,
-    { maxMoneyEquivalent: budget, moneyPerCoin: MONEY_PER_COIN },
+    { maxMoneyEquivalent: budget, moneyPerCoin: MONEY_PER_COIN, levelsByBattle },
   );
   if (Number(budgeted.budget?.spentMoneyEquivalent || 0) > budget) {
     throw new Error(
