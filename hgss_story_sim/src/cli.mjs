@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateMovePool, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -875,6 +875,25 @@ async function cmdOptimize() {
   console.log(serialized);
 }
 
+async function cmdMoveScoreSmoke() {
+  const aerialAce = candidateMoveUtility('Pidgeot', 'Aerial Ace');
+  const hyperBeam = candidateMoveUtility('Pidgeot', 'Hyper Beam');
+  const razorLeaf = candidateMoveUtility('Meganium', 'Razor Leaf');
+  const solarBeam = candidateMoveUtility('Meganium', 'Solar Beam');
+
+  if (!(aerialAce > hyperBeam)) {
+    throw new Error(`Recharge penalty regression: Aerial Ace ${aerialAce} <= Hyper Beam ${hyperBeam}`);
+  }
+  if (!(razorLeaf > solarBeam * 0.45)) {
+    throw new Error('Charge-move penalty looks unexpectedly weak/strong');
+  }
+
+  console.log(JSON.stringify({
+    Pidgeot: { aerialAce, hyperBeam },
+    Meganium: { razorLeaf, solarBeam },
+  }, null, 2));
+}
+
 async function cmdResourceSmoke() {
   const [core, money, all] = await Promise.all([
     loadMoveAccess('core'),
@@ -1178,6 +1197,7 @@ const commands = {
   simulate: cmdSimulate,
   search: cmdSearch,
   optimize: cmdOptimize,
+  'move-score-smoke': cmdMoveScoreSmoke,
   'resource-smoke': cmdResourceSmoke,
   'route-smoke': cmdRouteSmoke,
   'exp-smoke': cmdExpSmoke,
@@ -1191,7 +1211,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
+  console.error('Use one of: smoke, move-score-smoke, resource-smoke, route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
