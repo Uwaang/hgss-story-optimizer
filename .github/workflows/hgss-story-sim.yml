@@ -35,6 +35,8 @@ jobs:
           node --check src/cli.mjs
       - name: Validate source-backed availability
         run: npm run validate
+      - name: Growth EXP table smoke test
+        run: npm run exp-smoke
       - name: HGSS battle smoke test
         run: npm run smoke
       - name: Player matchup switching smoke test
