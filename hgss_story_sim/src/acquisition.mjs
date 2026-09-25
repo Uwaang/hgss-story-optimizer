@@ -11,6 +11,10 @@ function resolveVersioned(value, version) {
     if ('HEARTGOLD' in value || 'SOULSILVER' in value) {
       return resolveVersioned(value[version], version);
     }
+    if ('gold' in value || 'silver' in value) {
+      const legacyKey = version === 'HEARTGOLD' ? 'gold' : 'silver';
+      return resolveVersioned(value[legacyKey], version);
+    }
   }
   return value;
 }
@@ -67,6 +71,26 @@ function methodEntries(encounter, method, version) {
   return out;
 }
 
+function headbuttEntries(table, version) {
+  const out = [];
+  const slots = [
+    ...(table?.CommonMons || []),
+    ...(table?.RareMons || []),
+    ...(table?.SecretMons || []),
+  ];
+  for (const slot of slots) {
+    const species = [...new Set(speciesValues(slot.species, version))];
+    for (const speciesConst of species) {
+      out.push({
+        speciesConst,
+        minLevel: Number.isFinite(Number(slot.minLevel)) ? Number(slot.minLevel) : null,
+        maxLevel: Number.isFinite(Number(slot.maxLevel)) ? Number(slot.maxLevel) : null,
+      });
+    }
+  }
+  return out;
+}
+
 function buildEncounterIndex(encounters) {
   return new Map(encounters.map(x => [x.map, x]));
 }
@@ -116,11 +140,13 @@ export async function buildCanonicalCandidatePool({
   if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
     throw new Error('version must be HEARTGOLD or SOULSILVER');
   }
-  const [encounterJson, evoJson] = await Promise.all([
+  const [encounterJson, headbuttJson, evoJson] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/arc/headbutt.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/evo.json`),
   ]);
   const encounterByMap = buildEncounterIndex(encounterJson.encounters || []);
+  const headbuttByMap = new Map((headbuttJson.tables || []).map(x => [x.Map, x]));
   const evoByBase = new Map((evoJson.evoTable || []).map(x => [x.baseSpecies, x.evos || []]));
   const parentByTarget = new Map();
   for (const row of evoJson.evoTable || []) {
@@ -131,49 +157,68 @@ export async function buildCanonicalCandidatePool({
 
   const earliest = new Map();
   const cumulativeMaps = new Set();
-  const methods = Object.keys(access.methodUnlockStage || {});
+  const methods = Object.keys(access.methodUnlockStage || {}).filter(method => method !== 'headbutt');
 
   for (const stageDef of access.stages) {
     for (const map of stageDef.addMaps || []) cumulativeMaps.add(map);
+    function addEncounterEntry(entry, source) {
+      const speciesConst = entry.speciesConst;
+      const existing = earliest.get(speciesConst);
+      if (!existing) {
+        earliest.set(speciesConst, {
+          speciesConst,
+          availableFrom: stageDef.stage,
+          entryLevelMin: entry.minLevel,
+          entryLevelMax: entry.maxLevel,
+          sources: [source],
+        });
+        return;
+      }
+      if (existing.availableFrom !== stageDef.stage) return;
+      if (Number.isFinite(entry.minLevel)) {
+        existing.entryLevelMin = Number.isFinite(existing.entryLevelMin)
+          ? Math.min(existing.entryLevelMin, entry.minLevel)
+          : entry.minLevel;
+      }
+      if (Number.isFinite(entry.maxLevel)) {
+        existing.entryLevelMax = Number.isFinite(existing.entryLevelMax)
+          ? Math.max(existing.entryLevelMax, entry.maxLevel)
+          : entry.maxLevel;
+      }
+      const key = `${source.map}:${source.method}`;
+      if (!existing.sources.some(x => `${x.map}:${x.method}` === key)) {
+        existing.sources.push(source);
+      }
+    }
+
     for (const map of cumulativeMaps) {
       const encounter = encounterByMap.get(map);
-      if (!encounter) continue;
-      for (const method of methods) {
-        if (stageDef.stage < Number(access.methodUnlockStage[method])) continue;
-        for (const entry of methodEntries(encounter, method, version)) {
-          const speciesConst = entry.speciesConst;
-          const source = {
-            type: 'wild',
+      if (encounter) {
+        for (const method of methods) {
+          if (stageDef.stage < Number(access.methodUnlockStage[method])) continue;
+          for (const entry of methodEntries(encounter, method, version)) {
+            addEncounterEntry(entry, {
+              type: 'wild',
+              map,
+              method,
+              minLevel: entry.minLevel,
+              maxLevel: entry.maxLevel,
+            });
+          }
+        }
+      }
+
+      const headbuttUnlock = Number(access.methodUnlockStage?.headbutt ?? 99);
+      if (stageDef.stage >= headbuttUnlock) {
+        const table = headbuttByMap.get(map);
+        for (const entry of headbuttEntries(table, version)) {
+          addEncounterEntry(entry, {
+            type: 'headbutt',
             map,
-            method,
+            method: 'headbutt',
             minLevel: entry.minLevel,
             maxLevel: entry.maxLevel,
-          };
-          const existing = earliest.get(speciesConst);
-          if (!existing) {
-            earliest.set(speciesConst, {
-              speciesConst,
-              availableFrom: stageDef.stage,
-              entryLevelMin: entry.minLevel,
-              entryLevelMax: entry.maxLevel,
-              sources: [source],
-            });
-          } else if (existing.availableFrom === stageDef.stage) {
-            if (Number.isFinite(entry.minLevel)) {
-              existing.entryLevelMin = Number.isFinite(existing.entryLevelMin)
-                ? Math.min(existing.entryLevelMin, entry.minLevel)
-                : entry.minLevel;
-            }
-            if (Number.isFinite(entry.maxLevel)) {
-              existing.entryLevelMax = Number.isFinite(existing.entryLevelMax)
-                ? Math.max(existing.entryLevelMax, entry.maxLevel)
-                : entry.maxLevel;
-            }
-            const key = `${map}:${method}`;
-            if (!existing.sources.some(x => `${x.map}:${x.method}` === key)) {
-              existing.sources.push(source);
-            }
-          }
+          });
         }
       }
     }
@@ -240,6 +285,7 @@ export async function buildCanonicalCandidatePool({
     accessMode: access.mode,
     notes: [
       'Wild availability is derived from pinned pret/pokeheartgold encounter data.',
+      'Headbutt availability and encounter levels are derived from files/arc/headbutt.json once Headbutt is unlocked.',
       'Story-stage map access is curated in story-access.canonical.json.',
       'Only unambiguous EVO_LEVEL evolutions are auto-applied; friendship, stone, trade, move, and location evolutions remain conservative.',
       'Headbutt/static/gift exceptions are represented as manual acquisitions with provenance notes.',
