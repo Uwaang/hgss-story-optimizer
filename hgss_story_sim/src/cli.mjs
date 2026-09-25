@@ -2124,6 +2124,16 @@ async function cmdExpSegmentSmoke() {
     sameStageJoinPolicy: 'map-order',
   });
 
+  const silverAzalea = schedule.battles.find(battle => battle.label === 'Silver (Azalea)');
+  const whitney = schedule.battles.find(battle => battle.label === 'Whitney');
+  if (!silverAzalea || !whitney) throw new Error('Missing stage-2 boss windows');
+  if (silverAzalea.mapSegments.some(segment => ['R34', 'R35', 'R36'].includes(segment.map))) {
+    throw new Error('Goldenrod-route EXP leaked before Silver (Azalea)');
+  }
+  if (!whitney.mapSegments.some(segment => segment.map === 'R34')) {
+    throw new Error('Route 34 EXP was not delayed to the Whitney boss window');
+  }
+
   const stage6 = schedule.battles.find(battle => Number(battle.stage) === 6);
   if (!stage6) throw new Error('Missing stage-6 battle in segment smoke');
   const t29Index = stage6.mapSegments.findIndex(segment => segment.map === 'T29');
