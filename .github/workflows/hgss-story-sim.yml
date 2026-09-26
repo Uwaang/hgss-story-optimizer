@@ -1,5 +1,8 @@
 name: HGSS story simulator
 
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 on:
   push:
     branches:
