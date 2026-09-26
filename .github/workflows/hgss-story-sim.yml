@@ -342,7 +342,7 @@ jobs:
 
 
   member_usage_matrix:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-usage'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
