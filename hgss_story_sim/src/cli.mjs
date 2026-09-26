@@ -2747,6 +2747,98 @@ async function cmdSwitchSmoke() {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdAllocatorCrossCompare() {
+  const runs = Number(arg('runs', '20'));
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const [moveAccess, bossAwareContext, breakpointContext] = await Promise.all([
+    loadMoveAccess('money', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'boss-aware',
+    ),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'breakpoint-aware',
+    ),
+  ]);
+
+  const teams = {
+    bossAwareTop: ['Cyndaquil', 'Chinchou', 'Abra', 'Magikarp', 'Pidgey', 'Qwilfish'],
+    breakpointTop: ['Cyndaquil', 'Lapras', 'Chinchou', 'Sentret', 'Magnemite', 'Hoothoot'],
+  };
+  const allocators = {
+    bossAware: bossAwareContext,
+    breakpointAware: breakpointContext,
+  };
+
+  const results = {};
+  for (const [teamLabel, names] of Object.entries(teams)) {
+    const candidates = selectByNames(pool.candidates, names);
+    results[teamLabel] = { team: names, conditions: {} };
+    for (const [allocatorLabel, expContext] of Object.entries(allocators)) {
+      const evaluation = await evaluateCandidatesWithMoveAccess(
+        candidates,
+        story.bosses,
+        runs,
+        moveAccess,
+        expContext,
+        'none',
+      );
+      results[teamLabel].conditions[allocatorLabel] = {
+        expAllocator: expContext.expAllocator,
+        score: evaluation.score,
+        worstBossWinRate: evaluation.worstBossWinRate,
+        bottom5BossWinRate: evaluation.bottom5BossWinRate,
+        storyClearGeometricScore: evaluation.storyClearGeometricScore,
+        storyClearCoverageScore: evaluation.storyClearCoverageScore,
+        finalTeam: evaluation.finalTeam,
+        finalLevels: evaluation.finalLevels,
+        purchaseCosts: evaluation.purchaseCosts,
+        resourceBudget: evaluation.resourceBudget,
+        bosses: evaluation.rows.map(row => ({
+          boss: row.boss,
+          wins: row.wins,
+          losses: row.losses,
+          ties: row.ties,
+          winRate: row.winRate,
+          playerLevels: row.playerLevels,
+          playerLead: row.playerLead,
+        })),
+      };
+    }
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'controlled EXP allocator 2x2 cross-test with fixed teams, seeds, route, moves, trainer AI, and player policy',
+    version: 'HEARTGOLD',
+    starter: 'Cyndaquil',
+    runsPerBoss: runs,
+    resourceProfile: 'money',
+    spendPolicy: 'natural',
+    expProfile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocators: {
+      bossAware: 'existing immediate next-boss utility per EXP allocator',
+      breakpointAware: 'future 4-boss, 12-level lookahead breakpoint-aware v1 allocator',
+    },
+    results,
+  }, null, 2));
+}
+
 async function cmdTrainerAiCompare() {
   const runs = Number(arg('runs', '20'));
   const story = await loadStory();
@@ -3178,6 +3270,7 @@ const commands = {
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
+  'allocator-cross-compare': cmdAllocatorCrossCompare,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -3188,7 +3281,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
