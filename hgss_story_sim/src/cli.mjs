@@ -4,7 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
-import { chooseHgssPostKoSwitch, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
+import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
@@ -2700,6 +2700,33 @@ async function cmdTrainerAiSmoke() {
     throw new Error(`Expected post-KO AI to prefer Bellsprout slot 3 vs Totodile, got slot ${switchSlot}`);
   }
 
+  const moveSlot = chooseHgssMoveIndex(
+    { moves: [{ id: 'thunderbolt', disabled: false }, { id: 'quickattack', disabled: false }] },
+    {
+      species: 'Pikachu',
+      level: 50,
+      storedStats: { atk: 90, spa: 100 },
+      getTypes: () => ['Electric'],
+      boosts: {},
+      hp: 100,
+      maxhp: 100,
+    },
+    {
+      species: 'Geodude',
+      storedStats: { def: 100, spd: 80 },
+      getTypes: () => ['Rock', 'Ground'],
+      boosts: {},
+      hp: 100,
+      maxhp: 100,
+    },
+    7,
+    { turn: 1, field: { weather: '' } },
+    () => false,
+  );
+  if (moveSlot !== 1) {
+    throw new Error(`Expected Gen 4 BASIC AI to avoid immune Thunderbolt vs Geodude, got move slot ${moveSlot}`);
+  }
+
   const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
   const playerTeam = [{
     species: 'Mareep',
@@ -2709,8 +2736,8 @@ async function cmdTrainerAiSmoke() {
     moves: ['ThunderShock', 'Tackle'],
   }];
   const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 982451, { p2Trainer: falkner });
-  if (battle.p2AiMode !== 'hgss' || battle.p2AiFlags !== 3) {
-    throw new Error(`HGSS trainer AI metadata was not wired into battle: ${JSON.stringify(battle)}`);
+  if (battle.p2AiMode !== 'hgss' || battle.p2AiFlags !== 3 || battle.averageP2MoveDecisions < 1) {
+    throw new Error(`HGSS trainer AI metadata/move scoring was not wired into battle: ${JSON.stringify(battle)}`);
   }
 
   console.log(JSON.stringify({
@@ -2718,6 +2745,7 @@ async function cmdTrainerAiSmoke() {
     whitney: whitneyProfile,
     red: redProfile,
     postKoSwitchSlot: switchSlot,
+    immuneMoveChoiceSlot: moveSlot,
     battle,
   }, null, 2));
 }
