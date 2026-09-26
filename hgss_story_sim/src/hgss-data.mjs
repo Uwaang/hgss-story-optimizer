@@ -11,9 +11,12 @@ export function pretUrls(commit = DEFAULT_PRET_COMMIT) {
 }
 
 export async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: { 'user-agent': 'hgss-story-sim/0.1' },
-  });
+  const headers = { 'user-agent': 'hgss-story-sim/0.1' };
+  if (process.env.GITHUB_TOKEN && String(url).startsWith('https://api.github.com/')) {
+    headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    headers.accept = 'application/vnd.github+json';
+  }
+  const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} while fetching ${url}`);
   }
