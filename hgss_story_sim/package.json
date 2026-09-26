@@ -27,6 +27,7 @@
     "exp-budget-smoke": "node src/cli.mjs exp-budget-smoke",
     "exp-segment-smoke": "node src/cli.mjs exp-segment-smoke",
     "exp-allocator-smoke": "node src/cli.mjs exp-allocator-smoke",
+    "team-order-smoke": "node src/cli.mjs team-order-smoke",
     "objective-smoke": "node src/cli.mjs objective-smoke",
     "exp-route-smoke": "node src/cli.mjs exp-route-smoke",
     "capture-smoke": "node src/cli.mjs capture-smoke",
