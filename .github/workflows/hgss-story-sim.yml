@@ -24,6 +24,7 @@ on:
         options:
           - default
           - allocator-story-matrix
+          - team-ablation
 
 jobs:
   smoke:
@@ -338,6 +339,52 @@ jobs:
           path: hgss_story_sim/results/story-resources-${{ matrix.expAllocator }}.json
           if-no-files-found: error
 
+
+  member_ablation_matrix:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Ablate members for ${{ matrix.version }} ${{ matrix.starter }}
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-ablation --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/member-ablation-${{ matrix.version }}-${{ matrix.starter }}.json
+      - name: Upload member ablation
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-member-ablation-${{ matrix.version }}-${{ matrix.starter }}
+          path: hgss_story_sim/results/member-ablation-${{ matrix.version }}-${{ matrix.starter }}.json
+          if-no-files-found: error
 
   allocator_story_matrix_12:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-story-matrix'
