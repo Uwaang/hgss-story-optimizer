@@ -110,6 +110,16 @@ function normalizeSearchObjective(value) {
 }
 
 const STORY_CLEAR_BOTTOM_K = 5;
+const STORY_CLEAR_TARGET_WIN_RATE = 0.5;
+
+function storyClearCoverageScore(rows, target = STORY_CLEAR_TARGET_WIN_RATE) {
+  if (!rows.length) return 0;
+  const threshold = Math.max(0.01, Math.min(1, Number(target) || STORY_CLEAR_TARGET_WIN_RATE));
+  return rows.reduce((sum, row) => {
+    const rate = Math.max(0, Math.min(1, Number(row.winRate || 0)));
+    return sum + Math.min(rate, threshold) / threshold;
+  }, 0) / rows.length;
+}
 
 function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
   const rates = rows
@@ -122,6 +132,9 @@ function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
 
 function evaluationObjectiveCompare(a, b, objective = 'mean') {
   if (objective === 'story-clear') {
+    if (a.storyClearCoverageScore !== b.storyClearCoverageScore) {
+      return b.storyClearCoverageScore - a.storyClearCoverageScore;
+    }
     if (a.bottom5BossWinRate !== b.bottom5BossWinRate) {
       return b.bottom5BossWinRate - a.bottom5BossWinRate;
     }
@@ -597,6 +610,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
   const bottom5BossWinRate = lowerTailBossWinRate(rows);
+  const storyCoverage = storyClearCoverageScore(rows);
   const finalBattle = routeBosses[routeBosses.length - 1] || null;
   const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
   const finalMaterialized = finalBattle
@@ -614,6 +628,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     score: meanWinRate,
     worstBossWinRate,
     bottom5BossWinRate,
+    storyClearCoverageScore: storyCoverage,
+    storyClearTargetWinRate: STORY_CLEAR_TARGET_WIN_RATE,
     storyClearBottomK: STORY_CLEAR_BOTTOM_K,
     routeStarter,
     expProfile,
@@ -894,6 +910,7 @@ function paretoFront(rows) {
       other.score >= row.score &&
       other.worstBossWinRate >= row.worstBossWinRate &&
       other.bottom5BossWinRate >= row.bottom5BossWinRate &&
+      other.storyClearCoverageScore >= row.storyClearCoverageScore &&
       otherExp <= rowExp &&
       otherUnknown <= rowUnknown &&
       otherCapture <= rowCapture &&
@@ -903,6 +920,7 @@ function paretoFront(rows) {
       other.score > row.score ||
       other.worstBossWinRate > row.worstBossWinRate ||
       other.bottom5BossWinRate > row.bottom5BossWinRate ||
+      other.storyClearCoverageScore > row.storyClearCoverageScore ||
       otherExp < rowExp ||
       otherUnknown < rowUnknown ||
       otherCapture < rowCapture ||
@@ -917,6 +935,8 @@ function searchResultRow(team, evaluation) {
     score: evaluation.score,
     worstBossWinRate: evaluation.worstBossWinRate,
     bottom5BossWinRate: evaluation.bottom5BossWinRate,
+    storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    storyClearTargetWinRate: evaluation.storyClearTargetWinRate,
     storyClearBottomK: evaluation.storyClearBottomK,
     catchUpLevels: evaluation.catchUpLevels,
     catchUpUnknown: evaluation.catchUpUnknown,
@@ -1005,6 +1025,7 @@ function evaluationDominates(a, b) {
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
     a.bottom5BossWinRate >= b.bottom5BossWinRate &&
+    a.storyClearCoverageScore >= b.storyClearCoverageScore &&
     aExp <= bExp &&
     aUnknown <= bUnknown &&
     aCapture <= bCapture &&
@@ -1014,6 +1035,7 @@ function evaluationDominates(a, b) {
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
     a.bottom5BossWinRate > b.bottom5BossWinRate ||
+    a.storyClearCoverageScore > b.storyClearCoverageScore ||
     aExp < bExp ||
     aUnknown < bUnknown ||
     aCapture < bCapture ||
@@ -1274,6 +1296,7 @@ async function runBeamSearch({
       score: row.evaluation.score,
       worstBossWinRate: row.evaluation.worstBossWinRate,
       bottom5BossWinRate: row.evaluation.bottom5BossWinRate,
+      storyClearCoverageScore: row.evaluation.storyClearCoverageScore,
       catchUpLevels: row.evaluation.catchUpLevels,
       catchUpUnknown: row.evaluation.catchUpUnknown,
       catchUpExp: row.evaluation.catchUpExp,
@@ -1529,6 +1552,7 @@ async function cmdConvergence() {
       score: top?.score ?? null,
       worstBossWinRate: top?.worstBossWinRate ?? null,
       bottom5BossWinRate: top?.bottom5BossWinRate ?? null,
+      storyClearCoverageScore: top?.storyClearCoverageScore ?? null,
       expBurden: top?.expBurden ?? null,
       captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
       resourceBurden: top ? rowResourceBurden(top) : null,
@@ -1574,6 +1598,7 @@ async function cmdConvergence() {
       score: baseline.score,
       worstBossWinRate: baseline.worstBossWinRate,
       bottom5BossWinRate: baseline.bottom5BossWinRate,
+      storyClearCoverageScore: baseline.storyClearCoverageScore,
     } : null,
     rows,
   }, null, 2));
@@ -2402,15 +2427,25 @@ async function cmdExpAllocatorSmoke() {
 }
 
 async function cmdObjectiveSmoke() {
+  const fragileRows = [
+    ...Array.from({ length: 16 }, () => ({ winRate: 1 })),
+    ...Array.from({ length: 5 }, () => ({ winRate: 0 })),
+  ];
+  const resilientRows = [
+    ...Array.from({ length: 11 }, () => ({ winRate: 1 })),
+    ...Array.from({ length: 10 }, () => ({ winRate: 0.4 })),
+  ];
   const fragile = {
-    score: 0.80,
-    worstBossWinRate: 0.00,
-    bottom5BossWinRate: 0.20,
+    score: 16 / 21,
+    worstBossWinRate: 0,
+    bottom5BossWinRate: lowerTailBossWinRate(fragileRows),
+    storyClearCoverageScore: storyClearCoverageScore(fragileRows),
   };
   const resilient = {
-    score: 0.70,
-    worstBossWinRate: 0.10,
-    bottom5BossWinRate: 0.40,
+    score: (11 + 10 * 0.4) / 21,
+    worstBossWinRate: 0.4,
+    bottom5BossWinRate: lowerTailBossWinRate(resilientRows),
+    storyClearCoverageScore: storyClearCoverageScore(resilientRows),
   };
 
   if (!(evaluationObjectiveCompare(fragile, resilient, 'mean') < 0)) {
@@ -2429,7 +2464,10 @@ async function cmdObjectiveSmoke() {
 
   console.log(JSON.stringify({
     bottomK: STORY_CLEAR_BOTTOM_K,
+    targetWinRate: STORY_CLEAR_TARGET_WIN_RATE,
     lowerTailExample: bottom5,
+    fragileCoverage: fragile.storyClearCoverageScore,
+    resilientCoverage: resilient.storyClearCoverageScore,
     meanPrefers: 'fragile',
     storyClearPrefers: 'resilient',
   }, null, 2));
