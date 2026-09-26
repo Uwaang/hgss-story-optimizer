@@ -391,6 +391,30 @@ jobs:
 
 
 
+  breakpoint_allocator_pilot:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil with breakpoint-aware EXP
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=breakpoint-aware --breakpoint-boss-horizon=4 --breakpoint-level-lookahead=12 --breakpoint-discount=0.72 --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/breakpoint-pilot-hg-cyndaquil.json
+      - name: Upload breakpoint-aware pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-breakpoint-pilot-hg-cyndaquil
+          path: hgss_story_sim/results/breakpoint-pilot-hg-cyndaquil.json
+          if-no-files-found: error
+
   trainer_ai_ab:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[trainer-ai-ab]')
     runs-on: ubuntu-latest

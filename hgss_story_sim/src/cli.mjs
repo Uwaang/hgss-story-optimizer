@@ -6,7 +6,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
+import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
   loadPretAvailabilityData,
@@ -94,9 +94,9 @@ function normalizeSameStageJoinPolicy(value) {
 
 function normalizeExpAllocator(value) {
   const allocator = String(value || 'balanced').toLowerCase();
-  if (!['balanced', 'boss-aware-soft', 'boss-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(
-      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, or boss-aware.`
+      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, or breakpoint-aware.`
     );
   }
   return allocator;
@@ -192,8 +192,20 @@ async function loadExpContext(
   const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
   const normalizedExpAllocator = normalizeExpAllocator(expAllocator);
   const bossAwareSoftLevelScale = Number(arg('soft-level-scale', '8'));
+  const breakpointBossHorizon = Number(arg('breakpoint-boss-horizon', '4'));
+  const breakpointLevelLookahead = Number(arg('breakpoint-level-lookahead', '12'));
+  const breakpointDiscount = Number(arg('breakpoint-discount', '0.72'));
   if (!Number.isFinite(bossAwareSoftLevelScale) || bossAwareSoftLevelScale <= 0) {
     throw new Error(`Invalid --soft-level-scale: ${bossAwareSoftLevelScale}`);
+  }
+  if (!Number.isInteger(breakpointBossHorizon) || breakpointBossHorizon < 1) {
+    throw new Error(`Invalid --breakpoint-boss-horizon: ${breakpointBossHorizon}`);
+  }
+  if (!Number.isInteger(breakpointLevelLookahead) || breakpointLevelLookahead < 1) {
+    throw new Error(`Invalid --breakpoint-level-lookahead: ${breakpointLevelLookahead}`);
+  }
+  if (!Number.isFinite(breakpointDiscount) || breakpointDiscount <= 0 || breakpointDiscount > 1) {
+    throw new Error(`Invalid --breakpoint-discount: ${breakpointDiscount}`);
   }
   if (profile === 'ace') {
     return {
@@ -203,6 +215,9 @@ async function loadExpContext(
       sameStageJoinPolicy: normalizedSameStageJoinPolicy,
       expAllocator: normalizedExpAllocator,
       bossAwareSoftLevelScale,
+      breakpointBossHorizon,
+      breakpointLevelLookahead,
+      breakpointDiscount,
       world: null,
     };
   }
@@ -228,6 +243,9 @@ async function loadExpContext(
     sameStageJoinPolicy: normalizedSameStageJoinPolicy,
     expAllocator: normalizedExpAllocator,
     bossAwareSoftLevelScale,
+    breakpointBossHorizon,
+    breakpointLevelLookahead,
+    breakpointDiscount,
     world,
   };
 }
@@ -563,6 +581,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         allocator: expContext?.expAllocator || 'balanced',
         levelUtility: candidateBossUtility,
         bossAwareSoftLevelScale: expContext?.bossAwareSoftLevelScale || 8,
+        breakpointBossHorizon: expContext?.breakpointBossHorizon || 4,
+        breakpointLevelLookahead: expContext?.breakpointLevelLookahead || 12,
+        breakpointDiscount: expContext?.breakpointDiscount || 0.72,
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -2459,8 +2480,26 @@ async function cmdExpAllocatorSmoke() {
     allocator: 'boss-aware',
     levelUtility: candidateBossUtility,
   });
+  const breakpointAware = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'breakpoint-aware',
+    levelUtility: candidateBossUtility,
+  });
+  const breakpointAwareReversed = buildTeamExpSchedule({
+    candidates: [...team].reverse(),
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'breakpoint-aware',
+    levelUtility: candidateBossUtility,
+  });
 
-  for (const schedule of [bossAwareSoft, bossAware]) {
+  for (const schedule of [bossAwareSoft, bossAware, breakpointAware, breakpointAwareReversed]) {
     if (balanced.totalNaturalExp !== schedule.totalNaturalExp) {
       throw new Error(
         `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${schedule.totalNaturalExp}`
@@ -2470,6 +2509,55 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
     throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
   }
+  if (JSON.stringify(bossAware.finalLevels) === JSON.stringify(breakpointAware.finalLevels)) {
+    throw new Error('Breakpoint-aware allocator produced the same final level allocation as boss-aware');
+  }
+  if (JSON.stringify(breakpointAware.finalLevels) !== JSON.stringify(breakpointAwareReversed.finalLevels)) {
+    throw new Error(
+      `Breakpoint-aware allocator depends on team order: ${JSON.stringify(breakpointAware.finalLevels)} != ${JSON.stringify(breakpointAwareReversed.finalLevels)}`
+    );
+  }
+
+  const breakpointStates = [
+    {
+      key: 'breakpoint',
+      candidate: { species: 'BreakpointMon' },
+      growthRate: 'MEDIUM_FAST',
+      level: 10,
+      exp: expAtLevel('MEDIUM_FAST', 10),
+      unknown: false,
+    },
+    {
+      key: 'steady',
+      candidate: { species: 'SteadyMon' },
+      growthRate: 'MEDIUM_FAST',
+      level: 10,
+      exp: expAtLevel('MEDIUM_FAST', 10),
+      unknown: false,
+    },
+  ];
+  const syntheticUtility = (candidate, _boss, level) => {
+    if (candidate.species === 'BreakpointMon') return level >= 12 ? 120 : 8;
+    return 10 + (level - 10) * 4;
+  };
+  const syntheticAmount =
+    expAtLevel('MEDIUM_FAST', 12) - expAtLevel('MEDIUM_FAST', 10);
+  const synthetic = allocateBreakpointAwareExp(
+    breakpointStates,
+    syntheticAmount,
+    [{ label: 'next' }, { label: 'later' }],
+    syntheticUtility,
+    { bossHorizon: 2, levelLookahead: 4, discount: 0.72 },
+  );
+  if (synthetic.allocated !== syntheticAmount || synthetic.unallocated !== 0) {
+    throw new Error(`Breakpoint allocator failed EXP conservation: ${JSON.stringify(synthetic)}`);
+  }
+  if (breakpointStates[0].level < 12 || breakpointStates[1].level !== 10) {
+    throw new Error(
+      `Breakpoint allocator failed to fund the future breakpoint: ${JSON.stringify(breakpointStates)}`
+    );
+  }
+
   const levelSpread = schedule => {
     const levels = Object.values(schedule.finalLevels).map(Number);
     return levels.length ? Math.max(...levels) - Math.min(...levels) : 0;
@@ -2490,6 +2578,18 @@ async function cmdExpAllocatorSmoke() {
       finalLevels: bossAwareSoft.finalLevels,
     },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
+    breakpointAware: {
+      allocator: breakpointAware.allocator,
+      bossHorizon: breakpointAware.breakpointBossHorizon,
+      levelLookahead: breakpointAware.breakpointLevelLookahead,
+      discount: breakpointAware.breakpointDiscount,
+      levelSpread: levelSpread(breakpointAware),
+      finalLevels: breakpointAware.finalLevels,
+    },
+    syntheticBreakpoint: {
+      allocated: synthetic.allocated,
+      finalLevels: Object.fromEntries(breakpointStates.map(state => [state.key, state.level])),
+    },
   }, null, 2));
 }
 
