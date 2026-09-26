@@ -713,13 +713,11 @@ function applyHgssTrainerItemTurn(battle, side, active, stats, plan) {
     stats.trainerItemsUsed = [...(stats.trainerItemsUsed || []), plan.item];
   }
 
-  // Showdown has no trainer-bag action in standard customgame. Injecting a
-  // queue-level pass consumes the trainer's action for this turn without giving
-  // it a free move after healing. The item effect is applied before turn
-  // resolution, matching the cartridge's action ordering closely.
-  side.clearChoice();
-  side.choice.actions.push({ choice: 'pass' });
-  if (battle.allChoicesDone()) battle.commitChoices();
+  // Showdown has no trainer-bag command in standard customgame. The caller
+  // submits a parser-safe no-action turn through the normal player stream after
+  // this effect is applied; do not mutate Side.choice or commit the queue here,
+  // because doing so re-enters request processing and can leave the stream
+  // waiting forever.
   return true;
 }
 
@@ -897,7 +895,7 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
       legal.sort((a, b) => b.score - a.score || a.idx - b.idx);
       return `move ${legal[0].idx + 1}`;
     });
-    if (choices.includes('__trainer_item__')) return null;
+    if (choices.includes('__trainer_item__')) return '__trainer_item__';
     return choices.join(', ');
   }
   return 'default';
@@ -910,6 +908,26 @@ async function runGreedyAi(playerStream, battleStream, sideId, stats, aiOptions 
       const request = JSON.parse(line.slice('|request|'.length));
       const choice = selectChoice(request, battleStream, sideId, stats, aiOptions);
       if (choice) {
+        if (choice === '__trainer_item__') {
+          // Side#choosePass normally rejects a pass from a healthy active mon.
+          // A temporary "commanding" marker is the narrowest parser bridge:
+          // choosePass explicitly accepts it, while Gen 4 has no Commanding
+          // battle effect. The marker exists only during the synchronous write
+          // and is removed immediately afterward.
+          const battle = battleStream.battle;
+          const sideIndex = sideId === 'p1' ? 0 : 1;
+          const active = battle?.sides?.[sideIndex]?.active?.[0];
+          if (!active) throw new Error('Trainer item turn requires an active Pokemon');
+          const priorCommanding = active.volatiles?.commanding;
+          active.volatiles.commanding = priorCommanding || { id: 'commanding' };
+          try {
+            await playerStream.write('pass');
+          } finally {
+            if (priorCommanding) active.volatiles.commanding = priorCommanding;
+            else delete active.volatiles.commanding;
+          }
+          continue;
+        }
         if (choice.startsWith('switch ') && !request.forceSwitch) {
           stats.voluntarySwitches += 1;
           stats.lastVoluntarySwitchTurn = Number(battleStream.battle?.turn || 0);
