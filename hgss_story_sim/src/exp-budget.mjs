@@ -541,14 +541,33 @@ export function allocateBossAwareSoftExp(
     { softLevelScale },
   );
 }
-function weightedFutureUtility(candidate, bosses, level, levelUtility, discount = 0.72) {
+function cachedLevelUtility(candidate, boss, level, levelUtility, cache = null) {
+  if (!cache) return Number(levelUtility?.(candidate, boss, level) || 0);
+  let byBoss = cache.get(candidate);
+  if (!byBoss) {
+    byBoss = new Map();
+    cache.set(candidate, byBoss);
+  }
+  let byLevel = byBoss.get(boss);
+  if (!byLevel) {
+    byLevel = new Map();
+    byBoss.set(boss, byLevel);
+  }
+  const normalizedLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  if (!byLevel.has(normalizedLevel)) {
+    byLevel.set(normalizedLevel, Number(levelUtility?.(candidate, boss, normalizedLevel) || 0));
+  }
+  return byLevel.get(normalizedLevel);
+}
+
+function weightedFutureUtility(candidate, bosses, level, levelUtility, discount = 0.72, cache = null) {
   const future = (bosses || []).filter(Boolean);
   if (!future.length) return 0;
   let weighted = 0;
   let totalWeight = 0;
   for (let i = 0; i < future.length; i += 1) {
     const weight = Math.max(0.01, Number(discount) ** i);
-    weighted += weight * Number(levelUtility?.(candidate, future[i], level) || 0);
+    weighted += weight * cachedLevelUtility(candidate, future[i], level, levelUtility, cache);
     totalWeight += weight;
   }
   return totalWeight > 0 ? weighted / totalWeight : 0;
@@ -559,7 +578,7 @@ export function allocateBreakpointAwareExp(
   amount,
   futureBosses,
   levelUtility,
-  { bossHorizon = 4, levelLookahead = 12, discount = 0.72 } = {},
+  { bossHorizon = 4, levelLookahead = 12, discount = 0.72, utilityCache = null } = {},
 ) {
   let remaining = Math.max(0, Math.floor(Number(amount || 0)));
   let allocated = 0;
@@ -571,14 +590,14 @@ export function allocateBreakpointAwareExp(
     let best = null;
     for (const state of eligible) {
       const maxTargetLevel = Math.min(100, state.level + Math.max(1, Number(levelLookahead) || 12));
-      const currentUtility = weightedFutureUtility(state.candidate, horizon, state.level, levelUtility, discount);
+      const currentUtility = weightedFutureUtility(state.candidate, horizon, state.level, levelUtility, discount, utilityCache);
 
       for (let targetLevel = state.level + 1; targetLevel <= maxTargetLevel; targetLevel += 1) {
         const targetExp = expAtLevel(state.growthRate, targetLevel);
         if (targetExp === null) continue;
         const need = Math.max(1, targetExp - state.exp);
-        const targetUtility = weightedFutureUtility(state.candidate, horizon, targetLevel, levelUtility, discount);
-        const previousUtility = weightedFutureUtility(state.candidate, horizon, targetLevel - 1, levelUtility, discount);
+        const targetUtility = weightedFutureUtility(state.candidate, horizon, targetLevel, levelUtility, discount, utilityCache);
+        const previousUtility = weightedFutureUtility(state.candidate, horizon, targetLevel - 1, levelUtility, discount, utilityCache);
         const routeGain = Math.max(0, targetUtility - currentUtility);
         const breakpointJump = Math.max(0, targetUtility - previousUtility);
         const priority = (
@@ -744,6 +763,7 @@ export function buildTeamExpSchedule({
   let totalMapMoney = 0;
   let totalMajorMoney = 0;
   let currentMoney = startingMoney;
+  const breakpointUtilityCache = new Map();
 
   function addAvailable(stage, map = null, onlyMapped = false) {
     const added = [];
@@ -792,6 +812,7 @@ export function buildTeamExpSchedule({
           bossHorizon: breakpointBossHorizon,
           levelLookahead: breakpointLevelLookahead,
           discount: breakpointDiscount,
+          utilityCache: breakpointUtilityCache,
         },
       );
     }
