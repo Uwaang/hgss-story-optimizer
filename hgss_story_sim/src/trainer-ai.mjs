@@ -113,6 +113,224 @@ function maxMovePotential(mon, target) {
   return best;
 }
 
+
+function estimatedDamage(mon, target, slot) {
+  const move = dex.moves.get(slot?.id || slot?.move || slot || '');
+  if (!move.exists || move.category === 'Status' || slot?.disabled) return 0;
+  const effectiveness = moveEffectiveness(move, target);
+  if (effectiveness <= 0) return 0;
+  if (typeof move.damage === 'number') return move.damage * effectiveness;
+
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = Math.max(1, Number(mon?.getStat?.(attackStat) || mon?.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(target?.getStat?.(defenseStat) || target?.storedStats?.[defenseStat] || 1));
+  const level = Math.max(1, Number(mon?.level || 50));
+  const power = Math.max(1, Number(move.basePower || 0));
+  const stab = monTypes(mon).includes(move.type) ? 1.5 : 1;
+  const base = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
+  return base * stab * effectiveness;
+}
+
+function targetHasType(target, type) {
+  return monTypes(target).includes(type);
+}
+
+function moveIsRecovery(move) {
+  return Boolean(move?.heal) || ['recover', 'roost', 'synthesis', 'moonlight', 'morningsun', 'milkdrink', 'slackoff', 'softboiled'].includes(move?.id);
+}
+
+function moveIsSetup(move) {
+  if (!move?.exists || move.category !== 'Status') return false;
+  if (move.target === 'self' && (move.boosts || move.self?.boosts)) return true;
+  if (move.self?.boosts) return true;
+  return new Set([
+    'swordsdance', 'dragondance', 'calmmind', 'nastyplot', 'agility',
+    'rockpolish', 'irondefense', 'amnesia', 'bulkup', 'cosmicpower',
+    'doubleteam', 'minimize', 'focusenergy', 'substitute',
+    'reflect', 'lightscreen', 'safeguard', 'tailwind',
+  ]).has(move.id);
+}
+
+function statusMoveAdjustment(move, active, target, battle) {
+  let score = 0;
+  const targetStatus = String(target?.status || '');
+  const activeHp = active?.maxhp > 0 ? active.hp / active.maxhp : 1;
+
+  if (move.status) {
+    if (targetStatus) return -10;
+    if ((move.status === 'psn' || move.status === 'tox') && (targetHasType(target, 'Poison') || targetHasType(target, 'Steel'))) {
+      return -10;
+    }
+    if (move.status === 'par' && move.type === 'Electric' && targetHasType(target, 'Ground')) return -10;
+    score += 1;
+  }
+
+  if (move.volatileStatus === 'confusion' && target?.volatiles?.confusion) return -10;
+  if (moveIsRecovery(move)) {
+    if (activeHp >= 0.99) return -10;
+    if (activeHp <= 0.35) score += 4;
+    else if (activeHp <= 0.6) score += 2;
+    else if (activeHp > 0.8) score -= 2;
+  }
+
+  if (moveIsSetup(move)) {
+    const selfBoosts = move.self?.boosts || (move.target === 'self' ? move.boosts : null) || {};
+    const capped = Object.entries(selfBoosts).every(([stat, delta]) => Number(delta) <= 0 || Number(active?.boosts?.[stat] || 0) >= 6);
+    if (Object.keys(selfBoosts).length && capped) return -10;
+    if (activeHp >= 0.65) score += 2;
+    if (activeHp <= 0.3) score -= 2;
+  }
+
+  if (move.id === 'protect' || move.id === 'detect') {
+    if (active?.volatiles?.protect) score -= 2;
+    else score += 1;
+  }
+  if (move.id === 'substitute') {
+    if (activeHp <= 0.25 || active?.volatiles?.substitute) score -= 4;
+    else if (activeHp > 0.55) score += 2;
+  }
+  if (move.id === 'leechseed') {
+    if (target?.volatiles?.leechseed || targetHasType(target, 'Grass')) score -= 8;
+    else score += 2;
+  }
+
+  if (move.weather) {
+    const currentWeather = String(battle?.field?.weather || '');
+    if (currentWeather && currentWeather === String(move.weather)) score -= 4;
+  }
+
+  return score;
+}
+
+function expertMoveAdjustment(move, active, target, battle, randomChance) {
+  let score = statusMoveAdjustment(move, active, target, battle);
+  if (score <= -8) return score;
+
+  const hpRatio = active?.maxhp > 0 ? active.hp / active.maxhp : 1;
+  const foeHpRatio = target?.maxhp > 0 ? target.hp / target.maxhp : 1;
+
+  if (['hypnosis', 'sleeppowder', 'sing', 'spore'].includes(move.id) && !target?.status) score += 2;
+  if (['toxic', 'willowisp', 'thunderwave', 'stunspore'].includes(move.id) && !target?.status) score += 2;
+  if (moveIsRecovery(move) && hpRatio < 0.5) score += 2;
+  if (moveIsSetup(move) && hpRatio > 0.6) score += 1;
+  if (move.id === 'uturn') score += 1;
+  if (move.id === 'pursuit' && target?.activeTurns === 1) score += 1;
+  if (move.id === 'brine' && foeHpRatio <= 0.5) score += 2;
+  if (move.id === 'payback') score += 1;
+  if (move.id === 'suckerpunch' && randomChance(1, 2)) score += 1;
+  if (move.id === 'destinybond' && hpRatio <= 0.35) score += 2;
+
+  return score;
+}
+
+function weatherFlagAdjustment(move, active, battle) {
+  if (!move.weather) return 0;
+  const battleTurn = Number(battle?.turn || 0);
+  const activeTurns = Number(active?.activeTurns || 0);
+  if (battleTurn > 1 || activeTurns > 1) return 0;
+  if (String(battle?.field?.weather || '') === String(move.weather)) return 0;
+  return 5;
+}
+
+function setupFirstTurnAdjustment(move, active, battle, randomChance) {
+  if (!moveIsSetup(move)) return 0;
+  const battleTurn = Number(battle?.turn || 0);
+  if (battleTurn > 1) return 0;
+  return randomChance(176, 256) ? 2 : 0;
+}
+
+function riskyAdjustment(move, randomChance) {
+  const risky = new Set([
+    'hypnosis', 'sing', 'sleeppowder', 'spore', 'explosion', 'selfdestruct',
+    'metronome', 'counter', 'mirrorcoat', 'destinybond', 'swagger',
+    'focuspunch', 'suckerpunch', 'guillotine', 'fissure', 'horndrill',
+  ]);
+  return risky.has(move.id) && randomChance(1, 2) ? 2 : 0;
+}
+
+function prioritizeExtremesAdjustment(move, randomChance) {
+  const extreme = move.category === 'Status' || typeof move.damage === 'number' || !move.basePower;
+  return extreme && randomChance(156, 256) ? 2 : 0;
+}
+
+function harassmentAdjustment(move, randomChance) {
+  const harassment = new Set([
+    'hypnosis', 'sleeppowder', 'sing', 'spore', 'growl', 'charm', 'screech',
+    'sandattack', 'smokescreen', 'confuseray', 'supersonic', 'toxic',
+    'poisonpowder', 'thunderwave', 'stunspore', 'leechseed', 'encore',
+    'spikes', 'swagger', 'attract', 'torment', 'willowisp', 'knockoff',
+    'embargo', 'toxicspikes',
+  ]);
+  return harassment.has(move.id) && randomChance(1, 2) ? 2 : 0;
+}
+
+export function chooseHgssMoveIndex(activeRequest, active, target, aiFlags, battle, randomChance = () => false) {
+  const legal = (activeRequest?.moves || [])
+    .map((slot, idx) => ({ slot, idx, move: dex.moves.get(slot?.id || slot?.move || '') }))
+    .filter(entry => !entry.slot?.disabled && entry.move.exists);
+  if (!legal.length) return 0;
+
+  const flags = Number(aiFlags || 0) >>> 0;
+  const damages = legal.map(entry => estimatedDamage(active, target, entry.slot));
+  const maxDamage = Math.max(...damages, 0);
+
+  const scored = legal.map((entry, pos) => {
+    const { move } = entry;
+    const damage = damages[pos];
+    let score = 100;
+
+    if (flags & HGSS_AI_FLAGS.BASIC) {
+      if (move.category !== 'Status') {
+        if (moveEffectiveness(move, target) <= 0) score -= 12;
+      } else {
+        score += statusMoveAdjustment(move, active, target, battle);
+      }
+    }
+
+    if (flags & HGSS_AI_FLAGS.EXPERT) {
+      score += expertMoveAdjustment(move, active, target, battle, randomChance);
+    }
+
+    if (flags & HGSS_AI_FLAGS.EVAL_ATTACK) {
+      if (move.category !== 'Status' && maxDamage > 0 && damage + 1e-9 < maxDamage) score -= 1;
+      const canKo = move.category !== 'Status' && Number(target?.hp || 0) > 0 && damage >= Number(target.hp);
+      if (canKo && !['explosion', 'selfdestruct'].includes(move.id)) {
+        score += 4;
+        if (Number(move.priority || 0) > 0) score += 2;
+      } else if (moveEffectiveness(move, target) >= 4 && randomChance(176, 256)) {
+        score += 2;
+      }
+      if (['explosion', 'selfdestruct', 'focuspunch', 'suckerpunch'].includes(move.id) && randomChance(205, 256)) {
+        score -= 2;
+      }
+    }
+
+    if (flags & HGSS_AI_FLAGS.SETUP_FIRST_TURN) {
+      score += setupFirstTurnAdjustment(move, active, battle, randomChance);
+    }
+    if (flags & HGSS_AI_FLAGS.RISKY) score += riskyAdjustment(move, randomChance);
+    if (flags & HGSS_AI_FLAGS.PRIORITIZE_EXTREMES) score += prioritizeExtremesAdjustment(move, randomChance);
+    if (flags & HGSS_AI_FLAGS.WEATHER) score += weatherFlagAdjustment(move, active, battle);
+    if (flags & HGSS_AI_FLAGS.HARRASSMENT) score += harassmentAdjustment(move, randomChance);
+
+    // Keep the Gen 4 score system discrete while using estimated damage only as a
+    // tie-breaker. This prevents the old raw-damage heuristic from overpowering
+    // status/setup decisions once trainer AI flags are enabled.
+    return { ...entry, score, damage };
+  });
+
+  scored.sort((a, b) => b.score - a.score || b.damage - a.damage || a.idx - b.idx);
+  const bestScore = scored[0].score;
+  const bestDamage = scored[0].damage;
+  const tied = scored.filter(entry => entry.score === bestScore && Math.abs(entry.damage - bestDamage) < 1e-9);
+  let chosen = tied[0];
+  for (let i = 1; i < tied.length; i += 1) {
+    if (randomChance(1, i + 1)) chosen = tied[i];
+  }
+  return chosen.idx;
+}
+
 function offensiveTypeMatchupScore(mon, target) {
   return monTypes(mon).reduce((sum, type) => sum + typeOffenseScore(type, target), 0);
 }
