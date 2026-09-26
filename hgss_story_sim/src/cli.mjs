@@ -1199,7 +1199,8 @@ async function runBeamSearch({
   const cache = evaluationCache || new Map();
   const cacheSizeBefore = cache.size;
   async function evaluateTeamAtRuns(team, requestedRuns) {
-    const key = team.map(candidateIdentity).sort().join('|') + `@runs=${requestedRuns}`;
+    const key = team.map(candidateIdentity).sort().join('|') +
+      `@runs=${requestedRuns}@objective=${objective}`;
     if (!cache.has(key)) {
       cache.set(
         key,
@@ -1309,6 +1310,7 @@ async function cmdSearch() {
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
+  const objective = normalizeSearchObjective(arg('objective', 'mean'));
   const story = await loadStory();
 
   let candidates;
@@ -1347,6 +1349,7 @@ async function cmdSearch() {
       requiredCandidate,
       expContext,
       grindPolicy,
+      objective,
     });
     console.log(JSON.stringify({
       pool: poolPath,
@@ -1360,6 +1363,7 @@ async function cmdSearch() {
       entryLevelPolicy,
       sameStageJoinPolicy,
       expAllocator,
+      objective,
       runsPerBoss: runs,
       screenRunsPerBoss: screenRuns,
       finalRunsPerBoss: finalRuns,
@@ -1388,13 +1392,25 @@ async function cmdSearch() {
       rejectedByConstraints += 1;
       continue;
     }
-    const evaluation = await evaluateCandidates(team, story.bosses, runs, moveAccess, expContext, grindPolicy);
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
     results.push(searchResultRow(team, evaluation));
     tested += 1;
     if (tested >= limit) break;
   }
 
-  results.sort((a, b) => b.score - a.score);
+  results.sort((a, b) =>
+    evaluationObjectiveCompare(a, b, objective) ||
+    rowExpBurden(a) - rowExpBurden(b) ||
+    a.team.slice().sort().join('|').localeCompare(b.team.slice().sort().join('|'))
+  );
   console.log(JSON.stringify({
     pool: poolPath,
     version: poolPath === 'canonical' ? version : undefined,
@@ -1407,6 +1423,7 @@ async function cmdSearch() {
     entryLevelPolicy,
     sameStageJoinPolicy,
     expAllocator,
+    objective,
     tested,
     rejectedByConstraints,
     runsPerBoss: runs,
@@ -1429,6 +1446,7 @@ async function cmdConvergence() {
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
+  const objective = normalizeSearchObjective(arg('objective', 'mean'));
   const beamWidths = String(arg('beam-widths', '4,8,16'))
     .split(',').map(Number).filter(value => Number.isInteger(value) && value > 0);
   const candidateCaps = String(arg('candidate-caps', '16,24,32'))
@@ -1476,6 +1494,7 @@ async function cmdConvergence() {
     screenRuns,
     expContext,
     grindPolicy,
+    objective,
   );
 
   const rows = [];
@@ -1496,6 +1515,7 @@ async function cmdConvergence() {
       expContext,
       grindPolicy,
       evaluationCache: sharedEvaluationCache,
+      objective,
     });
     const top = result.top[0] || null;
     rows.push({
@@ -1508,6 +1528,7 @@ async function cmdConvergence() {
       finalTeam: top?.finalTeam || [],
       score: top?.score ?? null,
       worstBossWinRate: top?.worstBossWinRate ?? null,
+      bottom5BossWinRate: top?.bottom5BossWinRate ?? null,
       expBurden: top?.expBurden ?? null,
       captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
       resourceBurden: top ? rowResourceBurden(top) : null,
@@ -1540,6 +1561,7 @@ async function cmdConvergence() {
     entryLevelPolicy,
     sameStageJoinPolicy,
     expAllocator,
+    objective,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -1551,6 +1573,7 @@ async function cmdConvergence() {
       team: baseline.team,
       score: baseline.score,
       worstBossWinRate: baseline.worstBossWinRate,
+      bottom5BossWinRate: baseline.bottom5BossWinRate,
     } : null,
     rows,
   }, null, 2));
@@ -1578,6 +1601,7 @@ async function cmdOptimize() {
   const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
+  const objective = normalizeSearchObjective(arg('objective', 'mean'));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -1593,6 +1617,7 @@ async function cmdOptimize() {
     entryLevelPolicy,
     sameStageJoinPolicy,
     expAllocator,
+    objective,
     runsPerBoss: runs,
     screenRunsPerBoss: screenRuns,
     finalRunsPerBoss: finalRuns,
@@ -1616,7 +1641,15 @@ async function cmdOptimize() {
       ),
     ]);
     const candidates = pool.candidates;
-    const screenRows = await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
+    const screenRows = await screenCandidates(
+      candidates,
+      story,
+      moveAccess,
+      screenRuns,
+      expContext,
+      grindPolicy,
+      objective,
+    );
     output.versions[version] = {
       candidateCount: candidates.length,
       starters: {},
@@ -1638,6 +1671,7 @@ async function cmdOptimize() {
         screenRowsOverride: screenRows,
         expContext,
         grindPolicy,
+        objective,
       });
       output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
@@ -2367,6 +2401,40 @@ async function cmdExpAllocatorSmoke() {
   }, null, 2));
 }
 
+async function cmdObjectiveSmoke() {
+  const fragile = {
+    score: 0.80,
+    worstBossWinRate: 0.00,
+    bottom5BossWinRate: 0.20,
+  };
+  const resilient = {
+    score: 0.70,
+    worstBossWinRate: 0.10,
+    bottom5BossWinRate: 0.40,
+  };
+
+  if (!(evaluationObjectiveCompare(fragile, resilient, 'mean') < 0)) {
+    throw new Error('Mean objective did not prefer the higher mean-win-rate evaluation');
+  }
+  if (!(evaluationObjectiveCompare(resilient, fragile, 'story-clear') < 0)) {
+    throw new Error('Story-clear objective did not prefer the stronger lower tail');
+  }
+
+  const rows = [0.9, 0.8, 0.4, 0.3, 0.2, 0.1].map(winRate => ({ winRate }));
+  const bottom5 = lowerTailBossWinRate(rows);
+  const expected = (0.1 + 0.2 + 0.3 + 0.4 + 0.8) / 5;
+  if (Math.abs(bottom5 - expected) > 1e-12) {
+    throw new Error(`Bottom-5 calculation mismatch: expected ${expected}, got ${bottom5}`);
+  }
+
+  console.log(JSON.stringify({
+    bottomK: STORY_CLEAR_BOTTOM_K,
+    lowerTailExample: bottom5,
+    meanPrefers: 'fragile',
+    storyClearPrefers: 'resilient',
+  }, null, 2));
+}
+
 async function cmdExpSmoke() {
   const expected = {
     MEDIUM_FAST: 8000,
@@ -2607,6 +2675,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
+  'objective-smoke': cmdObjectiveSmoke,
   'capture-smoke': cmdCaptureSmoke,
   'exp-route-smoke': cmdExpRouteSmoke,
   'exp-smoke': cmdExpSmoke,
@@ -2620,7 +2689,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
