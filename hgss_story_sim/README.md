@@ -190,6 +190,13 @@ A team that only performs well at one envelope endpoint should not be treated as
 4. retain a beam of strong teams;
 5. rescore surviving full teams across multiple deterministic RNG seeds.
 
+Search ranking supports two objectives:
+
+- `--objective=mean` (default): maximize mean win rate, with lower-tail metrics as tie-breakers.
+- `--objective=story-clear`: first maximize **boss coverage** toward a 50% per-boss win-rate target, where each boss contributes `min(winRate / 0.5, 1)`; then use the bottom-5 boss average, worst-boss rate, and mean rate as tie-breakers. Capping already-reliable bosses prevents easy fights from compensating indefinitely for mandatory bosses that remain weak.
+
+The bottom-5 and worst-boss metrics are still reported explicitly. The coverage score was added because a fixed bottom-5 average can collapse to zero when five or more late-game bosses are still unwinnable under a no-grind EXP envelope.
+
 A starter can be fixed:
 
 ```bash
