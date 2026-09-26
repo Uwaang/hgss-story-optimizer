@@ -563,6 +563,117 @@ function orderCandidatesForBoss(candidates, boss, levelsByCandidate = null) {
   });
 }
 
+function summarizeMemberUsage(candidates, rows) {
+  const byKey = new Map(candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const summary = {};
+  for (const candidate of candidates) {
+    const key = candidateIdentity(candidate);
+    summary[key] = {
+      species: candidate.species,
+      mandatoryStarter: candidate.exclusiveGroup === 'starter',
+      bossesAvailable: 0,
+      bossesUsed: 0,
+      bossesUsedInWins: 0,
+      runsAvailable: 0,
+      runsUsed: 0,
+      winningRunsUsed: 0,
+      appearances: 0,
+      leadStarts: 0,
+      moveUses: 0,
+      activeTurns: 0,
+      faints: 0,
+      winningMoveUses: 0,
+      winningActiveTurns: 0,
+      peakUseRate: 0,
+      peakWinningUseRate: 0,
+      peakMovesPerRun: 0,
+      peakActiveTurnsPerRun: 0,
+      peakWinningActiveTurnsPerRun: 0,
+      bossUsage: [],
+    };
+  }
+
+  for (const row of rows || []) {
+    for (const [key, usage] of Object.entries(row.p1Usage || {})) {
+      if (!summary[key]) {
+        const candidate = byKey.get(key);
+        summary[key] = {
+          species: candidate?.species || key,
+          mandatoryStarter: candidate?.exclusiveGroup === 'starter',
+          bossesAvailable: 0,
+          bossesUsed: 0,
+          bossesUsedInWins: 0,
+          runsAvailable: 0,
+          runsUsed: 0,
+          winningRunsUsed: 0,
+          appearances: 0,
+          leadStarts: 0,
+          moveUses: 0,
+          activeTurns: 0,
+          faints: 0,
+          winningMoveUses: 0,
+          winningActiveTurns: 0,
+          peakUseRate: 0,
+          peakWinningUseRate: 0,
+          peakMovesPerRun: 0,
+          peakActiveTurnsPerRun: 0,
+          peakWinningActiveTurnsPerRun: 0,
+          bossUsage: [],
+        };
+      }
+      const target = summary[key];
+      const available = Number(usage.runsAvailable || 0);
+      const used = Number(usage.runsUsed || 0);
+      const winningUsed = Number(usage.winningRunsUsed || 0);
+      const moves = Number(usage.moveUses || 0);
+      const activeTurns = Number(usage.activeTurns || 0);
+      const winningActiveTurns = Number(usage.winningActiveTurns || 0);
+      if (available > 0) {
+        target.bossesAvailable += 1;
+        if (used > 0) target.bossesUsed += 1;
+        if (winningUsed > 0) target.bossesUsedInWins += 1;
+        target.peakUseRate = Math.max(target.peakUseRate, used / available);
+        target.peakWinningUseRate = Math.max(target.peakWinningUseRate, winningUsed / available);
+        target.peakMovesPerRun = Math.max(target.peakMovesPerRun, moves / available);
+        target.peakActiveTurnsPerRun = Math.max(target.peakActiveTurnsPerRun, activeTurns / available);
+        target.peakWinningActiveTurnsPerRun = Math.max(
+          target.peakWinningActiveTurnsPerRun,
+          winningActiveTurns / available,
+        );
+      }
+      target.runsAvailable += available;
+      target.runsUsed += used;
+      target.winningRunsUsed += winningUsed;
+      target.appearances += Number(usage.appearances || 0);
+      target.leadStarts += Number(usage.leadStarts || 0);
+      target.moveUses += moves;
+      target.activeTurns += activeTurns;
+      target.faints += Number(usage.faints || 0);
+      target.winningMoveUses += Number(usage.winningMoveUses || 0);
+      target.winningActiveTurns += winningActiveTurns;
+      target.bossUsage.push({
+        boss: row.boss,
+        runsAvailable: available,
+        runsUsed: used,
+        winningRunsUsed: winningUsed,
+        moveUses: moves,
+        activeTurns,
+        winningActiveTurns,
+      });
+    }
+  }
+
+  for (const target of Object.values(summary)) {
+    target.useRate = target.runsAvailable ? target.runsUsed / target.runsAvailable : 0;
+    target.winningUseRate = target.runsAvailable ? target.winningRunsUsed / target.runsAvailable : 0;
+    target.movesPerAvailableRun = target.runsAvailable ? target.moveUses / target.runsAvailable : 0;
+    target.activeTurnsPerAvailableRun = target.runsAvailable ? target.activeTurns / target.runsAvailable : 0;
+    target.winningActiveTurnsPerAvailableRun =
+      target.runsAvailable ? target.winningActiveTurns / target.runsAvailable : 0;
+  }
+  return summary;
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -669,6 +780,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     });
   }
   const meanWinRate = weightedRuns ? weightedWins / weightedRuns : 0;
+  const memberUsage = summarizeMemberUsage(candidates, rows);
   const worstBossWinRate = rows.length
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
@@ -714,6 +826,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     purchasablePlan,
     purchaseCosts,
     resourceBudget,
+    memberUsage,
     rows,
   };
 }
@@ -1049,6 +1162,7 @@ function searchResultRow(team, evaluation) {
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
     resourceBudget: evaluation.resourceBudget,
+    memberUsage: evaluation.memberUsage,
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
       wins: row.wins,
@@ -2848,6 +2962,7 @@ function compactEvaluationForAblation(evaluation) {
     finalLevels: evaluation.finalLevels,
     effectiveResourceProfile: evaluation.effectiveResourceProfile,
     captureExpectedEncounters: evaluation.captureSearch?.expectedEncounters ?? null,
+    memberUsage: evaluation.memberUsage,
   };
 }
 
@@ -2970,6 +3085,73 @@ async function cmdTeamAblation() {
     objective,
     full: compactEvaluationForAblation(full),
     members,
+  }, null, 2));
+}
+
+
+async function cmdTeamUsage() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length < 2) throw new Error('team-usage requires --team=A,B,...');
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-usage requires the selected starter in the team');
+  const evaluation = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'actual battle participation instrumentation for a fixed story team',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    score: evaluation.score,
+    storyClearGeometricScore: evaluation.storyClearGeometricScore,
+    storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    memberUsage: evaluation.memberUsage,
   }, null, 2));
 }
 
@@ -3406,6 +3588,7 @@ const commands = {
   'trainer-ai-smoke': cmdTrainerAiSmoke,
   'allocator-cross-compare': cmdAllocatorCrossCompare,
   'team-ablation': cmdTeamAblation,
+  'team-usage': cmdTeamUsage,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -3416,7 +3599,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
