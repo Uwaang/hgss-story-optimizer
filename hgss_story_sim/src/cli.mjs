@@ -2833,7 +2833,7 @@ async function cmdAllocatorCrossCompare() {
     sameStageJoinPolicy: 'map-order',
     allocators: {
       bossAware: 'existing immediate next-boss utility per EXP allocator',
-      breakpointAware: 'future 4-boss, 12-level lookahead breakpoint-aware v1 allocator',
+      breakpointAware: 'boss-aware baseline plus actual move/evolution breakpoint bonus across a 4-boss, 12-level lookahead',
     },
     results,
   }, null, 2));
