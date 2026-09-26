@@ -1,13 +1,13 @@
 {
   "mode": "canonical",
-  "description": "Conservative intended Johto story route. Maps are cumulative by stage; optional early detours such as Safari Zone are intentionally excluded.",
+  "description": "Conservative intended Johto + canonical Kanto story route through Red. Maps are cumulative by stage; the Kanto order is a deterministic modeling route (Surge -> Sabrina -> Erika -> Janine -> Misty -> Brock -> Blaine -> Blue -> Red), not an enforced in-game Gym order.",
   "methodUnlockStage": {
     "land": 0,
     "old_rod": 1,
     "good_rod": 3,
     "rock_smash": 3,
     "surf": 4,
-    "super_rod": 99,
+    "super_rod": 17,
     "headbutt": 2
   },
   "stages": [
@@ -128,6 +128,104 @@
       "stage": 12,
       "before": "Lance",
       "addMaps": []
+    },
+    {
+      "stage": 13,
+      "before": "Lt. Surge",
+      "addMaps": [
+        "P01R0301",
+        "P01R0302",
+        "P01R0303",
+        "P01R0304",
+        "P01R0305",
+        "P01R0306",
+        "P01R0307"
+      ]
+    },
+    {
+      "stage": 14,
+      "before": "Sabrina",
+      "addMaps": [
+        "R06"
+      ]
+    },
+    {
+      "stage": 15,
+      "before": "Erika",
+      "addMaps": [
+        "R07"
+      ]
+    },
+    {
+      "stage": 16,
+      "before": "Janine",
+      "addMaps": [
+        "R16",
+        "R17",
+        "R18"
+      ]
+    },
+    {
+      "stage": 17,
+      "before": "Misty",
+      "addMaps": [
+        "R15",
+        "R14",
+        "R13",
+        "R12",
+        "R08",
+        "R05",
+        "R09",
+        "R10",
+        "R10R0202",
+        "R24",
+        "R25"
+      ]
+    },
+    {
+      "stage": 18,
+      "before": "Brock",
+      "addMaps": [
+        "R11",
+        "D01R0101",
+        "R02"
+      ]
+    },
+    {
+      "stage": 19,
+      "before": "Blaine",
+      "addMaps": [
+        "D46R0101",
+        "R01",
+        "W21",
+        "W20",
+        "D11R0101",
+        "D11R0102",
+        "D11R0103",
+        "D11R0104",
+        "D11R0105"
+      ]
+    },
+    {
+      "stage": 20,
+      "before": "Blue",
+      "addMaps": []
+    },
+    {
+      "stage": 21,
+      "before": "Red",
+      "addMaps": [
+        "R22",
+        "R28",
+        "T31",
+        "D41R0101",
+        "D41R0102",
+        "D41R0103",
+        "D41R0104",
+        "D41R0105",
+        "D41R0106",
+        "D41R0107"
+      ]
     }
   ],
   "manualAcquisitions": [
@@ -233,5 +331,10 @@
       "map": "D42R0101",
       "beforeBoss": "Silver (Victory Road)"
     }
+  ],
+  "notes": [
+    "Kanto route stages deliberately keep the optimizer logic unchanged: route-map trainer EXP and wild acquisition are extended, while no new post-Lance move-source or special-gift logic is introduced in this diagnostic expansion.",
+    "Route 12 is included in the canonical Kanto tour before Misty, so the source-backed Super Rod becomes available from stage 17.",
+    "Seafoam Gym itself (D11R0106) is not added as a normal-route map; Blaine is counted once as the scored major battle, matching the Johto treatment of Gym Leaders."
   ]
 }
