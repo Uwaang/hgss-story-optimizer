@@ -340,7 +340,7 @@ jobs:
 
 
   allocator_story_matrix_12:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-story-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
