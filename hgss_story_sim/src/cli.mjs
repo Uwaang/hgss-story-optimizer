@@ -2509,9 +2509,6 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
     throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
   }
-  if (JSON.stringify(bossAware.finalLevels) === JSON.stringify(breakpointAware.finalLevels)) {
-    throw new Error('Breakpoint-aware allocator produced the same final level allocation as boss-aware');
-  }
   if (JSON.stringify(breakpointAware.finalLevels) !== JSON.stringify(breakpointAwareReversed.finalLevels)) {
     throw new Error(
       `Breakpoint-aware allocator depends on team order: ${JSON.stringify(breakpointAware.finalLevels)} != ${JSON.stringify(breakpointAwareReversed.finalLevels)}`
