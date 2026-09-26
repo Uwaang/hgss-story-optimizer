@@ -391,6 +391,30 @@ jobs:
 
 
 
+  allocator_cross_compare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Run fixed-team allocator 2x2 cross-test
+        run: |
+          mkdir -p results
+          node src/cli.mjs allocator-cross-compare --runs=20 > results/allocator-cross-compare-hg-cyndaquil.json
+      - name: Upload allocator cross-test
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-cross-compare-hg-cyndaquil
+          path: hgss_story_sim/results/allocator-cross-compare-hg-cyndaquil.json
+          if-no-files-found: error
+
   breakpoint_allocator_pilot:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
