@@ -15,6 +15,15 @@ on:
       - 'hgss_story_sim/**'
       - '.github/workflows/hgss-story-sim.yml'
   workflow_dispatch:
+    inputs:
+      task:
+        description: Manual experiment to run
+        required: false
+        default: default
+        type: choice
+        options:
+          - default
+          - allocator-story-matrix
 
 jobs:
   smoke:
@@ -331,7 +340,7 @@ jobs:
 
 
   allocator_story_matrix_12:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[allocator-story-matrix]')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-story-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -422,7 +431,7 @@ jobs:
 
 
   allocator_cross_compare:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.task != 'allocator-story-matrix'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -446,7 +455,7 @@ jobs:
           if-no-files-found: error
 
   breakpoint_allocator_pilot:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.task != 'allocator-story-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
