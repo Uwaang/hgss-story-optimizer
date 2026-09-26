@@ -2520,25 +2520,25 @@ async function cmdExpAllocatorSmoke() {
       key: 'breakpoint',
       candidate: { species: 'BreakpointMon' },
       growthRate: 'MEDIUM_FAST',
-      level: 10,
-      exp: expAtLevel('MEDIUM_FAST', 10),
+      level: 50,
+      exp: expAtLevel('MEDIUM_FAST', 50),
       unknown: false,
     },
     {
       key: 'steady',
       candidate: { species: 'SteadyMon' },
       growthRate: 'MEDIUM_FAST',
-      level: 10,
-      exp: expAtLevel('MEDIUM_FAST', 10),
+      level: 50,
+      exp: expAtLevel('MEDIUM_FAST', 50),
       unknown: false,
     },
   ];
   const syntheticUtility = (candidate, _boss, level) => {
-    if (candidate.species === 'BreakpointMon') return level >= 12 ? 120 : 8;
-    return 10 + (level - 10) * 4;
+    if (candidate.species === 'BreakpointMon') return level >= 52 ? 120 : 8;
+    return 8 + (level - 50) * 0.2;
   };
   const syntheticAmount =
-    expAtLevel('MEDIUM_FAST', 12) - expAtLevel('MEDIUM_FAST', 10);
+    expAtLevel('MEDIUM_FAST', 52) - expAtLevel('MEDIUM_FAST', 50);
   const synthetic = allocateBreakpointAwareExp(
     breakpointStates,
     syntheticAmount,
@@ -2549,9 +2549,9 @@ async function cmdExpAllocatorSmoke() {
   if (synthetic.allocated !== syntheticAmount || synthetic.unallocated !== 0) {
     throw new Error(`Breakpoint allocator failed EXP conservation: ${JSON.stringify(synthetic)}`);
   }
-  if (breakpointStates[0].level < 12 || breakpointStates[1].level !== 10) {
+  if (breakpointStates[0].level < 52 || breakpointStates[1].level !== 50) {
     throw new Error(
-      `Breakpoint allocator failed to fund the future breakpoint: ${JSON.stringify(breakpointStates)}`
+      `Breakpoint allocator failed to fund a nearby two-level breakpoint: ${JSON.stringify(breakpointStates)}`
     );
   }
 
