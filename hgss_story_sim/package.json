@@ -33,7 +33,8 @@
     "capture-smoke": "node src/cli.mjs capture-smoke",
     "resource-budget-smoke": "node src/cli.mjs resource-budget-smoke",
     "exp-envelope": "node src/cli.mjs exp-envelope",
-    "exp-envelope-smoke": "node src/cli.mjs exp-envelope-smoke"
+    "exp-envelope-smoke": "node src/cli.mjs exp-envelope-smoke",
+    "trainer-ai-smoke": "node src/cli.mjs trainer-ai-smoke"
   },
   "engines": {
     "node": ">=22.18.0"
