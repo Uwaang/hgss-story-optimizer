@@ -1690,7 +1690,7 @@ async function cmdOptimize() {
     schemaVersion: 1,
     sourceCommit: story.config.sourceCommit,
     battleEngine: 'pokemon-showdown@0.11.11/gen4customgame',
-    policy: 'greedy-moves+conservative-player-switching',
+    policy: 'player-heuristic+source-guided-hgss-trainer-ai',
     resourceProfile,
     spendPolicy,
     expProfile,
