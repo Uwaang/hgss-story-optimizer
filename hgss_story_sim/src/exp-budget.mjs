@@ -681,10 +681,17 @@ export function allocateBreakpointAwareExp(
         const targetExp = expAtLevel(state.growthRate, targetLevel);
         if (targetExp === null) continue;
         const need = Math.max(1, targetExp - state.exp);
-        const priority = (
-          immediateNumerator +
-          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump
-        ) / need;
+        const rawBreakpointBonus =
+          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump;
+        // Keep foresight bounded: a breakpoint may at most triple the
+        // immediate boss-aware numerator (baseline + 2x bonus). This lets a
+        // nearby evolution/move breakpoint win, but blocks long-range jumps
+        // such as funding many ordinary levels just to reach a distant form.
+        const breakpointBonus = Math.min(
+          rawBreakpointBonus,
+          2 * Math.max(0.01, immediateNumerator),
+        );
+        const priority = (immediateNumerator + breakpointBonus) / need;
 
         if (
           priority > stateBest.priority ||
