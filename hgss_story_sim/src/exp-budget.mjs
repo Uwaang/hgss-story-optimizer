@@ -643,12 +643,14 @@ export function allocateBreakpointAwareExp(
         utilityCache,
       );
       const immediateGain = Math.max(0, nextUtility - currentUtility);
-      // Preserve the existing boss-aware policy as the baseline.
-      const immediatePriority = (
+      // Preserve the existing boss-aware numerator as the baseline. Distant
+      // targets must amortize that value across their full EXP cost; otherwise
+      // any tiny future bonus would make a far breakpoint beat the next level.
+      const immediateNumerator =
         0.25 * Math.max(0, nextUtility) +
         2 * immediateGain +
-        0.01
-      ) / nextNeed;
+        0.01;
+      const immediatePriority = immediateNumerator / nextNeed;
 
       let stateBest = {
         state,
@@ -679,9 +681,10 @@ export function allocateBreakpointAwareExp(
         const targetExp = expAtLevel(state.growthRate, targetLevel);
         if (targetExp === null) continue;
         const need = Math.max(1, targetExp - state.exp);
-        const priority =
-          immediatePriority +
-          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump / need;
+        const priority = (
+          immediateNumerator +
+          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump
+        ) / need;
 
         if (
           priority > stateBest.priority ||
