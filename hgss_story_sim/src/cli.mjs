@@ -4,7 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
-import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
+import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
@@ -2727,6 +2727,38 @@ async function cmdTrainerAiSmoke() {
     throw new Error(`Expected Gen 4 BASIC AI to avoid immune Thunderbolt vs Geodude, got move slot ${moveSlot}`);
   }
 
+  const itemPlan = chooseHgssTrainerItem(
+    { hp: 20, maxhp: 100, fainted: false },
+    { pokemon: [{ hp: 20, fainted: false }] },
+    ['ITEM_SUPER_POTION'],
+    1,
+  );
+  if (itemPlan?.item !== 'ITEM_SUPER_POTION' || itemPlan.healAmount !== 50) {
+    throw new Error(`Expected Super Potion trainer-item decision, got ${JSON.stringify(itemPlan)}`);
+  }
+
+  const itemBattle = await runBattle(
+    [{
+      species: 'Dratini',
+      level: 50,
+      ability: 'Shed Skin',
+      nature: 'Serious',
+      moves: ['Dragon Rage'],
+    }],
+    [{
+      species: 'Shuckle',
+      level: 50,
+      ability: 'Sturdy',
+      nature: 'Serious',
+      moves: ['Tackle'],
+    }],
+    77123,
+    { p2Trainer: { trainer: { ai_flags: 7, items: ['ITEM_SUPER_POTION'] } } },
+  );
+  if (!itemBattle.p2TrainerItemsUsed?.includes('ITEM_SUPER_POTION')) {
+    throw new Error(`Expected trainer item bridge to consume Super Potion, got ${JSON.stringify(itemBattle)}`);
+  }
+
   const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
   const playerTeam = [{
     species: 'Mareep',
@@ -2746,6 +2778,8 @@ async function cmdTrainerAiSmoke() {
     red: redProfile,
     postKoSwitchSlot: switchSlot,
     immuneMoveChoiceSlot: moveSlot,
+    itemPlan,
+    itemBattle,
     battle,
   }, null, 2));
 }
