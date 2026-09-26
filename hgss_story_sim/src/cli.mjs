@@ -1947,8 +1947,8 @@ async function cmdRouteSmoke() {
       { species: starter, exclusiveGroup: 'starter' },
     ]);
     const activeRivals = route.filter(battle => battle.kind === 'rival').map(battle => battle.key);
-    if (route.length !== 21) {
-      throw new Error(`${starter} route expected 21 battles, got ${route.length}`);
+    if (route.length !== 30) {
+      throw new Error(`${starter} route expected 30 battles through Red, got ${route.length}`);
     }
     if (JSON.stringify(activeRivals) !== JSON.stringify(rivalKeys)) {
       throw new Error(`${starter} rival route mismatch: ${JSON.stringify(activeRivals)}`);
@@ -1960,7 +1960,7 @@ async function cmdRouteSmoke() {
   }
 
   const noStarterRoute = storyBattlesForCandidates(story.bosses, []);
-  if (noStarterRoute.length !== 17 || noStarterRoute.some(battle => battle.kind === 'rival')) {
+  if (noStarterRoute.length !== 26 || noStarterRoute.some(battle => battle.kind === 'rival')) {
     throw new Error(`Starter-neutral screening route mismatch: ${noStarterRoute.length}`);
   }
   output.starterNeutral = { battleCount: noStarterRoute.length };
@@ -2030,9 +2030,11 @@ async function cmdExpRouteSmoke() {
   const natural = await evaluateCandidates(team, story.bosses, 1, moveAccess, naturalContext);
   const paid = await evaluateCandidates(team, story.bosses, 1, moveAccess, paidContext);
 
-  if (natural.routeBattleCount !== 21 || paid.routeBattleCount !== 21) {
+  const expectedRouteBattleCount = storyBattlesForCandidates(story.bosses, team).length;
+  if (natural.routeBattleCount !== expectedRouteBattleCount ||
+      paid.routeBattleCount !== expectedRouteBattleCount) {
     throw new Error(
-      `EXP-route smoke expected 21 battles, got natural=${natural.routeBattleCount}, paid=${paid.routeBattleCount}`
+      `EXP-route smoke expected ${expectedRouteBattleCount} battles, got natural=${natural.routeBattleCount}, paid=${paid.routeBattleCount}`
     );
   }
   const firstNatural = natural.rows[0];
