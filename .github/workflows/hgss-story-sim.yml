@@ -32,6 +32,7 @@ jobs:
       - name: Syntax check
         run: |
           node --check src/hgss-data.mjs
+          node --check src/trainer-ai.mjs
           node --check src/exp-budget.mjs
           node --check src/acquisition.mjs
           node --check src/availability.mjs
@@ -73,6 +74,8 @@ jobs:
         run: npm run smoke
       - name: Player matchup switching smoke test
         run: npm run switch-smoke
+      - name: HGSS trainer AI metadata and switching smoke test
+        run: npm run trainer-ai-smoke
       - name: Reusable tutor timing smoke test
         run: npm run tutor-smoke
       - name: Reusable HM timing smoke test
