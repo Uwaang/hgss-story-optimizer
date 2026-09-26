@@ -44,6 +44,8 @@ jobs:
         run: npm run exp-segment-smoke
       - name: EXP allocator smoke test
         run: npm run exp-allocator-smoke
+      - name: Team-order invariance smoke test
+        run: npm run team-order-smoke
       - name: Story-clear objective smoke test
         run: npm run objective-smoke
       - name: EXP envelope comparison smoke test
