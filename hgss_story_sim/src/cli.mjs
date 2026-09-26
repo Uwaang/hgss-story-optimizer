@@ -101,6 +101,46 @@ function normalizeExpAllocator(value) {
   return allocator;
 }
 
+function normalizeSearchObjective(value) {
+  const objective = String(value || 'mean').toLowerCase();
+  if (!['mean', 'story-clear'].includes(objective)) {
+    throw new Error(`Unknown search objective: ${value}. Use mean or story-clear.`);
+  }
+  return objective;
+}
+
+const STORY_CLEAR_BOTTOM_K = 5;
+
+function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
+  const rates = rows
+    .map(row => Number(row.winRate || 0))
+    .sort((a, b) => a - b);
+  if (!rates.length) return 0;
+  const count = Math.max(1, Math.min(rates.length, Number(k) || STORY_CLEAR_BOTTOM_K));
+  return rates.slice(0, count).reduce((sum, value) => sum + value, 0) / count;
+}
+
+function evaluationObjectiveCompare(a, b, objective = 'mean') {
+  if (objective === 'story-clear') {
+    if (a.bottom5BossWinRate !== b.bottom5BossWinRate) {
+      return b.bottom5BossWinRate - a.bottom5BossWinRate;
+    }
+    if (a.worstBossWinRate !== b.worstBossWinRate) {
+      return b.worstBossWinRate - a.worstBossWinRate;
+    }
+    if (a.score !== b.score) return b.score - a.score;
+    return 0;
+  }
+  if (a.score !== b.score) return b.score - a.score;
+  if (a.bottom5BossWinRate !== b.bottom5BossWinRate) {
+    return b.bottom5BossWinRate - a.bottom5BossWinRate;
+  }
+  if (a.worstBossWinRate !== b.worstBossWinRate) {
+    return b.worstBossWinRate - a.worstBossWinRate;
+  }
+  return 0;
+}
+
 async function loadExpContext(
   story,
   expProfile,
@@ -556,6 +596,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const worstBossWinRate = rows.length
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
+  const bottom5BossWinRate = lowerTailBossWinRate(rows);
   const finalBattle = routeBosses[routeBosses.length - 1] || null;
   const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
   const finalMaterialized = finalBattle
@@ -572,6 +613,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   return {
     score: meanWinRate,
     worstBossWinRate,
+    bottom5BossWinRate,
+    storyClearBottomK: STORY_CLEAR_BOTTOM_K,
     routeStarter,
     expProfile,
     grindPolicy: expContext?.grindPolicy || 'none',
@@ -620,12 +663,10 @@ function resourceMoveAccessVariants(moveAccess) {
   return [core, money, all];
 }
 
-function resourceEvaluationBetter(a, b) {
+function resourceEvaluationBetter(a, b, objective = 'mean') {
   if (!b) return true;
-  if (a.score !== b.score) return a.score > b.score;
-  if (a.worstBossWinRate !== b.worstBossWinRate) {
-    return a.worstBossWinRate > b.worstBossWinRate;
-  }
+  const objectiveOrder = evaluationObjectiveCompare(a, b, objective);
+  if (objectiveOrder !== 0) return objectiveOrder < 0;
   const rank = { core: 0, money: 1, all: 2 };
   const ar = rank[a.effectiveResourceProfile] ?? 9;
   const br = rank[b.effectiveResourceProfile] ?? 9;
@@ -636,7 +677,15 @@ function resourceEvaluationBetter(a, b) {
   return Number(a.purchaseCosts?.coins || 0) < Number(b.purchaseCosts?.coins || 0);
 }
 
-async function evaluateCandidates(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none') {
+async function evaluateCandidates(
+  candidates,
+  bosses,
+  runs,
+  moveAccess,
+  expContext = null,
+  grindPolicy = 'none',
+  objective = 'mean',
+) {
   const requestedResourceProfile = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
   let best = null;
 
@@ -647,7 +696,7 @@ async function evaluateCandidates(candidates, bosses, runs, moveAccess, expConte
       requestedResourceProfile,
       effectiveResourceProfile: variant.resourceProfile,
     };
-    if (resourceEvaluationBetter(enriched, best)) best = enriched;
+    if (resourceEvaluationBetter(enriched, best, objective)) best = enriched;
   }
 
   return best;
@@ -844,6 +893,7 @@ function paretoFront(rows) {
     const atLeastAsGood =
       other.score >= row.score &&
       other.worstBossWinRate >= row.worstBossWinRate &&
+      other.bottom5BossWinRate >= row.bottom5BossWinRate &&
       otherExp <= rowExp &&
       otherUnknown <= rowUnknown &&
       otherCapture <= rowCapture &&
@@ -852,6 +902,7 @@ function paretoFront(rows) {
     const strictlyBetter =
       other.score > row.score ||
       other.worstBossWinRate > row.worstBossWinRate ||
+      other.bottom5BossWinRate > row.bottom5BossWinRate ||
       otherExp < rowExp ||
       otherUnknown < rowUnknown ||
       otherCapture < rowCapture ||
@@ -865,6 +916,8 @@ function searchResultRow(team, evaluation) {
   return {
     score: evaluation.score,
     worstBossWinRate: evaluation.worstBossWinRate,
+    bottom5BossWinRate: evaluation.bottom5BossWinRate,
+    storyClearBottomK: evaluation.storyClearBottomK,
     catchUpLevels: evaluation.catchUpLevels,
     catchUpUnknown: evaluation.catchUpUnknown,
     catchUpExp: evaluation.catchUpExp,
@@ -906,14 +959,30 @@ function searchResultRow(team, evaluation) {
   };
 }
 
-async function screenCandidates(candidates, story, moveAccess, screenRuns, expContext = null, grindPolicy = 'none') {
+async function screenCandidates(
+  candidates,
+  story,
+  moveAccess,
+  screenRuns,
+  expContext = null,
+  grindPolicy = 'none',
+  objective = 'mean',
+) {
   const rows = [];
   for (const candidate of candidates) {
-    const evaluation = await evaluateCandidates([candidate], story.bosses, screenRuns, moveAccess, expContext, grindPolicy);
+    const evaluation = await evaluateCandidates(
+      [candidate],
+      story.bosses,
+      screenRuns,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
     rows.push({ candidate, evaluation });
   }
   rows.sort((a, b) =>
-    b.evaluation.score - a.evaluation.score ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
     a.candidate.availableFrom - b.candidate.availableFrom ||
     a.candidate.species.localeCompare(b.candidate.species)
   );
@@ -935,6 +1004,7 @@ function evaluationDominates(a, b) {
   const atLeastAsGood =
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
+    a.bottom5BossWinRate >= b.bottom5BossWinRate &&
     aExp <= bExp &&
     aUnknown <= bUnknown &&
     aCapture <= bCapture &&
@@ -943,6 +1013,7 @@ function evaluationDominates(a, b) {
   const strictlyBetter =
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
+    a.bottom5BossWinRate > b.bottom5BossWinRate ||
     aExp < bExp ||
     aUnknown < bUnknown ||
     aCapture < bCapture ||
@@ -955,7 +1026,7 @@ function stateTieKey(state) {
   return state.team.map(x => x.species).sort().join('|');
 }
 
-function selectMultiObjectiveBeam(states, width) {
+function selectMultiObjectiveBeam(states, width, objective = 'mean') {
   if (states.length <= width) return states;
 
   const front = states.filter((state, index) =>
@@ -975,7 +1046,7 @@ function selectMultiObjectiveBeam(states, width) {
   }
 
   const byScore = [...front].sort((a, b) =>
-    b.evaluation.score - a.evaluation.score ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
     evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
@@ -999,11 +1070,19 @@ function selectMultiObjectiveBeam(states, width) {
   );
   const byWorstBoss = [...front].sort((a, b) =>
     b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate ||
+    b.evaluation.bottom5BossWinRate - a.evaluation.bottom5BossWinRate ||
+    b.evaluation.score - a.evaluation.score ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byBottom5 = [...front].sort((a, b) =>
+    b.evaluation.bottom5BossWinRate - a.evaluation.bottom5BossWinRate ||
+    b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate ||
     b.evaluation.score - a.evaluation.score ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
 
   add(byScore[0]);
+  add(byBottom5[0]);
   add(byWorstBoss[0]);
   add(byExp[0]);
   add(byCapture[0]);
@@ -1013,7 +1092,7 @@ function selectMultiObjectiveBeam(states, width) {
 
   if (selected.length < width) {
     const fallback = [...states].sort((a, b) =>
-      b.evaluation.score - a.evaluation.score ||
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
       evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
       stateTieKey(a).localeCompare(stateTieKey(b))
     );
@@ -1027,7 +1106,7 @@ function candidateScreenTieKey(row) {
   return row.candidate.species;
 }
 
-function selectCandidateScreenRows(rows, width) {
+function selectCandidateScreenRows(rows, width, objective = 'mean') {
   if (rows.length <= width) return rows;
 
   const front = rows.filter((row, index) =>
@@ -1047,7 +1126,8 @@ function selectCandidateScreenRows(rows, width) {
   }
 
   const sorters = [
-    (a, b) => b.evaluation.score - a.evaluation.score,
+    (a, b) => evaluationObjectiveCompare(a.evaluation, b.evaluation, objective),
+    (a, b) => b.evaluation.bottom5BossWinRate - a.evaluation.bottom5BossWinRate,
     (a, b) => b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate,
     (a, b) => Number(a.evaluation.expSchedule?.totalGrindExp || 0) - Number(b.evaluation.expSchedule?.totalGrindExp || 0),
     (a, b) => evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation),
@@ -1065,7 +1145,7 @@ function selectCandidateScreenRows(rows, width) {
   }
 
   const byScore = [...front].sort((a, b) =>
-    b.evaluation.score - a.evaluation.score ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
     evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
   );
@@ -1092,8 +1172,17 @@ async function runBeamSearch({
   expContext = null,
   grindPolicy = 'none',
   evaluationCache = null,
+  objective = 'mean',
 }) {
-  const screenRows = screenRowsOverride || await screenCandidates(candidates, story, moveAccess, screenRuns, expContext, grindPolicy);
+  const screenRows = screenRowsOverride || await screenCandidates(
+    candidates,
+    story,
+    moveAccess,
+    screenRuns,
+    expContext,
+    grindPolicy,
+    objective,
+  );
 
   const eligibleScreenRows = requiredCandidate
     ? screenRows.filter(row =>
@@ -1101,7 +1190,7 @@ async function runBeamSearch({
         candidateIdentity(row.candidate) === candidateIdentity(requiredCandidate)
       )
     : screenRows;
-  let screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap)
+  let screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap, objective)
     .map(row => row.candidate);
   if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
     screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
@@ -1121,6 +1210,7 @@ async function runBeamSearch({
           moveAccess,
           expContext,
           grindPolicy,
+          objective,
         )
       );
     }
@@ -1156,7 +1246,7 @@ async function runBeamSearch({
       }
     }
 
-    beam = selectMultiObjectiveBeam(expanded, beamWidth);
+    beam = selectMultiObjectiveBeam(expanded, beamWidth, objective);
     if (!beam.length) break;
   }
 
@@ -1168,7 +1258,7 @@ async function runBeamSearch({
     finalStates.push({ team: state.team, evaluation });
   }
   finalStates.sort((a, b) =>
-    b.evaluation.score - a.evaluation.score ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
     evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
     a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
   );
@@ -1182,6 +1272,7 @@ async function runBeamSearch({
       availableFrom: row.candidate.availableFrom,
       score: row.evaluation.score,
       worstBossWinRate: row.evaluation.worstBossWinRate,
+      bottom5BossWinRate: row.evaluation.bottom5BossWinRate,
       catchUpLevels: row.evaluation.catchUpLevels,
       catchUpUnknown: row.evaluation.catchUpUnknown,
       catchUpExp: row.evaluation.catchUpExp,
@@ -1193,6 +1284,7 @@ async function runBeamSearch({
     cachedEvaluationsTotal: cache.size,
     finalRescoredTeams: finalStates.length,
     finalRunsPerBoss: finalRuns,
+    objective,
     paretoFront: paretoFront(top),
     top,
   };
