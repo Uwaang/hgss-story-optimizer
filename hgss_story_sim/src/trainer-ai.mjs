@@ -40,6 +40,73 @@ export function trainerAiProfile(trainerMeta) {
   };
 }
 
+
+const TRAINER_HP_ITEMS = Object.freeze({
+  ITEM_POTION: 20,
+  ITEM_SUPER_POTION: 50,
+  ITEM_HYPER_POTION: 200,
+  ITEM_MAX_POTION: Infinity,
+});
+
+export function chooseHgssTrainerItem(active, side, itemSlots, initialItemCount = null) {
+  if (!active || active.fainted || !active.hp || !active.maxhp) return null;
+  const slots = Array.isArray(itemSlots) ? itemSlots : [];
+  if (!slots.length) return null;
+
+  const aliveMons = (side?.pokemon || []).filter(mon => mon && !mon.fainted && Number(mon.hp || 0) > 0).length;
+  const trainerItemCount = Number.isFinite(Number(initialItemCount))
+    ? Number(initialItemCount)
+    : slots.filter(Boolean).length;
+  const hp = Number(active.hp);
+  const maxhp = Number(active.maxhp);
+  const missing = Math.max(0, maxhp - hp);
+
+  for (let i = 0; i < slots.length; i += 1) {
+    const item = slots[i];
+    if (!item) continue;
+
+    // Mirrors the Gen 4 TrainerAI_ShouldUseItem gate: the first item is always
+    // eligible for evaluation; later item slots become eligible as the party
+    // gets smaller.
+    if (i !== 0 && aliveMons > trainerItemCount - i + 1) continue;
+
+    if (item === 'ITEM_FULL_RESTORE') {
+      if (hp > 0 && hp < maxhp / 4) {
+        return {
+          index: i,
+          item,
+          healAmount: Infinity,
+          cureStatus: true,
+          cureConfusion: true,
+        };
+      }
+      continue;
+    }
+
+    const healAmount = TRAINER_HP_ITEMS[item];
+    if (healAmount !== undefined) {
+      if (
+        hp > 0 &&
+        (
+          hp < maxhp / 4 ||
+          healAmount === Infinity ||
+          missing > healAmount
+        )
+      ) {
+        return {
+          index: i,
+          item,
+          healAmount,
+          cureStatus: false,
+          cureConfusion: false,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 function requestAliveBench(request, side) {
   const out = [];
   const requested = request?.side?.pokemon || [];
