@@ -121,6 +121,25 @@ function storyClearCoverageScore(rows, target = STORY_CLEAR_TARGET_WIN_RATE) {
   }, 0) / rows.length;
 }
 
+function storyClearGeometricScore(rows) {
+  if (!rows.length) return 0;
+  const logMean = rows.reduce((sum, row) => {
+    const wins = Number(row.wins);
+    const losses = Number(row.losses);
+    let estimate;
+    if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
+      // Beta(1,1) posterior mean avoids every finite smoke run turning a
+      // single 0/N result into a permanent zero-product route score.
+      estimate = (wins + 1) / (wins + losses + 2);
+    } else {
+      const rate = Math.max(0, Math.min(1, Number(row.winRate || 0)));
+      estimate = Math.max(1e-6, Math.min(1 - 1e-6, rate));
+    }
+    return sum + Math.log(estimate);
+  }, 0) / rows.length;
+  return Math.exp(logMean);
+}
+
 function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
   const rates = rows
     .map(row => Number(row.winRate || 0))
@@ -132,6 +151,9 @@ function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
 
 function evaluationObjectiveCompare(a, b, objective = 'mean') {
   if (objective === 'story-clear') {
+    if (a.storyClearGeometricScore !== b.storyClearGeometricScore) {
+      return b.storyClearGeometricScore - a.storyClearGeometricScore;
+    }
     if (a.storyClearCoverageScore !== b.storyClearCoverageScore) {
       return b.storyClearCoverageScore - a.storyClearCoverageScore;
     }
@@ -629,6 +651,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     : 0;
   const bottom5BossWinRate = lowerTailBossWinRate(rows);
   const storyCoverage = storyClearCoverageScore(rows);
+  const storyGeometric = storyClearGeometricScore(rows);
   const finalBattle = routeBosses[routeBosses.length - 1] || null;
   const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
   const finalMaterialized = finalBattle
@@ -646,6 +669,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     score: meanWinRate,
     worstBossWinRate,
     bottom5BossWinRate,
+    storyClearGeometricScore: storyGeometric,
     storyClearCoverageScore: storyCoverage,
     storyClearTargetWinRate: STORY_CLEAR_TARGET_WIN_RATE,
     storyClearBottomK: STORY_CLEAR_BOTTOM_K,
@@ -929,6 +953,7 @@ function paretoFront(rows) {
       other.score >= row.score &&
       other.worstBossWinRate >= row.worstBossWinRate &&
       other.bottom5BossWinRate >= row.bottom5BossWinRate &&
+      other.storyClearGeometricScore >= row.storyClearGeometricScore &&
       other.storyClearCoverageScore >= row.storyClearCoverageScore &&
       otherExp <= rowExp &&
       otherUnknown <= rowUnknown &&
@@ -939,6 +964,7 @@ function paretoFront(rows) {
       other.score > row.score ||
       other.worstBossWinRate > row.worstBossWinRate ||
       other.bottom5BossWinRate > row.bottom5BossWinRate ||
+      other.storyClearGeometricScore > row.storyClearGeometricScore ||
       other.storyClearCoverageScore > row.storyClearCoverageScore ||
       otherExp < rowExp ||
       otherUnknown < rowUnknown ||
@@ -954,6 +980,7 @@ function searchResultRow(team, evaluation) {
     score: evaluation.score,
     worstBossWinRate: evaluation.worstBossWinRate,
     bottom5BossWinRate: evaluation.bottom5BossWinRate,
+    storyClearGeometricScore: evaluation.storyClearGeometricScore,
     storyClearCoverageScore: evaluation.storyClearCoverageScore,
     storyClearTargetWinRate: evaluation.storyClearTargetWinRate,
     storyClearBottomK: evaluation.storyClearBottomK,
@@ -992,6 +1019,8 @@ function searchResultRow(team, evaluation) {
     resourceBudget: evaluation.resourceBudget,
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
+      wins: row.wins,
+      losses: row.losses,
       winRate: row.winRate,
       playerLead: row.playerLead || null,
       skipped: row.skipped || false,
@@ -1045,6 +1074,7 @@ function evaluationDominates(a, b) {
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
     a.bottom5BossWinRate >= b.bottom5BossWinRate &&
+    a.storyClearGeometricScore >= b.storyClearGeometricScore &&
     a.storyClearCoverageScore >= b.storyClearCoverageScore &&
     aExp <= bExp &&
     aUnknown <= bUnknown &&
@@ -1055,6 +1085,7 @@ function evaluationDominates(a, b) {
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
     a.bottom5BossWinRate > b.bottom5BossWinRate ||
+    a.storyClearGeometricScore > b.storyClearGeometricScore ||
     a.storyClearCoverageScore > b.storyClearCoverageScore ||
     aExp < bExp ||
     aUnknown < bUnknown ||
@@ -1316,6 +1347,7 @@ async function runBeamSearch({
       score: row.evaluation.score,
       worstBossWinRate: row.evaluation.worstBossWinRate,
       bottom5BossWinRate: row.evaluation.bottom5BossWinRate,
+      storyClearGeometricScore: row.evaluation.storyClearGeometricScore,
       storyClearCoverageScore: row.evaluation.storyClearCoverageScore,
       catchUpLevels: row.evaluation.catchUpLevels,
       catchUpUnknown: row.evaluation.catchUpUnknown,
@@ -1572,6 +1604,7 @@ async function cmdConvergence() {
       score: top?.score ?? null,
       worstBossWinRate: top?.worstBossWinRate ?? null,
       bottom5BossWinRate: top?.bottom5BossWinRate ?? null,
+      storyClearGeometricScore: top?.storyClearGeometricScore ?? null,
       storyClearCoverageScore: top?.storyClearCoverageScore ?? null,
       expBurden: top?.expBurden ?? null,
       captureExpectedEncounters: top?.captureSearch?.expectedEncounters ?? null,
@@ -1618,6 +1651,7 @@ async function cmdConvergence() {
       score: baseline.score,
       worstBossWinRate: baseline.worstBossWinRate,
       bottom5BossWinRate: baseline.bottom5BossWinRate,
+      storyClearGeometricScore: baseline.storyClearGeometricScore,
       storyClearCoverageScore: baseline.storyClearCoverageScore,
     } : null,
     rows,
@@ -2495,23 +2529,25 @@ async function cmdTeamOrderSmoke() {
 
 async function cmdObjectiveSmoke() {
   const fragileRows = [
-    ...Array.from({ length: 16 }, () => ({ winRate: 1 })),
-    ...Array.from({ length: 5 }, () => ({ winRate: 0 })),
+    ...Array.from({ length: 16 }, () => ({ winRate: 1, wins: 10, losses: 0 })),
+    ...Array.from({ length: 5 }, () => ({ winRate: 0, wins: 0, losses: 10 })),
   ];
   const resilientRows = [
-    ...Array.from({ length: 11 }, () => ({ winRate: 1 })),
-    ...Array.from({ length: 10 }, () => ({ winRate: 0.4 })),
+    ...Array.from({ length: 11 }, () => ({ winRate: 1, wins: 10, losses: 0 })),
+    ...Array.from({ length: 10 }, () => ({ winRate: 0.4, wins: 4, losses: 6 })),
   ];
   const fragile = {
     score: 16 / 21,
     worstBossWinRate: 0,
     bottom5BossWinRate: lowerTailBossWinRate(fragileRows),
+    storyClearGeometricScore: storyClearGeometricScore(fragileRows),
     storyClearCoverageScore: storyClearCoverageScore(fragileRows),
   };
   const resilient = {
     score: (11 + 10 * 0.4) / 21,
     worstBossWinRate: 0.4,
     bottom5BossWinRate: lowerTailBossWinRate(resilientRows),
+    storyClearGeometricScore: storyClearGeometricScore(resilientRows),
     storyClearCoverageScore: storyClearCoverageScore(resilientRows),
   };
 
@@ -2533,6 +2569,8 @@ async function cmdObjectiveSmoke() {
     bottomK: STORY_CLEAR_BOTTOM_K,
     targetWinRate: STORY_CLEAR_TARGET_WIN_RATE,
     lowerTailExample: bottom5,
+    fragileGeometric: fragile.storyClearGeometricScore,
+    resilientGeometric: resilient.storyClearGeometricScore,
     fragileCoverage: fragile.storyClearCoverageScore,
     resilientCoverage: resilient.storyClearCoverageScore,
     meanPrefers: 'fragile',
