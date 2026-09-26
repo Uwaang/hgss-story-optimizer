@@ -506,6 +506,22 @@ function rowResourceBurden(row) {
   );
 }
 
+function orderCandidatesForBoss(candidates, boss, levelsByCandidate = null) {
+  return [...candidates].sort((a, b) => {
+    const aKey = candidateIdentity(a);
+    const bKey = candidateIdentity(b);
+    const aLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[aKey]))
+      ? Number(levelsByCandidate[aKey])
+      : Number(boss.aceLevel);
+    const bLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[bKey]))
+      ? Number(levelsByCandidate[bKey])
+      : Number(boss.aceLevel);
+    const aUtility = candidateBossUtility(a, boss, aLevel);
+    const bUtility = candidateBossUtility(b, boss, bLevel);
+    return bUtility - aUtility || aKey.localeCompare(bKey);
+  });
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none') {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -565,8 +581,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   let weightedRuns = 0;
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
+    const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
     const playerTeam = materializeCandidateTeam(
-      candidates,
+      orderedCandidates,
       boss.stage,
       boss.aceLevel,
       { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate },
@@ -600,6 +617,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       boss: boss.label,
       aceLevel: boss.aceLevel,
       playerLevels: Object.fromEntries(playerTeam.map(mon => [mon.species, mon.level])),
+      playerLead: playerTeam[0]?.species || null,
       naturalExpBefore: expSchedule?.battles?.[battleIndex]?.mapExpBefore || 0,
       availableMons: playerTeam.map(x => x.species),
       ...result,
@@ -615,7 +633,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
   const finalMaterialized = finalBattle
     ? materializeCandidateTeam(
-        candidates,
+        orderCandidatesForBoss(candidates, finalBattle, finalLevelSnapshot),
         finalBattle.stage,
         finalBattle.aceLevel,
         { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: finalLevelSnapshot },
@@ -631,6 +649,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     storyClearCoverageScore: storyCoverage,
     storyClearTargetWinRate: STORY_CLEAR_TARGET_WIN_RATE,
     storyClearBottomK: STORY_CLEAR_BOTTOM_K,
+    leadPolicy: 'boss-utility',
     routeStarter,
     expProfile,
     grindPolicy: expContext?.grindPolicy || 'none',
@@ -974,6 +993,7 @@ function searchResultRow(team, evaluation) {
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
       winRate: row.winRate,
+      playerLead: row.playerLead || null,
       skipped: row.skipped || false,
     })),
   };
@@ -2426,6 +2446,53 @@ async function cmdExpAllocatorSmoke() {
   }, null, 2));
 }
 
+async function cmdTeamOrderSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error(`Missing team-order smoke candidate: ${name}`);
+    return candidate;
+  });
+  const reversed = [...team].reverse();
+  const shortRoute = story.bosses.filter(battle => Number(battle.stage) <= 2);
+  const [moveAccess, expContext] = await Promise.all([
+    loadMoveAccess('core', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'balanced',
+    ),
+  ]);
+
+  const a = await evaluateCandidates(team, shortRoute, 2, moveAccess, expContext, 'none', 'story-clear');
+  const b = await evaluateCandidates(reversed, shortRoute, 2, moveAccess, expContext, 'none', 'story-clear');
+  const summary = evaluation => ({
+    score: evaluation.score,
+    coverage: evaluation.storyClearCoverageScore,
+    worst: evaluation.worstBossWinRate,
+    bottom5: evaluation.bottom5BossWinRate,
+    rows: evaluation.rows.map(row => ({
+      boss: row.boss,
+      wins: row.wins,
+      losses: row.losses,
+      lead: row.playerLead,
+    })),
+  });
+
+  if (JSON.stringify(summary(a)) !== JSON.stringify(summary(b))) {
+    throw new Error(
+      `Candidate input order changed battle evaluation: ${JSON.stringify({ a: summary(a), b: summary(b) })}`
+    );
+  }
+  console.log(JSON.stringify(summary(a), null, 2));
+}
+
 async function cmdObjectiveSmoke() {
   const fragileRows = [
     ...Array.from({ length: 16 }, () => ({ winRate: 1 })),
@@ -2713,6 +2780,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
+  'team-order-smoke': cmdTeamOrderSmoke,
   'objective-smoke': cmdObjectiveSmoke,
   'capture-smoke': cmdCaptureSmoke,
   'exp-route-smoke': cmdExpRouteSmoke,
@@ -2727,7 +2795,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
