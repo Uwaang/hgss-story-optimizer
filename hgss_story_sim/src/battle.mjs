@@ -649,6 +649,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
         ? mon.moves
         : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines);
       return {
+        _candidateKey: key,
         name: species.name,
         species: species.name,
         level: candidateLevel,
@@ -938,11 +939,36 @@ async function runGreedyAi(playerStream, battleStream, sideId, stats, aiOptions 
   }
 }
 
+function p1UsageKey(actor, keyByDisplayName) {
+  const text = String(actor || '');
+  const marker = text.indexOf(': ');
+  const displayName = marker >= 0 ? text.slice(marker + 2) : text;
+  return keyByDisplayName.get(displayName) || null;
+}
+
+function emptyBattleUsage() {
+  return {
+    appearances: 0,
+    leadStarts: 0,
+    moveUses: 0,
+    activeTurns: 0,
+    faints: 0,
+  };
+}
+
 export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const battleStream = new BattleStream();
   const streams = getPlayerStreams(battleStream);
   const p2Profile = options.p2Trainer ? trainerAiProfile(options.p2Trainer) : null;
   const p2Mode = options.p2AiMode || (p2Profile ? 'hgss' : 'greedy');
+  const p1KeyByDisplayName = new Map(
+    p1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
+  );
+  const p1Usage = Object.fromEntries(
+    p1Team.map(mon => [String(mon._candidateKey || mon.species), emptyBattleUsage()])
+  );
+  let p1ActiveKey = null;
+  let p1LeadSeen = false;
   const p1Stats = {
     voluntarySwitches: 0,
     forcedSwitches: 0,
@@ -973,8 +999,36 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     let turns = 0;
     for await (const chunk of streams.omniscient) {
       for (const line of chunk.split('\n')) {
-        if (line.startsWith('|turn|')) turns = Number(line.split('|')[2] || turns);
-        if (line.startsWith('|win|')) winner = line.split('|')[2] || null;
+        const parts = line.split('|');
+        const event = parts[1] || '';
+        const actor = parts[2] || '';
+        if ((event === 'switch' || event === 'drag') && actor.startsWith('p1')) {
+          const key = p1UsageKey(actor, p1KeyByDisplayName);
+          if (key && p1Usage[key]) {
+            p1Usage[key].appearances += 1;
+            p1ActiveKey = key;
+            if (!p1LeadSeen) {
+              p1Usage[key].leadStarts += 1;
+              p1LeadSeen = true;
+            }
+          }
+        }
+        if (event === 'move' && actor.startsWith('p1')) {
+          const key = p1UsageKey(actor, p1KeyByDisplayName);
+          if (key && p1Usage[key]) {
+            p1Usage[key].moveUses += 1;
+            p1ActiveKey = key;
+          }
+        }
+        if (event === 'faint' && actor.startsWith('p1')) {
+          const key = p1UsageKey(actor, p1KeyByDisplayName);
+          if (key && p1Usage[key]) p1Usage[key].faints += 1;
+        }
+        if (line.startsWith('|turn|')) {
+          turns = Number(parts[2] || turns);
+          if (p1ActiveKey && p1Usage[p1ActiveKey]) p1Usage[p1ActiveKey].activeTurns += 1;
+        }
+        if (line.startsWith('|win|')) winner = parts[2] || null;
         if (line === '|tie|') winner = 'tie';
       }
       if (winner) break;
@@ -991,6 +1045,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   await Promise.allSettled([p1Task, p2Task]);
   return {
     ...result,
+    p1Usage,
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
@@ -1013,6 +1068,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2ForcedSwitches = 0;
   let totalP2MoveDecisions = 0;
   let totalP2TrainerItemUses = 0;
+  const p1Usage = {};
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
   let p2AiFlags = 0;
   let p2AiFlagNames = [];
@@ -1025,6 +1081,36 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
     totalP2MoveDecisions += result.p2MoveDecisions || 0;
     totalP2TrainerItemUses += result.p2TrainerItemsUsed?.length || 0;
+    for (const [key, usage] of Object.entries(result.p1Usage || {})) {
+      const aggregate = p1Usage[key] || {
+        runsAvailable: 0,
+        runsUsed: 0,
+        winningRunsUsed: 0,
+        appearances: 0,
+        leadStarts: 0,
+        moveUses: 0,
+        activeTurns: 0,
+        faints: 0,
+        winningMoveUses: 0,
+        winningActiveTurns: 0,
+      };
+      const used = Number(usage.appearances || 0) > 0 ||
+        Number(usage.moveUses || 0) > 0 ||
+        Number(usage.activeTurns || 0) > 0;
+      aggregate.runsAvailable += 1;
+      if (used) aggregate.runsUsed += 1;
+      if (used && result.winner === 'Player') aggregate.winningRunsUsed += 1;
+      aggregate.appearances += Number(usage.appearances || 0);
+      aggregate.leadStarts += Number(usage.leadStarts || 0);
+      aggregate.moveUses += Number(usage.moveUses || 0);
+      aggregate.activeTurns += Number(usage.activeTurns || 0);
+      aggregate.faints += Number(usage.faints || 0);
+      if (result.winner === 'Player') {
+        aggregate.winningMoveUses += Number(usage.moveUses || 0);
+        aggregate.winningActiveTurns += Number(usage.activeTurns || 0);
+      }
+      p1Usage[key] = aggregate;
+    }
     p2AiMode = result.p2AiMode;
     p2AiFlags = result.p2AiFlags;
     p2AiFlagNames = result.p2AiFlagNames;
@@ -1045,6 +1131,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
     averageP2MoveDecisions: totalP2MoveDecisions / runs,
     averageP2TrainerItemUses: totalP2TrainerItemUses / runs,
+    p1Usage,
     p2AiMode,
     p2AiFlags,
     p2AiFlagNames,
