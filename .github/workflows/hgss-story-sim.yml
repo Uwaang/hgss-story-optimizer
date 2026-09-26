@@ -6,7 +6,7 @@ env:
 on:
   push:
     branches:
-      - feature/hgss-story-sim
+      - main
     paths:
       - 'hgss_story_sim/**'
       - '.github/workflows/hgss-story-sim.yml'
