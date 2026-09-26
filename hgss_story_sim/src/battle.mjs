@@ -1,7 +1,7 @@
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
-import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
+import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
 
 const dex = Dex.mod('gen4');
 const NEUTRAL_NATURE = 'Serious';
@@ -681,6 +681,48 @@ function aiRandomChance(stats, numerator, denominator) {
   return (state % den) < num;
 }
 
+
+function trainerItemDisplayName(item) {
+  return String(item || '')
+    .replace(/^ITEM_/, '')
+    .toLowerCase()
+    .split('_')
+    .map(part => part ? part[0].toUpperCase() + part.slice(1) : part)
+    .join(' ');
+}
+
+function applyHgssTrainerItemTurn(battle, side, active, stats, plan) {
+  if (!battle || !side || !active || !plan) return false;
+  const displayName = trainerItemDisplayName(plan.item);
+
+  if (plan.healAmount === Infinity) {
+    const healed = active.heal(active.maxhp);
+    if (healed) battle.add('-heal', active, active.getHealth, `[from] item: ${displayName}`);
+  } else if (Number(plan.healAmount) > 0) {
+    const healed = active.heal(Number(plan.healAmount));
+    if (healed) battle.add('-heal', active, active.getHealth, `[from] item: ${displayName}`);
+  }
+
+  if (plan.cureStatus && active.status) active.cureStatus();
+  if (plan.cureConfusion && active.volatiles?.confusion) active.removeVolatile('confusion');
+
+  if (Array.isArray(stats?.trainerItems) && plan.index >= 0 && plan.index < stats.trainerItems.length) {
+    stats.trainerItems[plan.index] = null;
+  }
+  if (stats) {
+    stats.trainerItemsUsed = [...(stats.trainerItemsUsed || []), plan.item];
+  }
+
+  // Showdown has no trainer-bag action in standard customgame. Injecting a
+  // queue-level pass consumes the trainer's action for this turn without giving
+  // it a free move after healing. The item effect is applied before turn
+  // resolution, matching the cartridge's action ordering closely.
+  side.clearChoice();
+  side.choice.actions.push({ choice: 'pass' });
+  if (battle.allChoicesDone()) battle.commitChoices();
+  return true;
+}
+
 function scoreMove(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove.move);
   if (!move.exists || requestedMove.disabled) return -Infinity;
@@ -826,6 +868,16 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
         if (slot !== null && slot !== undefined) return `switch ${slot + 1}`;
       }
       if (useHgssNpcAi && active && foeActive) {
+        const itemPlan = chooseHgssTrainerItem(
+          active,
+          side,
+          stats?.trainerItems || [],
+          stats?.trainerItemCount || 0,
+        );
+        if (itemPlan && applyHgssTrainerItemTurn(battle, side, active, stats, itemPlan)) {
+          return '__trainer_item__';
+        }
+
         const moveIdx = chooseHgssMoveIndex(
           activeRequest,
           active,
@@ -845,6 +897,7 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
       legal.sort((a, b) => b.score - a.score || a.idx - b.idx);
       return `move ${legal[0].idx + 1}`;
     });
+    if (choices.includes('__trainer_item__')) return null;
     return choices.join(', ');
   }
   return 'default';
@@ -885,6 +938,9 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     moveDecisions: 0,
     lastVoluntarySwitchTurn: -999,
     aiRngState: (Number(seed) ^ 0x2468ace0) >>> 0,
+    trainerItems: [...(p2Profile?.items || [])],
+    trainerItemCount: Number(p2Profile?.items?.length || 0),
+    trainerItemsUsed: [],
   };
   const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: 'greedy' }).catch(() => undefined);
   const p2Task = runGreedyAi(
@@ -921,6 +977,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
     p2MoveDecisions: p2Stats.moveDecisions,
+    p2TrainerItemsUsed: p2Stats.trainerItemsUsed,
     p2AiMode: p2Mode,
     p2AiFlags: p2Profile?.aiFlags || 0,
     p2AiFlagNames: p2Profile?.flags || [],
@@ -937,6 +994,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2VoluntarySwitches = 0;
   let totalP2ForcedSwitches = 0;
   let totalP2MoveDecisions = 0;
+  let totalP2TrainerItemUses = 0;
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
   let p2AiFlags = 0;
   let p2AiFlagNames = [];
@@ -948,6 +1006,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;
     totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
     totalP2MoveDecisions += result.p2MoveDecisions || 0;
+    totalP2TrainerItemUses += result.p2TrainerItemsUsed?.length || 0;
     p2AiMode = result.p2AiMode;
     p2AiFlags = result.p2AiFlags;
     p2AiFlagNames = result.p2AiFlagNames;
@@ -967,6 +1026,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP2VoluntarySwitches: totalP2VoluntarySwitches / runs,
     averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
     averageP2MoveDecisions: totalP2MoveDecisions / runs,
+    averageP2TrainerItemUses: totalP2TrainerItemUses / runs,
     p2AiMode,
     p2AiFlags,
     p2AiFlagNames,
