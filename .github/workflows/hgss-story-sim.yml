@@ -386,6 +386,36 @@ jobs:
           path: hgss_story_sim/results/story-validation-${{ matrix.version }}-${{ matrix.starter }}.json
           if-no-files-found: error
 
+
+  red_route_matrix:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[red-route]')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [HEARTGOLD, SOULSILVER]
+        starter: [Cyndaquil, Totodile, Chikorita]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize through Red for ${{ matrix.version }} ${{ matrix.starter }}
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=${{ matrix.version }} --starters=${{ matrix.starter }} --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/red-route-${{ matrix.version }}-${{ matrix.starter }}.json
+      - name: Upload ${{ matrix.version }} ${{ matrix.starter }} Red-route result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-route-${{ matrix.version }}-${{ matrix.starter }}
+          path: hgss_story_sim/results/red-route-${{ matrix.version }}-${{ matrix.starter }}.json
+          if-no-files-found: error
+
   convergence:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
     runs-on: ubuntu-latest
