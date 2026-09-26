@@ -4,6 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { chooseHgssPostKoSwitch, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
@@ -632,6 +633,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       enemyTeam,
       runs,
       1000 + boss.stage * 100000 + battleIndex * 1000,
+      { p2Trainer: boss },
     );
     weightedWins += result.wins;
     weightedRuns += result.runs;
@@ -2636,6 +2638,90 @@ async function cmdSwitchSmoke() {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdTrainerAiSmoke() {
+  const story = await loadStory();
+  const falkner = story.bosses.find(boss => boss.label === 'Falkner');
+  const whitney = story.bosses.find(boss => boss.label === 'Whitney');
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!falkner || !whitney || !red) throw new Error('Expected Falkner, Whitney, and Red in story route');
+
+  const falknerProfile = trainerAiProfile(falkner);
+  const whitneyProfile = trainerAiProfile(whitney);
+  const redProfile = trainerAiProfile(red);
+
+  if (falknerProfile.aiFlags !== 3) {
+    throw new Error(`Expected Falkner ai_flags=3, got ${falknerProfile.aiFlags}`);
+  }
+  const falknerFlags = decodeHgssAiFlags(falknerProfile.aiFlags);
+  if (!falknerFlags.includes('BASIC') || !falknerFlags.includes('EVAL_ATTACK')) {
+    throw new Error(`Unexpected Falkner AI flags: ${falknerFlags.join(',')}`);
+  }
+  if (whitneyProfile.items.filter(item => item === 'ITEM_SUPER_POTION').length !== 2) {
+    throw new Error(`Expected Whitney Super Potion x2, got ${whitneyProfile.items.join(',')}`);
+  }
+  if (redProfile.items.filter(item => item === 'ITEM_FULL_RESTORE').length !== 4) {
+    throw new Error(`Expected Red Full Restore x4, got ${redProfile.items.join(',')}`);
+  }
+
+  const mockRequest = {
+    side: {
+      pokemon: [
+        { active: true, condition: '0 fnt' },
+        { active: false, condition: '50/50' },
+        { active: false, condition: '50/50' },
+      ],
+    },
+  };
+  const mockSide = {
+    pokemon: [
+      { species: 'Rattata', fainted: true, moveSlots: [] },
+      {
+        species: 'Geodude',
+        fainted: false,
+        moveSlots: [{ id: 'rockthrow', disabled: false }],
+        storedStats: { atk: 40, spa: 20 },
+        getTypes: () => ['Rock', 'Ground'],
+      },
+      {
+        species: 'Bellsprout',
+        fainted: false,
+        moveSlots: [{ id: 'vinewhip', disabled: false }],
+        storedStats: { atk: 40, spa: 40 },
+        getTypes: () => ['Grass', 'Poison'],
+      },
+    ],
+  };
+  const mockFoe = {
+    species: 'Totodile',
+    storedStats: { def: 35, spd: 35 },
+  };
+  const switchSlot = chooseHgssPostKoSwitch(mockRequest, mockSide, mockFoe);
+  if (switchSlot !== 2) {
+    throw new Error(`Expected post-KO AI to prefer Bellsprout slot 3 vs Totodile, got slot ${switchSlot}`);
+  }
+
+  const enemyTeam = hgssTrainerToShowdownTeam(falkner.trainer, falkner);
+  const playerTeam = [{
+    species: 'Mareep',
+    level: 13,
+    ability: 'Static',
+    nature: 'Serious',
+    moves: ['ThunderShock', 'Tackle'],
+  }];
+  const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 982451, { p2Trainer: falkner });
+  if (battle.p2AiMode !== 'hgss' || battle.p2AiFlags !== 3) {
+    throw new Error(`HGSS trainer AI metadata was not wired into battle: ${JSON.stringify(battle)}`);
+  }
+
+  console.log(JSON.stringify({
+    falkner: falknerProfile,
+    whitney: whitneyProfile,
+    red: redProfile,
+    postKoSwitchSlot: switchSlot,
+    battle,
+  }, null, 2));
+}
+
 async function cmdTutorSmoke() {
   const moveAccess = await loadMoveAccess();
   const before = candidateMovePool('Quilava', 17, 1, moveAccess);
@@ -2789,7 +2875,7 @@ async function cmdSmoke() {
     falkner.aceLevel,
     { moveAccess, singleUsePlan },
   );
-  const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242);
+  const battle = await simulateMatchup(playerTeam, enemyTeam, 1, 4242, { p2Trainer: falkner });
   console.log(JSON.stringify({
     source: falkner.key,
     trainerId: falkner.trainerId,
@@ -2826,6 +2912,7 @@ const commands = {
   'exp-route-smoke': cmdExpRouteSmoke,
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
+  'trainer-ai-smoke': cmdTrainerAiSmoke,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,
@@ -2835,7 +2922,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
