@@ -1,7 +1,7 @@
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
-import { chooseHgssPostKoSwitch, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
+import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
 
 const dex = Dex.mod('gen4');
 const NEUTRAL_NATURE = 'Serious';
@@ -825,6 +825,19 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
         );
         if (slot !== null && slot !== undefined) return `switch ${slot + 1}`;
       }
+      if (useHgssNpcAi && active && foeActive) {
+        const moveIdx = chooseHgssMoveIndex(
+          activeRequest,
+          active,
+          foeActive,
+          aiOptions?.profile?.aiFlags || 0,
+          battle,
+          (num, den) => aiRandomChance(stats, num, den),
+        );
+        if (stats) stats.moveDecisions = Number(stats.moveDecisions || 0) + 1;
+        return `move ${moveIdx + 1}`;
+      }
+
       const legal = activeRequest.moves
         .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
         .filter(entry => !entry.move.disabled);
@@ -862,12 +875,14 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const p1Stats = {
     voluntarySwitches: 0,
     forcedSwitches: 0,
+    moveDecisions: 0,
     lastVoluntarySwitchTurn: -999,
     aiRngState: (Number(seed) ^ 0x13579bdf) >>> 0,
   };
   const p2Stats = {
     voluntarySwitches: 0,
     forcedSwitches: 0,
+    moveDecisions: 0,
     lastVoluntarySwitchTurn: -999,
     aiRngState: (Number(seed) ^ 0x2468ace0) >>> 0,
   };
@@ -905,6 +920,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
+    p2MoveDecisions: p2Stats.moveDecisions,
     p2AiMode: p2Mode,
     p2AiFlags: p2Profile?.aiFlags || 0,
     p2AiFlagNames: p2Profile?.flags || [],
@@ -920,6 +936,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP1VoluntarySwitches = 0;
   let totalP2VoluntarySwitches = 0;
   let totalP2ForcedSwitches = 0;
+  let totalP2MoveDecisions = 0;
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
   let p2AiFlags = 0;
   let p2AiFlagNames = [];
@@ -930,6 +947,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
     totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;
     totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
+    totalP2MoveDecisions += result.p2MoveDecisions || 0;
     p2AiMode = result.p2AiMode;
     p2AiFlags = result.p2AiFlags;
     p2AiFlagNames = result.p2AiFlagNames;
@@ -948,6 +966,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP1VoluntarySwitches: totalP1VoluntarySwitches / runs,
     averageP2VoluntarySwitches: totalP2VoluntarySwitches / runs,
     averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
+    averageP2MoveDecisions: totalP2MoveDecisions / runs,
     p2AiMode,
     p2AiFlags,
     p2AiFlagNames,
