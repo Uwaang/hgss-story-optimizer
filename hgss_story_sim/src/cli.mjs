@@ -2836,6 +2836,143 @@ async function cmdAllocatorCrossCompare() {
   }, null, 2));
 }
 
+
+function compactEvaluationForAblation(evaluation) {
+  return {
+    score: evaluation.score,
+    worstBossWinRate: evaluation.worstBossWinRate,
+    bottom5BossWinRate: evaluation.bottom5BossWinRate,
+    storyClearGeometricScore: evaluation.storyClearGeometricScore,
+    storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    effectiveResourceProfile: evaluation.effectiveResourceProfile,
+    captureExpectedEncounters: evaluation.captureSearch?.expectedEncounters ?? null,
+  };
+}
+
+function memberAblationSummary(full, removed, species) {
+  const removedByBoss = new Map((removed.rows || []).map(row => [row.boss, row]));
+  const bossDeltas = (full.rows || []).map(row => {
+    const ablated = removedByBoss.get(row.boss);
+    const fullRate = Number(row.winRate || 0);
+    const removedRate = Number(ablated?.winRate || 0);
+    return {
+      boss: row.boss,
+      fullWinRate: fullRate,
+      withoutWinRate: removedRate,
+      delta: fullRate - removedRate,
+    };
+  });
+  const positive = bossDeltas.filter(row => row.delta > 1e-12);
+  const negative = bossDeltas.filter(row => row.delta < -1e-12);
+  const sortedPositive = [...positive].sort((a, b) => b.delta - a.delta || a.boss.localeCompare(b.boss));
+  const sortedNegative = [...negative].sort((a, b) => a.delta - b.delta || a.boss.localeCompare(b.boss));
+  return {
+    species,
+    scoreDelta: full.score - removed.score,
+    geometricDelta: full.storyClearGeometricScore - removed.storyClearGeometricScore,
+    coverageDelta: full.storyClearCoverageScore - removed.storyClearCoverageScore,
+    bottom5Delta: full.bottom5BossWinRate - removed.bottom5BossWinRate,
+    worstBossDelta: full.worstBossWinRate - removed.worstBossWinRate,
+    bossesHelped: positive.length,
+    bossesHurt: negative.length,
+    maxBossWinRateGain: sortedPositive[0]?.delta || 0,
+    maxBossWinRateLoss: sortedNegative[0]?.delta || 0,
+    topHelpedBosses: sortedPositive.slice(0, 8),
+    topHurtBosses: sortedNegative.slice(0, 8),
+    without: compactEvaluationForAblation(removed),
+  };
+}
+
+async function cmdTeamAblation() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length < 2) throw new Error('team-ablation requires --team=A,B,...');
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-ablation requires a starter in the selected team');
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('team-ablation team violates team constraints');
+  }
+
+  const full = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const members = [];
+  for (const candidate of team) {
+    if (candidateIdentity(candidate) === candidateIdentity(starter)) {
+      members.push({
+        species: candidate.species,
+        mandatoryStarter: true,
+        note: 'starter is mandatory for this route and is not ablated',
+      });
+      continue;
+    }
+    const reduced = team.filter(mon => candidateIdentity(mon) !== candidateIdentity(candidate));
+    const evaluation = await evaluateCandidates(
+      reduced,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    members.push(memberAblationSummary(full, evaluation, candidate.species));
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'member ablation of a fixed six-member story team; EXP and move resources are re-planned after removing each non-starter',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    full: compactEvaluationForAblation(full),
+    members,
+  }, null, 2));
+}
+
 async function cmdTrainerAiCompare() {
   const runs = Number(arg('runs', '20'));
   const story = await loadStory();
@@ -3268,6 +3405,7 @@ const commands = {
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
   'allocator-cross-compare': cmdAllocatorCrossCompare,
+  'team-ablation': cmdTeamAblation,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -3278,7 +3416,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
