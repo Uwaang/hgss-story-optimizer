@@ -152,6 +152,9 @@ npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter
 # Natural levels + natural Goldenrod spending budget
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=none --final-runs=10
 
+# Prefer broad mandatory-boss coverage under the realistic route EXP envelope
+npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=core --spend-policy=natural --exp-profile=normal-route --exp-allocator=boss-aware --objective=story-clear --beam-width=8 --candidate-cap=24 --final-runs=20
+
 # Same natural money supply, but explicitly pay EXP/time to grind to each ace level
 npm run search -- --pool=canonical --version=HEARTGOLD --strategy=beam --starter=Cyndaquil --resources=all --spend-policy=natural --exp-profile=all-accessible --grind-policy=ace-paid --final-runs=10
 
