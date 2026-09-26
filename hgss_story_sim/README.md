@@ -6,17 +6,19 @@ A source-backed HeartGold/SoulSilver story-party optimizer using pinned `pret/po
 
 ### Story battles
 
-The acquisition stage stays badge-oriented (`0..12`) even when multiple battles occur inside one stage.
+The acquisition stage stays checkpoint-oriented. Stages `0..12` cover Johto through Lance, and stages `13..21` extend one deterministic canonical Kanto route through Red.
 
-For a party with a fixed starter, the current scoring route has **21 major battles**:
+For a party with a fixed starter, the current scoring route has **30 major battles**:
 
 - 8 Johto Gym Leaders
 - 4 Team Rocket executive singles with explicit source-script evidence
 - 4 starter-matched Silver battles
 - Elite Four
 - Champion Lance
+- 8 Kanto Gym Leaders
+- Red
 
-Silver variants are selected from the player's starter, so all three rival variants are never counted together. Candidate screening without a starter uses the 17 common battles only.
+Silver variants are selected from the player's starter, so all three rival variants are never counted together. Candidate screening without a starter uses the common non-rival route battles; fixed-starter optimization selects only the matching Silver variants.
 
 Currently deferred:
 
@@ -79,9 +81,9 @@ Source inputs:
 EXP supply profiles:
 
 - `ace`: legacy regression mode; free normalization to each opponent's ace level
-- `major`: lower bound using only the 21 scored major battles
-- `normal-route`: canonical-route map envelope plus the 21 major battles; this intentionally excludes the extra Gym/Rocket maps used only by the upper envelope
-- `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the 21 major battles
+- `major`: lower bound using only the scored major battles
+- `normal-route`: canonical-route map envelope plus the scored major battles; the route now continues through Kanto to Red
+- `all-accessible`: accessible-trainer upper envelope using source-backed field/Gym/Rocket maps plus the scored major battles
 
 Late-joining Pokémon never receive EXP from earlier stages. Same-stage timing now defaults to **boss-windowed map order**. `config/exp-timing.json` assigns route/Gym/Rocket maps to the scored boss they occur before, then those maps are processed in route order inside that window. A source-mapped Pokémon joins when its acquisition map is reached, so it can receive trainer EXP from that point forward without inheriting earlier same-stage EXP. Manual gifts/statics can provide a conservative `beforeBoss` hint; anything still unresolved falls back to the final scored boss of that stage.
 
@@ -300,8 +302,17 @@ Stage is an acquisition checkpoint, not the index of a battle in the route.
 - 10 Bruno
 - 11 Karen
 - 12 Lance
+- 13 Lt. Surge
+- 14 Sabrina
+- 15 Erika
+- 16 Janine
+- 17 Misty
+- 18 Brock
+- 19 Blaine
+- 20 Blue
+- 21 Red
 
-Rocket and rival battles share the appropriate stage without shifting these checkpoints.
+Rocket and rival battles share the appropriate Johto stage without shifting these checkpoints. The Kanto Gym order is a deterministic modeling route for EXP/acquisition timing; HGSS itself permits more routing flexibility.
 
 ## Current approximations
 
@@ -330,7 +341,7 @@ GitHub Actions currently checks:
 - balanced vs boss-aware EXP allocation
 - map-level acquisition timing and boss-window ordering
 - paid-grind EXP / expected-wild-battle accounting
-- starter-specific 21-battle route selection
+- starter-specific 30-battle route selection through Red
 - real battle completion
 - bounded player switching
 - tutor/HM timing
@@ -354,7 +365,7 @@ The current comparison also penalizes recharge, charge-turn, recoil, crash and s
 2. Expand overworld TM and other pre-Lance move-source coverage.
 3. Improve trainer item-use / AI fidelity.
 4. Broaden optimizer search and benchmark convergence.
-5. Extend through Kanto and Red.
+5. Validate the new Kanto-through-Red extension, then revisit dead-slot and breakpoint-aware EXP behavior.
 
 
 The final optimizer comparison after this monotonic-resource fix is triggered from the same commit for both `all` and `core`, so the outputs are directly comparable.
