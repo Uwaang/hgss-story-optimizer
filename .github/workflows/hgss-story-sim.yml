@@ -292,6 +292,35 @@ jobs:
           path: hgss_story_sim/results/story-soft-scale-${{ matrix.softScale }}.json
           if-no-files-found: error
 
+
+  story_resources_pilot:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[story-resources]')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        expAllocator: [balanced, boss-aware]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize all-resource story-clear with ${{ matrix.expAllocator }}
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=${{ matrix.expAllocator }} --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/story-resources-${{ matrix.expAllocator }}.json
+      - name: Upload all-resource ${{ matrix.expAllocator }} result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-story-resources-${{ matrix.expAllocator }}-hg-cyndaquil
+          path: hgss_story_sim/results/story-resources-${{ matrix.expAllocator }}.json
+          if-no-files-found: error
+
   convergence:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[convergence]')
     runs-on: ubuntu-latest
