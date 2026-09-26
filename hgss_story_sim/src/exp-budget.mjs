@@ -560,14 +560,40 @@ function cachedLevelUtility(candidate, boss, level, levelUtility, cache = null) 
   return byLevel.get(normalizedLevel);
 }
 
-function weightedFutureUtility(candidate, bosses, level, levelUtility, discount = 0.72, cache = null) {
+function bossUtilityLevelFactor(boss, level) {
+  const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const aceLevel = Math.max(1, Number(boss?.aceLevel || actualLevel));
+  const levelRatio = actualLevel / aceLevel;
+  return Math.max(0.25, Math.min(2.0, levelRatio ** 1.4));
+}
+
+function normalizedCachedLevelUtility(candidate, boss, level, levelUtility, cache = null) {
+  const raw = cachedLevelUtility(candidate, boss, level, levelUtility, cache);
+  return raw / Math.max(1e-9, bossUtilityLevelFactor(boss, level));
+}
+
+function weightedBreakpointJump(candidate, bosses, targetLevel, levelUtility, discount = 0.72, cache = null) {
   const future = (bosses || []).filter(Boolean);
-  if (!future.length) return 0;
+  if (!future.length || targetLevel <= 1) return 0;
   let weighted = 0;
   let totalWeight = 0;
   for (let i = 0; i < future.length; i += 1) {
     const weight = Math.max(0.01, Number(discount) ** i);
-    weighted += weight * cachedLevelUtility(candidate, future[i], level, levelUtility, cache);
+    const previousCore = normalizedCachedLevelUtility(
+      candidate,
+      future[i],
+      targetLevel - 1,
+      levelUtility,
+      cache,
+    );
+    const targetCore = normalizedCachedLevelUtility(
+      candidate,
+      future[i],
+      targetLevel,
+      levelUtility,
+      cache,
+    );
+    weighted += weight * Math.max(0, targetCore - previousCore);
     totalWeight += weight;
   }
   return totalWeight > 0 ? weighted / totalWeight : 0;
@@ -578,45 +604,113 @@ export function allocateBreakpointAwareExp(
   amount,
   futureBosses,
   levelUtility,
-  { bossHorizon = 4, levelLookahead = 12, discount = 0.72, utilityCache = null } = {},
+  {
+    bossHorizon = 4,
+    levelLookahead = 12,
+    discount = 0.72,
+    utilityCache = null,
+    breakpointWeight = 1,
+  } = {},
 ) {
   let remaining = Math.max(0, Math.floor(Number(amount || 0)));
   let allocated = 0;
-  const horizon = (futureBosses || []).filter(Boolean).slice(0, Math.max(1, Number(bossHorizon) || 4));
+  const horizon = (futureBosses || [])
+    .filter(Boolean)
+    .slice(0, Math.max(1, Number(bossHorizon) || 4));
+  const immediateBoss = horizon[0] || null;
   const eligible = states.filter(state => !state.unknown && state.level < 100);
-  if (!horizon.length) return allocateBalancedExp(states, remaining);
+  if (!immediateBoss) return allocateBalancedExp(states, remaining);
 
   while (remaining > 0 && eligible.length) {
     let best = null;
     for (const state of eligible) {
-      const maxTargetLevel = Math.min(100, state.level + Math.max(1, Number(levelLookahead) || 12));
-      const currentUtility = weightedFutureUtility(state.candidate, horizon, state.level, levelUtility, discount, utilityCache);
+      const nextLevel = state.level + 1;
+      const nextThreshold = expAtLevel(state.growthRate, nextLevel);
+      if (nextThreshold === null) continue;
+      const nextNeed = Math.max(1, nextThreshold - state.exp);
+      const currentUtility = cachedLevelUtility(
+        state.candidate,
+        immediateBoss,
+        state.level,
+        levelUtility,
+        utilityCache,
+      );
+      const nextUtility = cachedLevelUtility(
+        state.candidate,
+        immediateBoss,
+        nextLevel,
+        levelUtility,
+        utilityCache,
+      );
+      const immediateGain = Math.max(0, nextUtility - currentUtility);
+      // Preserve the existing boss-aware policy as the baseline.
+      const immediatePriority = (
+        0.25 * Math.max(0, nextUtility) +
+        2 * immediateGain +
+        0.01
+      ) / nextNeed;
 
-      for (let targetLevel = state.level + 1; targetLevel <= maxTargetLevel; targetLevel += 1) {
+      let stateBest = {
+        state,
+        need: nextNeed,
+        priority: immediatePriority,
+        targetLevel: nextLevel,
+        nextUtility,
+        breakpointJump: 0,
+      };
+
+      const maxTargetLevel = Math.min(
+        100,
+        state.level + Math.max(1, Number(levelLookahead) || 12),
+      );
+      for (let targetLevel = nextLevel; targetLevel <= maxTargetLevel; targetLevel += 1) {
+        const breakpointJump = weightedBreakpointJump(
+          state.candidate,
+          horizon,
+          targetLevel,
+          levelUtility,
+          discount,
+          utilityCache,
+        );
+        // After removing the smooth level factor, positive jumps represent
+        // actual move/evolution matchup changes rather than ordinary stat growth.
+        if (breakpointJump <= 1e-9) continue;
+
         const targetExp = expAtLevel(state.growthRate, targetLevel);
         if (targetExp === null) continue;
         const need = Math.max(1, targetExp - state.exp);
-        const targetUtility = weightedFutureUtility(state.candidate, horizon, targetLevel, levelUtility, discount, utilityCache);
-        const previousUtility = weightedFutureUtility(state.candidate, horizon, targetLevel - 1, levelUtility, discount, utilityCache);
-        const routeGain = Math.max(0, targetUtility - currentUtility);
-        const breakpointJump = Math.max(0, targetUtility - previousUtility);
-        const priority = (
-          routeGain +
-          2.5 * breakpointJump +
-          0.03 * Math.max(0, targetUtility) +
-          0.01
-        ) / need;
+        const priority =
+          immediatePriority +
+          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump / need;
 
         if (
-          !best ||
-          priority > best.priority ||
-          (priority === best.priority && breakpointJump > best.breakpointJump) ||
-          (priority === best.priority && breakpointJump === best.breakpointJump && targetUtility > best.targetUtility) ||
-          (priority === best.priority && breakpointJump === best.breakpointJump && targetUtility === best.targetUtility && need < best.need) ||
-          (priority === best.priority && breakpointJump === best.breakpointJump && targetUtility === best.targetUtility && need === best.need && state.key.localeCompare(best.state.key) < 0)
+          priority > stateBest.priority ||
+          (priority === stateBest.priority && breakpointJump > stateBest.breakpointJump) ||
+          (priority === stateBest.priority && breakpointJump === stateBest.breakpointJump &&
+            targetLevel < stateBest.targetLevel)
         ) {
-          best = { state, need, priority, targetLevel, targetUtility, breakpointJump };
+          stateBest = {
+            state,
+            need,
+            priority,
+            targetLevel,
+            nextUtility,
+            breakpointJump,
+          };
         }
+      }
+
+      if (
+        !best ||
+        stateBest.priority > best.priority ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump > best.breakpointJump) ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump === best.breakpointJump &&
+          stateBest.nextUtility > best.nextUtility) ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump === best.breakpointJump &&
+          stateBest.nextUtility === best.nextUtility &&
+          state.key.localeCompare(best.state.key) < 0)
+      ) {
+        best = stateBest;
       }
     }
     if (!best) break;
@@ -1009,7 +1103,7 @@ export function buildTeamExpSchedule({
     sameStageJoinPolicy,
     allocator,
     allocatorDescription: allocator === 'breakpoint-aware'
-      ? `future breakpoint utility across ${breakpointBossHorizon} bosses and ${breakpointLevelLookahead} levels`
+      ? `boss-aware baseline plus actual move/evolution breakpoint bonus across ${breakpointBossHorizon} bosses and ${breakpointLevelLookahead} levels`
       : allocator === 'boss-aware'
         ? 'boss-aware matchup utility per EXP-to-next-level'
         : allocator === 'boss-aware-soft'
