@@ -36,7 +36,8 @@ Currently deferred:
 - scored HGSS trainers now carry their original `ai_flags` and trainer-bag item metadata into battle diagnostics;
 - NPC post-KO replacement follows the Gen 4 two-stage trainer-AI structure: prefer an offensively favorable bench member with a super-effective move, then fall back to immediate damage potential;
 - NPC voluntary switching now uses only source-mappable Gen 4 branches (Perish Song escape, inability to damage, Wonder Guard, Natural Cure sleep, super-effective/boosted stay-in guards and probabilistic tactical switching) instead of the player's generic matchup-switch heuristic;
-- move choice is still the local damage/status heuristic for now; exact `BASIC / EVAL_ATTACK / EXPERT / ...` move-score script porting and trainer bag-item execution are the next fidelity steps.
+- NPC move choice now uses the trainer's original `ai_flags` with a source-guided Gen 4 discrete scoring layer covering the major `BASIC`, `EVAL_ATTACK`, `EXPERT`, setup, risky/extreme, weather and harassment behaviors; it is not yet a bit-perfect interpreter of every HGSS AI-script branch;
+- trainer healing items (Potion/Super/Hyper/Max Potion and Full Restore) follow the Gen 4 item-use conditions, are consumed from the original trainer item list, and spend the trainer's turn through a Showdown bridge; Full Restore also clears major status and confusion.
 
 Battle levels now have four explicit modes. The legacy `ace` profile keeps the old free ace-level normalization only for regression. `major`, `normal-route`, and `all-accessible` derive each party member's actual level from source-backed EXP supply, acquisition timing, and its Gen 4 growth curve.
 
@@ -319,10 +320,11 @@ Rocket and rival battles share the appropriate Johto stage without shifting thes
 
 ## Current approximations
 
-This is not yet a bit-perfect HGSS story emulator. The trainer-AI plumbing now preserves source `ai_flags`, original trainer item lists, and source-aligned switching decisions, but move-score scripts and active trainer item use are not yet fully ported.
+This is not yet a bit-perfect HGSS story emulator. Trainer AI now preserves source `ai_flags`, trainer item lists, source-aligned switching, a source-guided Gen 4 move scorer, and turn-consuming healing-item use. The remaining gap is exact branch-for-branch parity with the HGSS assembly and full coverage of less common AI effects.
 
-- trainer bag-item use is not modeled;
-- battle policy is heuristic rather than a globally optimal controller or exact HGSS AI;
+- NPC move scoring covers the major Gen 4 AI flag families but is still a semantic port rather than a complete byte-for-byte HGSS AI-script interpreter;
+- trainer healing items are modeled, but uncommon trainer battle-item categories and exact doubles/tag AI remain incomplete;
+- the player battle policy remains a heuristic controller rather than a globally optimal human-policy model;
 - reachability stages and boss-window/map ordering are curated checkpoints, not a complete event-graph proof;
 - friendship, stone, trade, move-known and location evolutions are still partly manual/conservative;
 - overworld TM coverage is incomplete;
@@ -347,6 +349,7 @@ GitHub Actions currently checks:
 - starter-specific 30-battle route selection through Red
 - real battle completion
 - bounded player switching
+- source-backed trainer `ai_flags`, NPC move scoring, switching and healing-item use
 - tutor/HM timing
 - one-use TM ownership
 - repeatable TM cost accounting
@@ -366,9 +369,9 @@ The current comparison also penalizes recharge, charge-turn, recoil, crash and s
 
 1. Verify and add remaining mandatory Rocket/event encounters.
 2. Expand overworld TM and other pre-Lance move-source coverage.
-3. Improve trainer item-use / AI fidelity.
-4. Broaden optimizer search and benchmark convergence.
-5. Validate the new Kanto-through-Red extension, then revisit dead-slot and breakpoint-aware EXP behavior.
+3. Audit remaining HGSS trainer-AI assembly branches against the Platinum semantic reference, especially doubles/tag and uncommon effects.
+4. Re-establish optimizer baselines under the new trainer AI, then implement route-aware/breakpoint-aware EXP allocation.
+5. After allocator validation, test variable team size and reduce capture burden to a secondary/tie-breaker cost.
 
 
 The final optimizer comparison after this monotonic-resource fix is triggered from the same commit for both `all` and `core`, so the outputs are directly comparable.
