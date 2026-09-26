@@ -190,6 +190,8 @@ A team that only performs well at one envelope endpoint should not be treated as
 4. retain a beam of strong teams;
 5. rescore surviving full teams across multiple deterministic RNG seeds.
 
+Team membership is treated as an unordered set by the beam/cache. Before each modeled boss, the simulator therefore chooses a deterministic lead/order from next-boss matchup utility rather than inheriting whichever candidate happened to be appended first during beam construction. A CI smoke test checks that reversing the same input team does not change the battle evaluation.
+
 Search ranking supports two objectives:
 
 - `--objective=mean` (default): maximize mean win rate, with lower-tail metrics as tie-breakers.
