@@ -109,6 +109,7 @@ The optimizer reports:
 - mean battle win rate
 - `worstBossWinRate`
 - `bottom5BossWinRate`, the mean of the five weakest scored bosses
+- `storyClearGeometricScore`, a Beta(1,1)-smoothed geometric mean across all scored bosses so one finite 0/N sample does not collapse the whole route score to zero
 - `storyClearCoverageScore`, which rewards getting every scored boss toward at least a 50% simulated win rate instead of only maximizing easy-battle wins
 - effective EXP burden (`totalGrindExp` in the new EXP profiles; legacy `catchUpExp` only in `ace`)
 - expected grind battles
@@ -117,7 +118,7 @@ The optimizer reports:
 
 Pareto and beam-search dominance use the effective EXP burden, so legacy `catchUpExp` is no longer double-counted in natural-EXP searches.
 
-Search ranking defaults to mean win rate. `--objective=story-clear` instead ranks first by 50%-threshold boss coverage, then by the bottom-five boss mean, worst-boss rate, and finally overall mean. This keeps a team that can meaningfully contest more mandatory fights ahead of a team that only farms already-easy battles.
+Search ranking defaults to mean win rate. `--objective=story-clear` instead ranks first by the smoothed geometric boss score, then by 50%-threshold boss coverage, the bottom-five boss mean, worst-boss rate, and finally overall mean. The geometric term uses the posterior mean `(wins + 1) / (runs + 2)` for each scored boss before taking the route-wide geometric mean. This favors teams that remain credible across the whole mandatory route without letting a single finite-sample 0/N result permanently zero the objective.
 
 Capture-search cost is a separate Pareto axis. Standard wild encounters use source slot probabilities, fixed/gift encounters have zero search cost, and Headbutt remains an explicitly labeled lower bound conditional on selecting the correct tree group.
 
