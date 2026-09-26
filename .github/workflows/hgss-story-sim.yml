@@ -74,7 +74,7 @@ jobs:
         run: npm run smoke
       - name: Player matchup switching smoke test
         run: npm run switch-smoke
-      - name: HGSS trainer AI metadata and switching smoke test
+      - name: HGSS trainer AI metadata, move, switch, and item smoke test
         run: npm run trainer-ai-smoke
       - name: Reusable tutor timing smoke test
         run: npm run tutor-smoke
@@ -389,6 +389,31 @@ jobs:
           path: hgss_story_sim/results/story-validation-${{ matrix.version }}-${{ matrix.starter }}.json
           if-no-files-found: error
 
+
+
+  trainer_ai_pilot:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[trainer-ai-pilot]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil through Red with source-backed trainer AI
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --runs=1 --screen-runs=1 --final-runs=10 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/trainer-ai-pilot-hg-cyndaquil.json
+      - name: Upload trainer AI pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-trainer-ai-pilot-hg-cyndaquil
+          path: hgss_story_sim/results/trainer-ai-pilot-hg-cyndaquil.json
+          if-no-files-found: error
 
   red_route_matrix:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[red-route]')
