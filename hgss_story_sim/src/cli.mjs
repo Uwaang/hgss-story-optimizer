@@ -545,7 +545,7 @@ function orderCandidatesForBoss(candidates, boss, levelsByCandidate = null) {
   });
 }
 
-async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none') {
+async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
   const routeStarter = storyStarterFromCandidates(candidates);
@@ -633,7 +633,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       enemyTeam,
       runs,
       1000 + boss.stage * 100000 + battleIndex * 1000,
-      { p2Trainer: boss },
+      { p2Trainer: boss, ...battleOptions },
     );
     weightedWins += result.wins;
     weightedRuns += result.runs;
@@ -746,12 +746,21 @@ async function evaluateCandidates(
   expContext = null,
   grindPolicy = 'none',
   objective = 'mean',
+  battleOptions = {},
 ) {
   const requestedResourceProfile = normalizeResourceProfile(moveAccess?.resourceProfile || 'all');
   let best = null;
 
   for (const variant of resourceMoveAccessVariants(moveAccess)) {
-    const evaluation = await evaluateCandidatesWithMoveAccess(candidates, bosses, runs, variant, expContext, grindPolicy);
+    const evaluation = await evaluateCandidatesWithMoveAccess(
+      candidates,
+      bosses,
+      runs,
+      variant,
+      expContext,
+      grindPolicy,
+      battleOptions,
+    );
     const enriched = {
       ...evaluation,
       requestedResourceProfile,
@@ -2638,6 +2647,100 @@ async function cmdSwitchSmoke() {
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function cmdTrainerAiCompare() {
+  const runs = Number(arg('runs', '20'));
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const [moveAccess, expContext] = await Promise.all([
+    loadMoveAccess('money', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'boss-aware',
+    ),
+  ]);
+
+  const teams = {
+    oldRedTop: ['Cyndaquil', 'Lapras', 'Abra', 'Pidgey', 'Caterpie', 'Chinchou'],
+    newAiTop: ['Cyndaquil', 'Chinchou', 'Abra', 'Magikarp', 'Pidgey', 'Qwilfish'],
+  };
+  const modes = {
+    greedy: { p2AiMode: 'greedy' },
+    hgssNoItems: { p2AiMode: 'hgss', p2TrainerItems: false },
+    hgssItems: { p2AiMode: 'hgss', p2TrainerItems: true },
+  };
+
+  const results = {};
+  for (const [teamLabel, names] of Object.entries(teams)) {
+    const candidates = selectByNames(pool.candidates, names);
+    results[teamLabel] = {
+      team: names,
+      conditions: {},
+    };
+    for (const [modeLabel, battleOptions] of Object.entries(modes)) {
+      const evaluation = await evaluateCandidatesWithMoveAccess(
+        candidates,
+        story.bosses,
+        runs,
+        moveAccess,
+        expContext,
+        'none',
+        battleOptions,
+      );
+      results[teamLabel].conditions[modeLabel] = {
+        score: evaluation.score,
+        worstBossWinRate: evaluation.worstBossWinRate,
+        bottom5BossWinRate: evaluation.bottom5BossWinRate,
+        storyClearGeometricScore: evaluation.storyClearGeometricScore,
+        storyClearCoverageScore: evaluation.storyClearCoverageScore,
+        finalTeam: evaluation.finalTeam,
+        finalLevels: evaluation.finalLevels,
+        purchaseCosts: evaluation.purchaseCosts,
+        resourceBudget: evaluation.resourceBudget,
+        bosses: evaluation.rows.map(row => ({
+          boss: row.boss,
+          wins: row.wins,
+          losses: row.losses,
+          ties: row.ties,
+          winRate: row.winRate,
+          averageTurns: row.averageTurns,
+          averageP1VoluntarySwitches: row.averageP1VoluntarySwitches,
+          averageP2VoluntarySwitches: row.averageP2VoluntarySwitches,
+          averageP2ForcedSwitches: row.averageP2ForcedSwitches,
+          averageP2MoveDecisions: row.averageP2MoveDecisions,
+          averageP2TrainerItemUses: row.averageP2TrainerItemUses,
+          p2AiMode: row.p2AiMode,
+        })),
+      };
+    }
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'controlled trainer AI A/B with fixed teams, seeds, route, EXP, moves, and player policy',
+    version: 'HEARTGOLD',
+    runsPerBoss: runs,
+    resourceProfile: 'money',
+    spendPolicy: 'natural',
+    expProfile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    expAllocator: 'boss-aware',
+    playerPolicy: 'unchanged greedy-moves+bounded matchup switching',
+    conditions: {
+      greedy: 'legacy greedy NPC move policy; no HGSS switching or trainer items',
+      hgssNoItems: 'source-guided HGSS NPC move/switch AI; trainer items disabled',
+      hgssItems: 'source-guided HGSS NPC move/switch AI; trainer items enabled',
+    },
+    results,
+  }, null, 2));
+}
+
 async function cmdTrainerAiSmoke() {
   const story = await loadStory();
   const falkner = story.bosses.find(boss => boss.label === 'Falkner');
@@ -2975,6 +3078,7 @@ const commands = {
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
+  'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
   'tm-smoke': cmdTmSmoke,

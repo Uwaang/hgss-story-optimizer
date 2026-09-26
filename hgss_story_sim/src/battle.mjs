@@ -956,8 +956,8 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     moveDecisions: 0,
     lastVoluntarySwitchTurn: -999,
     aiRngState: (Number(seed) ^ 0x2468ace0) >>> 0,
-    trainerItems: [...(p2Profile?.items || [])],
-    trainerItemCount: Number(p2Profile?.items?.length || 0),
+    trainerItems: options.p2TrainerItems === false ? [] : [...(p2Profile?.items || [])],
+    trainerItemCount: options.p2TrainerItems === false ? 0 : Number(p2Profile?.items?.length || 0),
     trainerItemsUsed: [],
   };
   const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: 'greedy' }).catch(() => undefined);

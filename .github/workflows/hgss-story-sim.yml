@@ -391,6 +391,30 @@ jobs:
 
 
 
+  trainer_ai_ab:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[trainer-ai-ab]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Run controlled trainer AI A/B
+        run: |
+          mkdir -p results
+          node src/cli.mjs trainer-ai-compare --runs=20 > results/trainer-ai-ab-hg-cyndaquil.json
+      - name: Upload trainer AI A/B
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-trainer-ai-ab-hg-cyndaquil
+          path: hgss_story_sim/results/trainer-ai-ab-hg-cyndaquil.json
+          if-no-files-found: error
+
   trainer_ai_pilot:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[trainer-ai-pilot]')
     runs-on: ubuntu-latest
