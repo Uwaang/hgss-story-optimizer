@@ -1,6 +1,7 @@
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
+import { chooseHgssPostKoSwitch, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
 
 const dex = Dex.mod('gen4');
 const NEUTRAL_NATURE = 'Serious';
@@ -671,6 +672,15 @@ function seedArray(seed) {
   return out;
 }
 
+function aiRandomChance(stats, numerator, denominator) {
+  const den = Math.max(1, Math.floor(Number(denominator || 1)));
+  const num = Math.max(0, Math.min(den, Math.floor(Number(numerator || 0))));
+  let state = Number(stats?.aiRngState || 1) >>> 0;
+  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+  if (stats) stats.aiRngState = state;
+  return (state % den) < num;
+}
+
 function scoreMove(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove.move);
   if (!move.exists || requestedMove.disabled) return -Infinity;
@@ -752,7 +762,7 @@ function bestVoluntarySwitch(request, side, foeActive, active, activeRequest) {
   return null;
 }
 
-function selectChoice(request, battleStream, sideId, stats = null) {
+function selectChoice(request, battleStream, sideId, stats = null, aiOptions = null) {
   if (request.wait) return null;
   if (request.teamPreview) return 'default';
   const battle = battleStream.battle;
@@ -760,8 +770,17 @@ function selectChoice(request, battleStream, sideId, stats = null) {
   const foeIndex = sideIndex === 0 ? 1 : 0;
   const side = battle?.sides?.[sideIndex];
   const foe = battle?.sides?.[foeIndex];
+  const useHgssNpcAi = sideId === 'p2' && aiOptions?.mode === 'hgss';
 
   if (request.forceSwitch) {
+    if (useHgssNpcAi && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
+      const foeActive = foe?.active?.find(Boolean);
+      const slot = chooseHgssPostKoSwitch(request, side, foeActive);
+      if (slot !== null && slot !== undefined) {
+        if (stats) stats.forcedSwitches = Number(stats.forcedSwitches || 0) + 1;
+        return `switch ${slot + 1}`;
+      }
+    }
     const pokemon = request.side.pokemon;
     const choices = [];
     const chosen = new Set();
@@ -795,6 +814,16 @@ function selectChoice(request, battleStream, sideId, stats = null) {
           const switchChoice = bestVoluntarySwitch(request, side, foeActive, active, activeRequest);
           if (switchChoice) return switchChoice;
         }
+      } else if (useHgssNpcAi && request.active.length === 1) {
+        const slot = chooseHgssVoluntarySwitch(
+          request,
+          side,
+          foeActive,
+          active,
+          activeRequest,
+          (num, den) => aiRandomChance(stats, num, den),
+        );
+        if (slot !== null && slot !== undefined) return `switch ${slot + 1}`;
       }
       const legal = activeRequest.moves
         .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
@@ -808,12 +837,12 @@ function selectChoice(request, battleStream, sideId, stats = null) {
   return 'default';
 }
 
-async function runGreedyAi(playerStream, battleStream, sideId, stats) {
+async function runGreedyAi(playerStream, battleStream, sideId, stats, aiOptions = null) {
   for await (const chunk of playerStream) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|request|')) continue;
       const request = JSON.parse(line.slice('|request|'.length));
-      const choice = selectChoice(request, battleStream, sideId, stats);
+      const choice = selectChoice(request, battleStream, sideId, stats, aiOptions);
       if (choice) {
         if (choice.startsWith('switch ') && !request.forceSwitch) {
           stats.voluntarySwitches += 1;
@@ -825,13 +854,31 @@ async function runGreedyAi(playerStream, battleStream, sideId, stats) {
   }
 }
 
-export async function runBattle(p1Team, p2Team, seed = 1) {
+export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const battleStream = new BattleStream();
   const streams = getPlayerStreams(battleStream);
-  const p1Stats = { voluntarySwitches: 0, lastVoluntarySwitchTurn: -999 };
-  const p2Stats = { voluntarySwitches: 0, lastVoluntarySwitchTurn: -999 };
-  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats).catch(() => undefined);
-  const p2Task = runGreedyAi(streams.p2, battleStream, 'p2', p2Stats).catch(() => undefined);
+  const p2Profile = options.p2Trainer ? trainerAiProfile(options.p2Trainer) : null;
+  const p2Mode = options.p2AiMode || (p2Profile ? 'hgss' : 'greedy');
+  const p1Stats = {
+    voluntarySwitches: 0,
+    forcedSwitches: 0,
+    lastVoluntarySwitchTurn: -999,
+    aiRngState: (Number(seed) ^ 0x13579bdf) >>> 0,
+  };
+  const p2Stats = {
+    voluntarySwitches: 0,
+    forcedSwitches: 0,
+    lastVoluntarySwitchTurn: -999,
+    aiRngState: (Number(seed) ^ 0x2468ace0) >>> 0,
+  };
+  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: 'greedy' }).catch(() => undefined);
+  const p2Task = runGreedyAi(
+    streams.p2,
+    battleStream,
+    'p2',
+    p2Stats,
+    { mode: p2Mode, profile: p2Profile },
+  ).catch(() => undefined);
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
@@ -857,19 +904,36 @@ export async function runBattle(p1Team, p2Team, seed = 1) {
     ...result,
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
+    p2ForcedSwitches: p2Stats.forcedSwitches,
+    p2AiMode: p2Mode,
+    p2AiFlags: p2Profile?.aiFlags || 0,
+    p2AiFlagNames: p2Profile?.flags || [],
+    p2TrainerItems: p2Profile?.items || [],
   };
 }
 
-export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1) {
+export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, options = {}) {
   let wins = 0;
   let losses = 0;
   let ties = 0;
   let totalTurns = 0;
   let totalP1VoluntarySwitches = 0;
+  let totalP2VoluntarySwitches = 0;
+  let totalP2ForcedSwitches = 0;
+  let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
+  let p2AiFlags = 0;
+  let p2AiFlagNames = [];
+  let p2TrainerItems = [];
   for (let i = 0; i < runs; i += 1) {
-    const result = await runBattle(p1Team, p2Team, seedBase + i);
+    const result = await runBattle(p1Team, p2Team, seedBase + i, options);
     totalTurns += result.turns || 0;
     totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
+    totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;
+    totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
+    p2AiMode = result.p2AiMode;
+    p2AiFlags = result.p2AiFlags;
+    p2AiFlagNames = result.p2AiFlagNames;
+    p2TrainerItems = result.p2TrainerItems;
     if (result.winner === 'Player') wins += 1;
     else if (result.winner === 'HGSS') losses += 1;
     else ties += 1;
@@ -882,5 +946,11 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1) {
     winRate: wins / runs,
     averageTurns: totalTurns / runs,
     averageP1VoluntarySwitches: totalP1VoluntarySwitches / runs,
+    averageP2VoluntarySwitches: totalP2VoluntarySwitches / runs,
+    averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
+    p2AiMode,
+    p2AiFlags,
+    p2AiFlagNames,
+    p2TrainerItems,
   };
 }
