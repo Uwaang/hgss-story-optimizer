@@ -341,7 +341,7 @@ jobs:
 
 
   member_ablation_matrix:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-ablation'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
