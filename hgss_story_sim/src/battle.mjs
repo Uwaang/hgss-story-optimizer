@@ -146,6 +146,7 @@ function moveStrategicMultiplier(move) {
   if (move.flags?.charge) multiplier *= 0.45;
   if (move.selfdestruct) multiplier *= 0.42;
   if (move.id === 'focuspunch') multiplier *= 0.18;
+  if (move.id === 'lastresort') multiplier *= 0.18;
 
   if (Array.isArray(move.recoil) && Number(move.recoil[1]) > 0) {
     const fraction = Number(move.recoil[0]) / Number(move.recoil[1]);
@@ -285,39 +286,54 @@ function redMovesetProxyScore(mon, moves, foeTeam) {
   const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
   if (!species.exists || !foes.length) return -Infinity;
 
-  const fractions = foes.map(foe => {
-    let best = 0;
+  const sleepSupport = moves.some(moveName =>
+    ['hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'yawn', 'spore'].includes(
+      dex.moves.get(moveName).id
+    )
+  );
+
+  const perFoe = foes.map(foe => {
+    const values = [];
     for (const moveName of moves) {
       const move = dex.moves.get(moveName);
       if (!move.exists || move.category === 'Status') continue;
+      if (move.id === 'dreameater' && !sleepSupport) continue;
       const damage = previewMoveDamage({ ...mon, moves }, foe, moveName);
       const hp = Math.max(1, previewStat(foe, 'hp'));
-      best = Math.max(best, damage / hp);
+      values.push(damage / hp);
     }
-    return best;
+    values.sort((a, b) => b - a);
+    return {
+      best: values[0] || 0,
+      second: values[1] || 0,
+    };
   });
-  const mean = fractions.reduce((sum, value) => sum + value, 0) / fractions.length;
-  const worst = Math.min(...fractions);
-  const best = Math.max(...fractions);
-  const strongCoverage = fractions.filter(value => value >= 0.45).length / fractions.length;
+  const bestFractions = perFoe.map(row => row.best);
+  const secondFractions = perFoe.map(row => row.second);
+  const mean = bestFractions.reduce((sum, value) => sum + value, 0) / bestFractions.length;
+  const worst = Math.min(...bestFractions);
+  const best = Math.max(...bestFractions);
+  const backupMean = secondFractions.reduce((sum, value) => sum + value, 0) / secondFractions.length;
+  const strongCoverage = bestFractions.filter(value => value >= 0.45).length / bestFractions.length;
 
   const statusValues = moves
     .map(moveName => redMoveStatusUtility(species, moveName))
     .filter(value => value > 0)
     .sort((a, b) => b - a);
-  const statusBonus = (statusValues[0] || 0) * 0.12 + (statusValues[1] || 0) * 0.04;
+  const statusBonus = (statusValues[0] || 0) * 0.07 + (statusValues[1] || 0) * 0.015;
 
   const damaging = moves
     .map(moveName => dex.moves.get(moveName))
     .filter(move => move.exists && move.category !== 'Status');
   const distinctTypes = new Set(damaging.map(move => move.type)).size;
-  const typeDiversity = Math.max(0, distinctTypes - 1) * 0.025;
+  const typeDiversity = Math.max(0, distinctTypes - 1) * 0.02;
 
   return (
-    0.5 * mean +
-    0.16 * worst +
-    0.22 * best +
-    0.12 * strongCoverage +
+    0.39 * mean +
+    0.13 * worst +
+    0.18 * best +
+    0.16 * backupMean +
+    0.1 * strongCoverage +
     statusBonus +
     typeDiversity
   );
@@ -486,13 +502,14 @@ export function optimizePlayerMovesAndBuildForBoss(
       { iv },
     );
     const buildScore = playerBuildScore(built, foeTeam);
+    const builtMovesetScore = redMovesetProxyScore(built, candidate.moves, foeTeam);
     const species = dex.species.get(mon.species);
     const statusBonus = candidate.moves
       .map(moveName => redMoveStatusUtility(species, moveName))
       .sort((a, b) => b - a)
       .slice(0, 2)
-      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.035 : 0.01), 0);
-    const score = buildScore + statusBonus + candidate.proxyScore * 0.08;
+      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.025 : 0.005), 0);
+    const score = 0.62 * buildScore + 0.32 * builtMovesetScore + statusBonus + candidate.proxyScore * 0.04;
     if (
       !best ||
       score > best.score + 1e-12 ||
@@ -1422,6 +1439,7 @@ function smartStatusMoveScore(active, target, requestedMove, battle) {
 function smartMoveScore(active, target, requestedMove, battle) {
   const move = dex.moves.get(requestedMove?.move);
   if (!move.exists || requestedMove?.disabled) return -Infinity;
+  if (move.id === 'dreameater' && target?.status !== 'slp') return -1000;
   if (move.category === 'Status') {
     return smartStatusMoveScore(active, target, requestedMove, battle);
   }
