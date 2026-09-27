@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateBossUtilityWithMoveAccess, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
+import { candidateBossUtility, candidateBossUtilityWithMoveAccess, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, optimizePlayerMovesAndBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, buildRedOnlyCandidateForms, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -6030,17 +6030,18 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     ...(moveAccess.purchasableMachines || []),
   ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
-  playerTeam = playerTeam.map(mon => ({
-    ...mon,
-    moves: selectCandidateMoves(
-      mon.species,
-      commonLevel,
-      red.stage,
+  playerTeam = playerTeam.map(mon => optimizePlayerMovesAndBuildForBoss(
+    mon,
+    enemyTeam,
+    {
+      iv: 16,
+      stage: red.stage,
       moveAccess,
       extraMachines,
-    ),
-  }));
-  playerTeam = playerTeam.map(mon => redOptimizedPlayerBuild(mon, enemyTeam));
+      shortlistCap: 12,
+      movesetFinalists: 8,
+    },
+  ));
 
   const battle = await simulateMatchup(
     playerTeam,
@@ -6087,6 +6088,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
       ivs: mon.ivs || null,
       evs: mon.evs || null,
       buildOptimization: mon._buildOptimization || null,
+      movesetOptimization: mon._movesetOptimization || null,
     })),
   };
 }
@@ -6547,9 +6549,9 @@ async function cmdRedMinGrindSearch() {
       captureLevel: 'highest source-backed legal capture level at or below the requested common level, using all sources available by Red',
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six battle members have exactly the same level',
-      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently for each member; route ownership and money are ignored',
+      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently; Red-specific movesets are optimized from the legal pool; route ownership and money are ignored',
       heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
-      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/item build optimization versus source-guided Red trainer AI',
+      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/item + Red-specific moveset optimization versus source-guided Red trainer AI',
     },
     search: {
       levelMin,
@@ -6881,7 +6883,7 @@ async function cmdRedMinGrindGaSearch() {
       commonLevel: 'all six members exactly equal level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
       heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
-      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, and held-item search versus source-guided Red AI',
+      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, held-item search, and Red-specific moveset optimization versus source-guided Red AI',
     },
     search: {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
