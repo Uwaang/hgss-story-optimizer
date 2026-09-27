@@ -6130,12 +6130,14 @@ function redDeterministicRng(seed) {
   };
 }
 
-function redGaInitialStates(starterRows, candidateRows, commonLevel, populationSize, rng) {
+function redGaInitialStates(starterRows, candidateRows, commonLevel, populationSize, rng, seedStates = []) {
   const selected = new Map();
   function addState(state) {
     if (!state || state.members?.length !== 6) return;
     selected.set(redTeamKey(state.members, commonLevel), state);
   }
+
+  for (const state of seedStates || []) addState(state);
 
   const beamSeeds = redBeamTeams(
     starterRows,
@@ -6172,6 +6174,38 @@ function redGaInitialStates(starterRows, candidateRows, commonLevel, populationS
   return [...selected.values()].slice(0, populationSize);
 }
 
+function redGaCrossoverState(parentA, parentB, candidateRows, commonLevel, rng) {
+  const starter = parentA?.members?.[0] || parentB?.members?.[0];
+  if (!starter) return parentA || parentB;
+  const members = [starter];
+  const families = new Set([starter.familyId]);
+  const pool = [
+    ...(parentA?.members || []).slice(1),
+    ...(parentB?.members || []).slice(1),
+  ];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  for (const row of pool) {
+    if (members.length >= 6) break;
+    if (!row || families.has(row.familyId)) continue;
+    members.push(row);
+    families.add(row.familyId);
+  }
+  let guard = 0;
+  while (members.length < 6 && guard < candidateRows.length * 4) {
+    guard += 1;
+    const row = candidateRows[Math.floor(rng() * candidateRows.length)];
+    if (!row || families.has(row.familyId)) continue;
+    members.push(row);
+    families.add(row.familyId);
+  }
+  return members.length === 6
+    ? redStateFromMembers(members, commonLevel)
+    : (parentA || parentB);
+}
+
 function redGaMutateState(parent, candidateRows, commonLevel, rng) {
   const members = [...parent.members];
   if (members.length !== 6) return parent;
@@ -6201,6 +6235,7 @@ async function redGaSearchLevel({
   generations = 4,
   searchRuns = 1,
   seed = 1,
+  seedStates = [],
 }) {
   const rng = redDeterministicRng(seed);
   let population = redGaInitialStates(
@@ -6209,22 +6244,26 @@ async function redGaSearchLevel({
     commonLevel,
     populationSize,
     rng,
+    seedStates,
   );
   const cache = new Map();
 
   async function evaluate(state) {
     const key = redTeamKey(state.members, commonLevel);
     if (!cache.has(key)) {
-      cache.set(key, await redEvaluateTeam(
+      cache.set(key, {
         state,
-        red,
-        enemyTeam,
-        moveAccess,
-        searchRuns,
-        910000 + Number(commonLevel) * 100,
-      ));
+        evaluation: await redEvaluateTeam(
+          state,
+          red,
+          enemyTeam,
+          moveAccess,
+          searchRuns,
+          910000 + Number(commonLevel) * 100,
+        ),
+      });
     }
-    return cache.get(key);
+    return cache.get(key).evaluation;
   }
 
   let ranked = [];
@@ -6245,21 +6284,26 @@ async function redGaSearchLevel({
     }
 
     let attempts = 0;
-    while (next.size < populationSize && attempts < populationSize * 50) {
+    while (next.size < populationSize && attempts < populationSize * 60) {
       attempts += 1;
-      const parent = elites[Math.floor(rng() * elites.length)]?.state;
-      if (!parent) break;
-      const child = redGaMutateState(parent, candidateRows, commonLevel, rng);
+      const parentA = elites[Math.floor(rng() * elites.length)]?.state;
+      if (!parentA) break;
+      let child;
+      if (elites.length > 1 && rng() < 0.35) {
+        const parentB = elites[Math.floor(rng() * elites.length)]?.state;
+        child = redGaCrossoverState(parentA, parentB, candidateRows, commonLevel, rng);
+        if (rng() < 0.7) {
+          child = redGaMutateState(child, candidateRows, commonLevel, rng);
+        }
+      } else {
+        child = redGaMutateState(parentA, candidateRows, commonLevel, rng);
+      }
       next.set(redTeamKey(child.members, commonLevel), child);
     }
     population = [...next.values()].slice(0, populationSize);
   }
 
-  const allEvaluated = [];
-  for (const [key, evaluation] of cache.entries()) {
-    const state = ranked.find(row => redTeamKey(row.state.members, commonLevel) === key)?.state;
-    if (state) allEvaluated.push({ state, evaluation });
-  }
+  const allEvaluated = [...cache.values()];
   if (!allEvaluated.length) allEvaluated.push(...ranked);
   allEvaluated.sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
   return {
@@ -6281,6 +6325,10 @@ async function cmdRedMinGrindSearch() {
   const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '24'))));
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '50'))));
   const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+  const refinePopulation = Math.max(populationSize, Math.floor(Number(arg('refine-population', '28'))));
+  const refineGenerations = Math.max(generations, Math.floor(Number(arg('refine-generations', '6'))));
+  const refineRuns = Math.max(searchRuns, Math.floor(Number(arg('refine-runs', '2'))));
+  const refineLevelCap = Math.max(1, Math.floor(Number(arg('refine-level-cap', '5'))));
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
@@ -6652,6 +6700,64 @@ async function cmdRedMinGrindGaSearch() {
     for (let level = from; level <= to; level += 1) await runLevel(level);
   }
 
+  // Deepen only the lowest levels that already show a credible route through
+  // most of Red's team. This spends the expensive battle budget where it can
+  // actually lower the EXP optimum instead of repeatedly polishing Lv90+ teams.
+  let promisingLevels = [...levelResults.values()]
+    .filter(row => row?.best?.evaluation)
+    .filter(row => {
+      const e = row.best.evaluation;
+      return Number(e.wins || 0) > 0 ||
+        Number(e.maxRedFaints || 0) >= 5 ||
+        Number(e.averageRedFaints || 0) >= 4;
+    })
+    .sort((a, b) =>
+      Number(a.commonLevel) - Number(b.commonLevel) ||
+      Number(a.best.evaluation.totalGrindExp) - Number(b.best.evaluation.totalGrindExp)
+    );
+  if (!promisingLevels.length) {
+    promisingLevels = [...levelResults.values()]
+      .filter(row => row?.best?.evaluation)
+      .sort((a, b) =>
+        Number(b.best.evaluation.averageRedFaints || 0) - Number(a.best.evaluation.averageRedFaints || 0) ||
+        Number(a.commonLevel) - Number(b.commonLevel)
+      );
+  }
+  promisingLevels = promisingLevels.slice(0, refineLevelCap);
+  const refinedLevels = [];
+
+  for (const prior of promisingLevels) {
+    const commonLevel = Number(prior.commonLevel);
+    const input = levelInput(commonLevel);
+    if (!input.starterRows.length || input.candidates.length < 5) continue;
+    const refined = await redGaSearchLevel({
+      starterRows: input.starterRows,
+      candidateRows: input.candidates,
+      commonLevel,
+      red,
+      enemyTeam,
+      moveAccess,
+      populationSize: refinePopulation,
+      generations: refineGenerations,
+      searchRuns: refineRuns,
+      seed: 7300 + commonLevel * 29 + starterName.length * 131,
+      seedStates: (prior.top || []).map(row => row.state).filter(Boolean),
+    });
+    refinedLevels.push(commonLevel);
+    const combinedTop = [
+      ...(prior.top || []),
+      ...(refined.top || []),
+    ].sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+    const best = combinedTop[0] || refined.best || prior.best;
+    levelResults.set(commonLevel, {
+      ...prior,
+      refined: true,
+      evaluatedTeamCount: Number(prior.evaluatedTeamCount || 0) + Number(refined.evaluatedTeamCount || 0),
+      best,
+      top: combinedTop.slice(0, 8),
+    });
+  }
+
   const searchCandidates = [];
   for (const row of levelResults.values()) {
     for (const top of row?.top || []) {
@@ -6664,15 +6770,30 @@ async function cmdRedMinGrindGaSearch() {
     if (!row?.state || !row?.evaluation || finalistMap.size >= finalistCap) return;
     finalistMap.set(row.evaluation.key, row);
   }
-  for (const row of [...searchCandidates]
-    .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))
-    .slice(0, Math.max(6, Math.floor(finalistCap / 2)))) addFinalist(row);
+
+  // Reserve validation budget for the cheapest observed winners first.
   for (const row of [...searchCandidates]
     .filter(row => Number(row.evaluation.wins || 0) > 0)
     .sort((a, b) =>
       Number(a.evaluation.totalGrindExp) - Number(b.evaluation.totalGrindExp) ||
+      Number(a.evaluation.commonLevel) - Number(b.evaluation.commonLevel) ||
       redSearchEvaluationCompare(a.evaluation, b.evaluation)
     )
+    .slice(0, Math.max(4, Math.floor(finalistCap / 2)))) addFinalist(row);
+
+  // Then preserve one or more strong candidates from each adaptively refined
+  // low level, even if its short-run win sample happened to be noisy.
+  for (const level of refinedLevels) {
+    for (const row of [...searchCandidates]
+      .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))
+      .slice(0, 2)) {
+      addFinalist(row);
+    }
+  }
+
+  for (const row of [...searchCandidates]
+    .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))
     .slice(0, finalistCap)) addFinalist(row);
   for (const row of [...searchCandidates]
     .sort((a, b) =>
@@ -6734,6 +6855,11 @@ async function cmdRedMinGrindGaSearch() {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
       coarseLevels,
       evaluatedLevels: [...levelResults.keys()].sort((a, b) => a - b),
+      refinePopulation,
+      refineGenerations,
+      refineRuns,
+      refineLevelCap,
+      refinedLevels,
       finalistCap,
       finalRuns,
       targetWinRate,
