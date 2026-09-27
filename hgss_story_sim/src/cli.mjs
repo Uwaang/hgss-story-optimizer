@@ -335,6 +335,15 @@ function resolveExperimentBoss(story, {
 
 async function loadCanonicalPool(version, story = null) {
   const context = story || await loadStory();
+  const availabilityBoss = (
+    availabilityBossLabel === buildBossLabel &&
+    !availabilityTrainerKey &&
+    availabilityStage === null
+  ) ? buildBoss : resolveExperimentBoss(story, {
+    label: availabilityBossLabel,
+    trainerKey: availabilityTrainerKey,
+    stage: availabilityStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   return buildCanonicalCandidatePool({
     commit: context.config.sourceCommit,
@@ -7829,6 +7838,10 @@ async function cmdRedMinGrindValidate() {
   const buildTrainerKey = String(arg('build-trainer-key', '')).trim();
   const buildStageRaw = arg('build-stage', '');
   const buildStage = buildStageRaw === '' ? null : Number(buildStageRaw);
+  const availabilityBossLabel = String(arg('availability-boss', buildBossLabel));
+  const availabilityTrainerKey = String(arg('availability-trainer-key', '')).trim();
+  const availabilityStageRaw = arg('availability-stage', '');
+  const availabilityStage = availabilityStageRaw === '' ? null : Number(availabilityStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
@@ -7862,8 +7875,8 @@ async function cmdRedMinGrindValidate() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: buildBossLabel,
-      targetStage: buildBoss.stage,
+      targetBossLabel: availabilityBossLabel,
+      targetStage: availabilityBoss.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7937,6 +7950,8 @@ async function cmdRedMinGrindValidate() {
     buildBoss: buildBossLabel,
     buildTrainerKey: buildBoss.key,
     buildBossStage: Number(buildBoss.stage),
+    availabilityBoss: availabilityBossLabel,
+    availabilityBossStage: Number(availabilityBoss.stage),
     commonLevel,
     runs,
     buildSearch,
