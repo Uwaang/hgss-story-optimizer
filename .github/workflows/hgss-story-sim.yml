@@ -23,6 +23,7 @@ on:
         type: choice
         options:
           - default
+          - red-min-grind-pilot
           - allocator-story-matrix
           - allocator-saturation-matrix
           - allocator-depth-matrix
@@ -44,6 +45,30 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  red_min_grind_pilot:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-pilot') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Search HG Cyndaquil minimum-grind Red team
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=95 --candidate-cap=36 --beam-width=80 --screen-cap=80 --screen-runs=3 --finalist-cap=16 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-hg-cyndaquil.json
+      - name: Upload Red minimum-grind pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-min-grind-hg-cyndaquil
+          path: hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
+          if-no-files-found: error
+
   allocator_depth_matrix_6:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-depth-matrix'
     runs-on: ubuntu-latest
