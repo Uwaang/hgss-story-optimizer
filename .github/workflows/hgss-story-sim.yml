@@ -475,7 +475,9 @@ jobs:
       - name: Restore equal-level battle cache
         uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
             eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-
@@ -521,7 +523,9 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-${{ github.run_id }}
           restore-keys: |
             overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-
@@ -597,7 +601,9 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
           restore-keys: |
             overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
@@ -633,7 +639,9 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
             overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-
@@ -681,7 +689,9 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-${{ github.run_id }}
           restore-keys: |
             overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-
@@ -724,7 +734,9 @@ jobs:
           path: hgss_story_sim/input
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
           key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
             overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-
@@ -805,7 +817,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/level-only-lv${{ matrix.level }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -817,10 +831,12 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
-          key: evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-${{ github.run_id }}
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-
       - name: Level-only A/B baseline
         run: |
           mkdir -p results
@@ -841,7 +857,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/trade-lv${{ matrix.level }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -853,10 +871,12 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
-          key: evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-${{ github.run_id }}
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-
       - name: Trade-aware wide-progress sweep
         run: |
           mkdir -p results
@@ -919,7 +939,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/${{ matrix.experiment }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -931,10 +953,12 @@ jobs:
       - run: npm install
       - uses: actions/cache@v4
         with:
-          path: hgss_story_sim/.cache/battles
-          key: evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
       - name: Search architecture comparison
         run: |
           mkdir -p results
@@ -963,7 +987,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/seed-lv${{ matrix.level }}-${{ matrix.seed_offset }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -993,7 +1019,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/direct-${{ matrix.policy }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -1024,7 +1052,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/top-lv${{ matrix.level }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v1
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -1034,6 +1064,15 @@ jobs:
         with:
           node-version: '22'
       - run: npm install
+      - name: Restore validation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top-lv${{ matrix.level }}-
       - uses: actions/download-artifact@v4
         with:
           name: evo-ab-trade-lv${{ matrix.level }}
@@ -1072,6 +1111,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm install
+      - name: Restore top3 preparation cache
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top3-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top3-lv${{ matrix.level }}-
       - uses: actions/download-artifact@v4
         with:
           name: evo-ab-trade-lv${{ matrix.level }}
@@ -1090,6 +1136,43 @@ jobs:
         with:
           name: evo-ab-top3-validation-lv${{ matrix.level }}
           path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+
+  evo_ab_preparation_cache_probe:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache-probe.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache-probe.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Preparation cache A/B
+        run: |
+          mkdir -p results
+          t0=$(date +%s)
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=59 --candidate-cap=24 --beam-width=24             --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8             --hybrid-runs=2 --hybrid-pre-cap=96             --size4-mode=bridge --size4-multiplier=4 --size4-pre-cap=96             > results/prep-cache-a.json
+          t1=$(date +%s)
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=59 --candidate-cap=24 --beam-width=24             --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8             --hybrid-runs=2 --hybrid-pre-cap=96             --size4-mode=bridge --size4-multiplier=4 --size4-pre-cap=96             > results/prep-cache-b.json
+          t2=$(date +%s)
+          jq 'del(.battleCache,.preparationCache)' results/prep-cache-a.json > /tmp/prep-a.json
+          jq 'del(.battleCache,.preparationCache)' results/prep-cache-b.json > /tmp/prep-b.json
+          diff -u /tmp/prep-a.json /tmp/prep-b.json
+          jq -n             --argjson first "$((t1-t0))"             --argjson second "$((t2-t1))"             --argjson aHits "$(jq '.preparationCache.hits // 0' results/prep-cache-a.json)"             --argjson bHits "$(jq '.preparationCache.hits // 0' results/prep-cache-b.json)"             --argjson bRestored "$(jq '.preparationCache.restored // 0' results/prep-cache-b.json)"             '{firstSeconds:$first,secondSeconds:$second,firstPreparationHits:$aHits,secondPreparationHits:$bHits,secondRestored:$bRestored}'             > results/prep-cache-timing.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-preparation-cache-probe
+          path: hgss_story_sim/results/prep-cache-*.json
           if-no-files-found: error
 
   smoke:
@@ -1113,6 +1196,8 @@ jobs:
           node --check src/availability.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
+      - name: Trade evolution legality smoke test
+        run: node src/cli.mjs evolution-legality-smoke
       - name: Validate source-backed availability
         run: npm run validate
       - name: Growth EXP table smoke test
