@@ -663,6 +663,61 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
     });
 }
 
+function previewStat(mon, stat) {
+  const species = dex.species.get(mon.species);
+  if (!species.exists) return 1;
+  const level = Math.max(1, Number(mon.level || 1));
+  const iv = Math.max(0, Math.min(31, Number(mon.ivs?.[stat] ?? 20)));
+  const ev = Math.max(0, Number(mon.evs?.[stat] ?? 0));
+  const base = Number(species.baseStats?.[stat] || 1);
+  if (stat === 'hp') {
+    return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + level + 10;
+  }
+  return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+}
+
+function previewMoveDamage(mon, target, moveName) {
+  const move = dex.moves.get(moveName);
+  const attacker = dex.species.get(mon.species);
+  const defender = dex.species.get(target.species);
+  if (!move.exists || !attacker.exists || !defender.exists || move.category === 'Status') return 0;
+  if (!dex.getImmunity(move.type, defender)) return 0;
+  if (typeof move.damage === 'number') return Number(move.damage);
+
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = previewStat(mon, attackStat);
+  const defense = previewStat(target, defenseStat);
+  const level = Math.max(1, Number(mon.level || 1));
+  const power = Math.max(1, effectiveMovePower(move));
+  const stab = attacker.types.includes(move.type) ? 1.5 : 1;
+  const effectiveness = 2 ** dex.getEffectiveness(move, defender);
+  const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
+  return ((((2 * level / 5 + 2) * power * attack / Math.max(1, defense)) / 50) + 2) *
+    stab * effectiveness * accuracy * 0.925 * moveStrategicMultiplier(move);
+}
+
+function previewMatchupUtility(mon, target) {
+  if (!mon || !target) return -Infinity;
+  const out = Math.max(0, ...(mon.moves || []).map(move => previewMoveDamage(mon, target, move)));
+  const incoming = Math.max(0, ...(target.moves || []).map(move => previewMoveDamage(target, mon, move)));
+  const targetHp = Math.max(1, previewStat(target, 'hp'));
+  const ownHp = Math.max(1, previewStat(mon, 'hp'));
+  const ownSpeed = previewStat(mon, 'spe');
+  const foeSpeed = previewStat(target, 'spe');
+  const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
+  return (out / targetHp) * speedFactor / Math.max(0.25, incoming / ownHp);
+}
+
+export function orderPlayerTeamForLead(team, foeTeam) {
+  const lead = Array.isArray(foeTeam) ? foeTeam[0] : null;
+  if (!lead) return [...team];
+  return [...team].sort((a, b) =>
+    previewMatchupUtility(b, lead) - previewMatchupUtility(a, lead) ||
+    String(a.species).localeCompare(String(b.species))
+  );
+}
+
 function seedArray(seed) {
   let x = (Number(seed) >>> 0) || 1;
   const out = [];
@@ -759,6 +814,120 @@ function scoreMove(active, target, requestedMove) {
   return power * statRatio * effectiveness * stab * accuracy * priority * strategic;
 }
 
+function estimateBattleDamage(active, target, requestedMove) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!active || !target || !move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
+  if (!dex.getImmunity(move.type, target)) return 0;
+
+  const effectiveness = 2 ** dex.getEffectiveness(move, target);
+  const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
+  const priority = move.priority > 0 ? 1.03 : 1;
+  const strategic = moveStrategicMultiplier(move);
+  if (typeof move.damage === 'number') {
+    return Math.max(0, Number(move.damage) * effectiveness * accuracy * priority * strategic);
+  }
+
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
+  const level = Math.max(1, Number(active.level || 1));
+  const power = Math.max(1, effectiveMovePower(move));
+  const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
+  let damage = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
+  damage *= stab * effectiveness * 0.925 * accuracy * priority * strategic;
+
+  if (
+    move.category === 'Physical' &&
+    active.status === 'brn' &&
+    active.ability !== 'Guts'
+  ) {
+    damage *= 0.5;
+  }
+  return Math.max(0, damage);
+}
+
+function bestExpectedDamage(mon, target) {
+  if (!mon || !target) return 0;
+  let best = 0;
+  for (const slot of mon.moveSlots || []) {
+    const requested = { move: slot.id || slot.move, disabled: slot.disabled || false };
+    best = Math.max(best, estimateBattleDamage(mon, target, requested));
+  }
+  return best;
+}
+
+function smartStatusMoveScore(active, target, requestedMove, battle) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!move.exists || move.category !== 'Status') return -Infinity;
+  const hpRatio = active?.maxhp > 0 ? active.hp / active.maxhp : 0;
+  const incoming = bestExpectedDamage(target, active);
+  const likelyIncomingKo = incoming >= Number(active?.hp || 0);
+
+  const recovery = new Set(['recover', 'roost', 'milkdrink', 'synthesis', 'slackoff', 'softboiled']);
+  if (recovery.has(move.id)) {
+    if (hpRatio >= 0.72 || likelyIncomingKo) return 1;
+    return 85 + (1 - hpRatio) * 90;
+  }
+
+  if (move.status) {
+    if (target?.status) return 0;
+    if (move.status === 'par' && target?.hasType?.('Ground')) return 4;
+    return 58;
+  }
+
+  const setupIds = new Set([
+    'swordsdance', 'dragondance', 'calmmind', 'nastyplot', 'agility',
+    'curse', 'bulkup',
+  ]);
+  if (setupIds.has(move.id)) {
+    if (hpRatio < 0.45 || likelyIncomingKo) return 4;
+    const relevantBoosts = Object.values(move.boosts || {});
+    const alreadyBoosted = relevantBoosts.length
+      ? Object.keys(move.boosts || {}).every(stat => Number(active?.boosts?.[stat] || 0) >= 2)
+      : false;
+    if (alreadyBoosted) return 3;
+    return 68 + hpRatio * 22;
+  }
+
+  if (move.id === 'reflect' || move.id === 'lightscreen') {
+    if (active?.side?.sideConditions?.[move.id]) return 1;
+    return 52;
+  }
+  if (move.id === 'substitute') {
+    if (hpRatio < 0.55 || active?.volatiles?.substitute) return 1;
+    return 42;
+  }
+
+  // Keep niche support moves available, but below a credible damaging turn.
+  return 8;
+}
+
+function smartMoveScore(active, target, requestedMove, battle) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!move.exists || requestedMove?.disabled) return -Infinity;
+  if (move.category === 'Status') {
+    return smartStatusMoveScore(active, target, requestedMove, battle);
+  }
+
+  const damage = estimateBattleDamage(active, target, requestedMove);
+  const targetHp = Math.max(1, Number(target?.hp || target?.maxhp || 1));
+  const targetMaxHp = Math.max(1, Number(target?.maxhp || targetHp));
+  const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
+  const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
+  const priority = Number(move.priority || 0);
+  const actsFirst = priority > 0 || activeSpeed >= targetSpeed;
+  const ko = damage >= targetHp;
+
+  let score = 100 * damage / targetMaxHp;
+  if (ko) score += actsFirst ? 420 : 220;
+  if (priority > 0 && targetHp <= damage * 1.2) score += 45;
+
+  const incoming = bestExpectedDamage(target, active);
+  if (!actsFirst && incoming >= Number(active?.hp || 0) && !ko) score *= 0.3;
+  return score;
+}
+
 function battleMonMoveScore(mon, target) {
   if (!mon || !target) return 0;
   const slots = mon.moveSlots || [];
@@ -776,6 +945,70 @@ function matchupUtility(mon, foeMon) {
   const incoming = battleMonMoveScore(foeMon, mon);
   const hpRatio = mon.maxhp > 0 ? mon.hp / mon.maxhp : 0;
   return (offense * (0.5 + hpRatio)) / Math.max(35, incoming);
+}
+
+function smartMatchupUtility(mon, foeMon) {
+  if (!mon || !foeMon || mon.fainted) return -Infinity;
+  const outgoing = bestExpectedDamage(mon, foeMon);
+  const incoming = bestExpectedDamage(foeMon, mon);
+  const foeHp = Math.max(1, Number(foeMon.hp || foeMon.maxhp || 1));
+  const ownHp = Math.max(1, Number(mon.hp || mon.maxhp || 1));
+  const ownMaxHp = Math.max(1, Number(mon.maxhp || ownHp));
+  const hpRatio = ownHp / ownMaxHp;
+  const offenseFraction = outgoing / foeHp;
+  const dangerFraction = incoming / ownHp;
+  const ownSpeed = Math.max(1, Number(mon.getStat?.('spe') || mon.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(foeMon.getStat?.('spe') || foeMon.storedStats?.spe || 1));
+  const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
+  const survivalFactor = dangerFraction >= 1 ? 0.35 : 1 / Math.max(0.35, dangerFraction);
+  return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
+}
+
+function bestSmartForcedSwitch(request, side, foeActive) {
+  if (!request?.side?.pokemon || !side || !foeActive) return null;
+  let best = null;
+  for (let idx = 0; idx < side.pokemon.length; idx += 1) {
+    const mon = side.pokemon[idx];
+    const reqMon = request.side.pokemon[idx];
+    if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
+    const utility = smartMatchupUtility(mon, foeActive);
+    if (!best || utility > best.utility) best = { idx, utility };
+  }
+  return best?.idx ?? null;
+}
+
+function bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest) {
+  if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
+  if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
+
+  const currentDamage = bestExpectedDamage(active, foeActive);
+  const currentIncoming = bestExpectedDamage(foeActive, active);
+  const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
+  const currentCanKo = currentDamage >= Number(foeActive.hp || 1);
+  if (currentCanKo && currentSpeed >= foeSpeed) return null;
+
+  const currentUtility = smartMatchupUtility(active, foeActive);
+  let best = null;
+  for (let idx = 0; idx < side.pokemon.length; idx += 1) {
+    const mon = side.pokemon[idx];
+    const reqMon = request.side.pokemon[idx];
+    if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
+    const incoming = bestExpectedDamage(foeActive, mon);
+    const utility = smartMatchupUtility(mon, foeActive);
+    const survivesEntry = incoming < Number(mon.hp || 0);
+    if (!best || utility > best.utility) best = { idx, utility, survivesEntry };
+  }
+  if (!best) return null;
+
+  const likelyCurrentKo = currentIncoming >= Number(active.hp || 0) && currentSpeed <= foeSpeed;
+  if (likelyCurrentKo && best.survivesEntry && best.utility > currentUtility * 0.9) {
+    return `switch ${best.idx + 1}`;
+  }
+  if (best.survivesEntry && best.utility > currentUtility * 1.28) {
+    return `switch ${best.idx + 1}`;
+  }
+  return null;
 }
 
 function bestVoluntarySwitch(request, side, foeActive, active, activeRequest, policy = {}) {
@@ -854,7 +1087,22 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
       const active = activeBattleMons[i];
       if (sideId === 'p1' && request.active.length === 1) {
         const p1Mode = aiOptions?.mode || 'greedy';
-        if (p1Mode !== 'no-switch') {
+        if (p1Mode === 'smart') {
+          const turn = Number(battle?.turn || 0);
+          const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
+          const underSwitchCap = Number(stats?.voluntarySwitches || 0) < 10;
+          const cooldownReady = turn - lastSwitchTurn >= 1;
+          if (underSwitchCap && cooldownReady) {
+            const switchChoice = bestSmartVoluntarySwitch(
+              request,
+              side,
+              foeActive,
+              active,
+              activeRequest,
+            );
+            if (switchChoice) return switchChoice;
+          }
+        } else if (p1Mode !== 'no-switch') {
           const aggressive = p1Mode === 'aggressive';
           const turn = Number(battle?.turn || 0);
           const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
@@ -910,8 +1158,17 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
         return `move ${moveIdx + 1}`;
       }
 
+      const playerMode = sideId === 'p1' ? (aiOptions?.mode || 'greedy') : 'greedy';
       const legal = activeRequest.moves
-        .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
+        .map((move, idx) => ({
+          idx,
+          move,
+          score: active && foeActive
+            ? (playerMode === 'smart'
+              ? smartMoveScore(active, foeActive, move, battle)
+              : scoreMove(active, foeActive, move))
+            : 1,
+        }))
         .filter(entry => !entry.move.disabled);
       if (!legal.length) return 'move 1';
       legal.sort((a, b) => b.score - a.score || a.idx - b.idx);
@@ -983,14 +1240,18 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const p2Profile = options.p2Trainer ? trainerAiProfile(options.p2Trainer) : null;
   const p2Mode = options.p2AiMode || (p2Profile ? 'hgss' : 'greedy');
   const p1Mode = options.p1AiMode || 'greedy';
-  if (!['greedy', 'aggressive', 'no-switch'].includes(p1Mode)) {
+  if (!['greedy', 'aggressive', 'no-switch', 'smart'].includes(p1Mode)) {
     throw new Error(`Unknown p1AiMode: ${p1Mode}`);
   }
+  const preparedP1Team =
+    p1Mode === 'smart' && options.p1SmartLead !== false
+      ? orderPlayerTeamForLead(p1Team, p2Team)
+      : p1Team;
   const p1KeyByDisplayName = new Map(
-    p1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
+    preparedP1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
   );
   const p1Usage = Object.fromEntries(
-    p1Team.map(mon => [String(mon._candidateKey || mon.species), emptyBattleUsage()])
+    preparedP1Team.map(mon => [String(mon._candidateKey || mon.species), emptyBattleUsage()])
   );
   let p1ActiveKey = null;
   let p1LeadSeen = false;
@@ -1067,7 +1328,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   })();
 
   await streams.omniscient.write(`>start ${JSON.stringify({ formatid: 'gen4customgame', seed: seedArray(seed) })}\n` +
-    `>player p1 ${JSON.stringify({ name: 'Player', team: Teams.pack(p1Team) })}\n` +
+    `>player p1 ${JSON.stringify({ name: 'Player', team: Teams.pack(preparedP1Team) })}\n` +
     `>player p2 ${JSON.stringify({ name: 'HGSS', team: Teams.pack(p2Team) })}`);
 
   const result = await resultPromise;
@@ -1078,6 +1339,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     p1Usage,
     p1AiMode: p1Mode,
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
+    p1ForcedSwitches: p1Stats.forcedSwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
     p2MoveDecisions: p2Stats.moveDecisions,
