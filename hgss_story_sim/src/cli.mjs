@@ -1376,6 +1376,131 @@ function selectCandidateScreenRows(rows, width, objective = 'mean') {
   return selected.slice(0, width);
 }
 
+function usageForCandidate(evaluation, candidate) {
+  const usage = evaluation?.memberUsage?.[candidateIdentity(candidate)] || null;
+  if (!usage) return null;
+  return {
+    bossesAvailable: Number(usage.bossesAvailable || 0),
+    bossesUsed: Number(usage.bossesUsed || 0),
+    bossesUsedInWins: Number(usage.bossesUsedInWins || 0),
+    runsAvailable: Number(usage.runsAvailable || 0),
+    runsUsed: Number(usage.runsUsed || 0),
+    winningRunsUsed: Number(usage.winningRunsUsed || 0),
+    winningActiveTurns: Number(usage.winningActiveTurns || 0),
+    useRate: Number(usage.useRate || 0),
+    winningUseRate: Number(usage.winningUseRate || 0),
+  };
+}
+
+function supportedContributionBosses(ablation, usage) {
+  if (!ablation || !usage) return [];
+  const winningBosses = new Set(
+    (usage.bossUsage || [])
+      .filter(row => Number(row.winningRunsUsed || 0) > 0)
+      .map(row => row.boss)
+  );
+  return (ablation.topHelpedBosses || [])
+    .filter(row => Number(row.delta || 0) > 0 && winningBosses.has(row.boss))
+    .sort((a, b) => Number(b.delta || 0) - Number(a.delta || 0) || a.boss.localeCompare(b.boss));
+}
+
+async function memberContributionProfile(
+  state,
+  evaluateTeamAtRuns,
+  requestedRuns,
+  requiredCandidate = null,
+) {
+  const members = [];
+  const requiredKey = requiredCandidate ? candidateIdentity(requiredCandidate) : null;
+
+  for (const candidate of state.team) {
+    const key = candidateIdentity(candidate);
+    const usageRaw = state.evaluation?.memberUsage?.[key] || null;
+    const usage = usageForCandidate(state.evaluation, candidate);
+    if (requiredKey && key === requiredKey) {
+      members.push({
+        species: candidate.species,
+        mandatoryStarter: true,
+        meaningful: Number(usage?.winningRunsUsed || 0) > 0,
+        usage,
+        supportedBosses: [],
+        supportedBossCount: 0,
+        maxSupportedBossWinRateGain: 0,
+      });
+      continue;
+    }
+
+    const reduced = state.team.filter(mon => candidateIdentity(mon) !== key);
+    const removed = await evaluateTeamAtRuns(reduced, requestedRuns);
+    const ablation = memberAblationSummary(state.evaluation, removed, candidate.species);
+    const winningBosses = new Set(
+      (usageRaw?.bossUsage || [])
+        .filter(row => Number(row.winningRunsUsed || 0) > 0)
+        .map(row => row.boss)
+    );
+    const supportedBosses = (ablation.topHelpedBosses || [])
+      .filter(row => Number(row.delta || 0) > 0 && winningBosses.has(row.boss))
+      .sort((a, b) => Number(b.delta || 0) - Number(a.delta || 0) || a.boss.localeCompare(b.boss));
+    const maxSupportedBossWinRateGain = Number(supportedBosses[0]?.delta || 0);
+    members.push({
+      species: candidate.species,
+      mandatoryStarter: false,
+      meaningful: supportedBosses.length > 0,
+      usage,
+      supportedBosses,
+      supportedBossCount: supportedBosses.length,
+      maxSupportedBossWinRateGain,
+      ablation: {
+        scoreDelta: ablation.scoreDelta,
+        geometricDelta: ablation.geometricDelta,
+        coverageDelta: ablation.coverageDelta,
+        bottom5Delta: ablation.bottom5Delta,
+        worstBossDelta: ablation.worstBossDelta,
+        bossesHelped: ablation.bossesHelped,
+        bossesHurt: ablation.bossesHurt,
+        maxBossWinRateGain: ablation.maxBossWinRateGain,
+      },
+    });
+  }
+
+  const elective = members.filter(member => !member.mandatoryStarter);
+  const meaningfulElective = elective.filter(member => member.meaningful);
+  const weakestSupportedBossGain = elective.length
+    ? Math.min(...elective.map(member => Number(member.maxSupportedBossWinRateGain || 0)))
+    : 0;
+  const totalSupportedBossGain = elective.reduce(
+    (sum, member) => sum + Number(member.maxSupportedBossWinRateGain || 0),
+    0,
+  );
+
+  return {
+    requestedRuns,
+    electiveMemberCount: elective.length,
+    meaningfulElectiveCount: meaningfulElective.length,
+    allElectiveMeaningful: elective.length > 0 && meaningfulElective.length === elective.length,
+    weakestSupportedBossGain,
+    totalSupportedBossGain,
+    members,
+  };
+}
+
+function memberContributionCompare(a, b, objective = 'story-clear') {
+  const ac = a.memberContribution || {};
+  const bc = b.memberContribution || {};
+  if (Number(ac.meaningfulElectiveCount || 0) !== Number(bc.meaningfulElectiveCount || 0)) {
+    return Number(bc.meaningfulElectiveCount || 0) - Number(ac.meaningfulElectiveCount || 0);
+  }
+  if (Number(ac.weakestSupportedBossGain || 0) !== Number(bc.weakestSupportedBossGain || 0)) {
+    return Number(bc.weakestSupportedBossGain || 0) - Number(ac.weakestSupportedBossGain || 0);
+  }
+  const storyOrder = evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
+  if (storyOrder !== 0) return storyOrder;
+  if (Number(ac.totalSupportedBossGain || 0) !== Number(bc.totalSupportedBossGain || 0)) {
+    return Number(bc.totalSupportedBossGain || 0) - Number(ac.totalSupportedBossGain || 0);
+  }
+  return 0;
+}
+
 async function runBeamSearch({
   candidates,
   story,
@@ -1392,6 +1517,8 @@ async function runBeamSearch({
   grindPolicy = 'none',
   evaluationCache = null,
   objective = 'mean',
+  memberContributionRerank = false,
+  contributionRuns = null,
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -1483,7 +1610,37 @@ async function runBeamSearch({
     a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
   );
 
-  const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
+  const baselineState = finalStates[0] || null;
+  const normalizedContributionRuns = Math.max(
+    1,
+    Math.floor(Number(contributionRuns || finalRuns || runs)),
+  );
+  if (memberContributionRerank) {
+    for (const state of finalStates) {
+      state.memberContribution = await memberContributionProfile(
+        state,
+        evaluateTeamAtRuns,
+        normalizedContributionRuns,
+        requiredCandidate,
+      );
+    }
+    finalStates.sort((a, b) =>
+      memberContributionCompare(a, b, objective) ||
+      evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
+      a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
+    );
+  }
+
+  const top = finalStates.map(state => ({
+    ...searchResultRow(state.team, state.evaluation),
+    memberContribution: state.memberContribution || null,
+  }));
+  const baselineTop = baselineState
+    ? {
+        ...searchResultRow(baselineState.team, baselineState.evaluation),
+        memberContribution: baselineState.memberContribution || null,
+      }
+    : null;
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
@@ -1507,6 +1664,9 @@ async function runBeamSearch({
     finalRescoredTeams: finalStates.length,
     finalRunsPerBoss: finalRuns,
     objective,
+    memberContributionRerank: Boolean(memberContributionRerank),
+    contributionRunsPerBoss: memberContributionRerank ? normalizedContributionRuns : null,
+    baselineTop,
     paretoFront: paretoFront(top),
     top,
   };
