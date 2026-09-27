@@ -496,6 +496,21 @@ function levelRequirementForEvolution(evo) {
   return 1;
 }
 
+function evolutionAllowedInHgssRedExperiment(evo) {
+  const method = String(evo?.method || '');
+  // These Gen 4 evolutions require overworld mechanics that do not exist in
+  // HGSS itself (Mt. Coronet magnetic field, Moss/Ice Rock, or Beauty).
+  // Trade, trade-item, stone, friendship, move, party-member, gender and
+  // time-of-day evolutions remain allowed because this experiment ignores
+  // route effort but still requires an HGSS-feasible species.
+  return ![
+    'MAGNETIC_FIELD',
+    'MOSS_ROCK',
+    'ICE_ROCK',
+    'BEAUTY',
+  ].some(token => method.includes(token));
+}
+
 function manualSpeciesConstant(name) {
   const special = {
     "Farfetch'd": 'SPECIES_FARFETCHD',
@@ -694,6 +709,7 @@ export async function buildRedOnlyCandidateForms({
 
         for (const evo of evoByBase.get(current.speciesConst) || []) {
           if (!evo.target || evo.target === 'SPECIES_NONE') continue;
+          if (!evolutionAllowedInHgssRedExperiment(evo)) continue;
           if (current.path.includes(evo.target)) continue;
           const requiredLevel = levelRequirementForEvolution(evo);
           queue.push({
@@ -751,7 +767,7 @@ export async function buildRedOnlyCandidateForms({
     notes: [
       'Capture options include every source-backed wild/headbutt/manual level available by Red, not only the earliest story source.',
       'For a requested common level, the search may use the highest legal capture level at or below that common level.',
-      'Trade/stone/friendship and other non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold.',
+      'Trade/stone/friendship and other HGSS-feasible non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold. DPPt-only field evolutions (magnetic field, Moss/Ice Rock, Beauty) are excluded.',
       'Legendary and mythical species are excluded by a curated Gen 1-4 set when excludeLegendary=true.',
     ],
   };
