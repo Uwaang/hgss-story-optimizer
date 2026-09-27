@@ -6633,6 +6633,82 @@ async function cmdRedMinGrindGaSearch() {
   }, null, 2));
 }
 
+
+async function cmdRedMinGrindValidate() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  if (teamNames.length !== 6) {
+    throw new Error('red-min-grind-validate requires exactly six target species via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+
+  const rows = teamNames.map(name => {
+    const candidates = redPool.forms
+      .filter(form => form.species === name)
+      .map(form => redFormLevelRow(form, red, commonLevel))
+      .filter(Boolean)
+      .sort((a, b) =>
+        Number(a.grindExp) - Number(b.grindExp) ||
+        Number(b.proxyUtility) - Number(a.proxyUtility)
+      );
+    if (!candidates.length) {
+      throw new Error('Red-only form not available at requested level: ' + name);
+    }
+    return candidates[0];
+  });
+
+  const familyIds = rows.map(row => row.familyId);
+  if (new Set(familyIds).size !== 6) {
+    throw new Error('red-min-grind-validate team contains duplicate evolution families');
+  }
+  const starterRows = rows.filter(row => row.familyId === starterName);
+  if (starterRows.length !== 1) {
+    throw new Error('team must contain exactly the selected starter family: ' + starterName);
+  }
+  if (rows.some(row => row.form?.exclusiveGroup === 'starter' && row.familyId !== starterName)) {
+    throw new Error('team contains an unselected starter family');
+  }
+
+  const state = redStateFromMembers(rows, commonLevel);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const evaluation = await redEvaluateTeam(
+    state,
+    red,
+    enemyTeam,
+    moveAccess,
+    runs,
+    1234001,
+  );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'high-run validation of an explicit Red-only equal-level team with capture-level-aware EXP cost',
+    version,
+    starter: starterName,
+    commonLevel,
+    runs,
+    evaluation,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -6698,6 +6774,7 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'red-min-grind-search': cmdRedMinGrindSearch,
   'red-min-grind-ga-search': cmdRedMinGrindGaSearch,
+  'red-min-grind-validate': cmdRedMinGrindValidate,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -6709,7 +6786,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
