@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { applyPlayerRouteBuild, candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -5789,6 +5789,190 @@ function equalLevelTeamExpCost(candidates, commonLevel) {
     unknown,
     members,
   };
+}
+
+
+const EQUAL_LEVEL_HELD_ITEMS = [
+  '', 'Leftovers', 'Life Orb', 'Expert Belt',
+  'Choice Band', 'Choice Specs', 'Choice Scarf',
+  'Focus Sash', 'Sitrus Berry', 'Muscle Band',
+  'Wise Glasses', 'Lum Berry',
+];
+
+function equalLevelHeldItemPolicy(stage) {
+  const targetStage = Number(stage);
+  if (targetStage < 20) {
+    return {
+      items: [''],
+      finiteCaps: {},
+      note: 'Conservative story policy: no held-item optimization before Blue/rematch-E4 stage.',
+    };
+  }
+  return {
+    items: EQUAL_LEVEL_HELD_ITEMS.filter(item => targetStage >= 21 || item !== 'Expert Belt'),
+    finiteCaps: {
+      'Choice Specs': 1,
+      'Life Orb': 1,
+      Leftovers: 1,
+      'Wise Glasses': 1,
+    },
+    note: targetStage < 21
+      ? 'Post-Kanto rematch policy; Expert Belt is still unavailable before Mt. Silver.'
+      : 'Red-stage held-item policy.',
+  };
+}
+
+function optimizeEqualLevelHeldItemTeam(team, enemyTeam, boss) {
+  const policy = equalLevelHeldItemPolicy(boss?.stage);
+  if (policy.items.length === 1 && policy.items[0] === '') {
+    return { team: team.map(mon => ({ ...mon, item: '' })), policy };
+  }
+  const bannedBySlot = team.map(() => new Set());
+
+  function buildSlot(index, extraExcluded = []) {
+    const excluded = new Set([...bannedBySlot[index], ...extraExcluded]);
+    const items = policy.items.filter(item => !excluded.has(item));
+    return optimizePlayerHeldItemForBoss(team[index], enemyTeam, { items });
+  }
+
+  const built = team.map((_, index) => buildSlot(index));
+  for (const [item, capRaw] of Object.entries(policy.finiteCaps || {})) {
+    const cap = Math.max(0, Number(capRaw || 0));
+    const holders = built
+      .map((mon, index) => ({ mon, index }))
+      .filter(entry => entry.mon.item === item);
+    if (holders.length <= cap) continue;
+
+    const ranked = holders.map(entry => {
+      const alternative = buildSlot(entry.index, [item]);
+      return {
+        ...entry,
+        alternative,
+        loss: Number(entry.mon._heldItemOptimization?.proxyScore || 0) -
+          Number(alternative._heldItemOptimization?.proxyScore || 0),
+      };
+    }).sort((a, b) =>
+      Number(b.loss) - Number(a.loss) ||
+      String(a.mon.species).localeCompare(String(b.mon.species))
+    );
+    const keep = new Set(ranked.slice(0, cap).map(entry => entry.index));
+    for (const entry of ranked) {
+      if (keep.has(entry.index)) continue;
+      bannedBySlot[entry.index].add(item);
+      built[entry.index] = buildSlot(entry.index);
+    }
+  }
+
+  return {
+    team: built,
+    policy: {
+      ...policy,
+      selected: Object.fromEntries(built.map(mon => [mon._candidateKey || mon.species, mon.item || ''])),
+    },
+  };
+}
+
+function equalLevelRouteMovesAtStage(
+  mon,
+  candidate,
+  boss,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  routeMoves,
+) {
+  const key = candidateIdentity(candidate);
+  const assignedMachines = [
+    ...(singleUsePlan[key] || []),
+    ...(purchasablePlan[key] || []),
+  ];
+  const legal = new Set(candidateMovePool(
+    mon.species,
+    mon.level,
+    Number(boss.stage),
+    moveAccess,
+    assignedMachines,
+    candidate.species,
+  ));
+  const selected = [];
+  for (const move of routeMoves || []) {
+    if (legal.has(move) && !selected.includes(move)) selected.push(move);
+    if (selected.length >= 4) break;
+  }
+  for (const move of mon.moves || []) {
+    if (legal.has(move) && !selected.includes(move)) selected.push(move);
+    if (selected.length >= 4) break;
+  }
+  if (!selected.length) selected.push('Tackle');
+  return { ...mon, moves: selected };
+}
+
+function buildEqualLevelRouteBuildPlan(
+  candidates,
+  routeBosses,
+  commonLevel,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  levels,
+) {
+  const plan = {};
+  for (const candidate of candidates) {
+    const key = candidateIdentity(candidate);
+    const samples = [];
+    for (const boss of routeBosses) {
+      if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) continue;
+      const mon = materializeCandidateTeam(
+        [candidate],
+        boss.stage,
+        commonLevel,
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+      )[0];
+      if (!mon) continue;
+      samples.push({ boss, mon, foeTeam: hgssTrainerToShowdownTeam(boss.trainer, boss) });
+    }
+    if (!samples.length) continue;
+
+    let build = optimizePlayerRouteBuild(samples, { iv: 16 });
+    const last = samples[samples.length - 1];
+    let finalMon = applyPlayerRouteBuild(last.mon, build);
+    const assignedMachines = [
+      ...(singleUsePlan[key] || []),
+      ...(purchasablePlan[key] || []),
+    ];
+    const routeMoves = optimizePlayerRouteMoves(
+      finalMon,
+      samples.map(sample => sample.foeTeam),
+      {
+        stage: Number(last.boss.stage),
+        moveAccess,
+        extraMachines: assignedMachines,
+        originSpeciesName: candidate.species,
+        shortlistCap: 12,
+      },
+    );
+
+    const refinedSamples = samples.map(sample => {
+      let mon = applyPlayerRouteBuild(sample.mon, build);
+      mon = equalLevelRouteMovesAtStage(
+        mon,
+        candidate,
+        sample.boss,
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        routeMoves.moves,
+      );
+      return { mon, foeTeam: sample.foeTeam };
+    });
+    build = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
+    plan[key] = {
+      ...build,
+      routeMoves: routeMoves.moves,
+      routeMoveOptimization: routeMoves,
+    };
+  }
+  return plan;
 }
 
 async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess) {
