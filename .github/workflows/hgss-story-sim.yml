@@ -30,6 +30,7 @@ on:
           - default
           - red-min-grind-pilot
           - lance-min-grind-pilot
+          - lance-local-boundary
           - red-model-sanity
           - red-focused-search
           - red-local-swap-search
@@ -165,7 +166,7 @@ jobs:
           if-no-files-found: error
 
   lance_min_grind_pilot:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'lance-min-grind-pilot') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/lance-min-grind')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'lance-min-grind-pilot'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -257,6 +258,121 @@ jobs:
         with:
           name: hgss-lance2-focused-hg-cyndaquil-lv40-50
           path: hgss_story_sim/results/lance2-*.json
+          if-no-files-found: error
+
+
+  lance_local_boundary:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'lance-local-boundary') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/lance-min-grind')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Deep Lv45 one-slot neighborhood search
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-min-grind-local-swap-search \
+            --target-boss="Lance Rematch" \
+            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --target-stage=20 \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=45 \
+            --team=Typhlosion,Jynx,Lapras,Lanturn,Electrode,Golem \
+            --candidate-cap=96 \
+            --screen-runs=8 \
+            --finalist-cap=30 \
+            --final-runs=200 \
+            --target-win-rate=0.5 \
+            --move-shortlist-cap=16 \
+            --moveset-finalists=20 \
+            > results/lance2-local-lv45.json
+      - name: Deep Lv46 one-slot neighborhood search
+        run: |
+          node src/cli.mjs boss-min-grind-local-swap-search \
+            --target-boss="Lance Rematch" \
+            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --target-stage=20 \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=46 \
+            --team=Typhlosion,Jynx,Lapras,Lanturn,Electrode,Golem \
+            --candidate-cap=96 \
+            --screen-runs=8 \
+            --finalist-cap=30 \
+            --final-runs=200 \
+            --target-win-rate=0.5 \
+            --move-shortlist-cap=16 \
+            --moveset-finalists=20 \
+            > results/lance2-local-lv46.json
+      - name: Revalidate best Lv45 local candidate at 500 runs
+        shell: bash
+        run: |
+          FILE=results/lance2-local-lv45.json
+          TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestAtTarget || d.finalResults?.[0]; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
+          if [ -n "$TEAM" ]; then
+            node src/cli.mjs boss-min-grind-validate \
+              --target-boss="Lance Rematch" \
+              --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+              --target-stage=20 \
+              --version=HEARTGOLD \
+              --starter=Cyndaquil \
+              --team="$TEAM" \
+              --level=45 \
+              --runs=500 \
+              --move-shortlist-cap=16 \
+              --moveset-finalists=20 \
+              > results/lance2-local-lv45-best-validate500.json
+          else
+            echo '{"status":"no-lv45-finalist"}' > results/lance2-local-lv45-best-validate500.json
+          fi
+      - name: Revalidate best Lv46 local candidate at 300 runs
+        shell: bash
+        run: |
+          FILE=results/lance2-local-lv46.json
+          TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestAtTarget || d.finalResults?.[0]; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
+          if [ -n "$TEAM" ]; then
+            node src/cli.mjs boss-min-grind-validate \
+              --target-boss="Lance Rematch" \
+              --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+              --target-stage=20 \
+              --version=HEARTGOLD \
+              --starter=Cyndaquil \
+              --team="$TEAM" \
+              --level=46 \
+              --runs=300 \
+              --move-shortlist-cap=16 \
+              --moveset-finalists=20 \
+              > results/lance2-local-lv46-best-validate300.json
+          else
+            echo '{"status":"no-lv46-finalist"}' > results/lance2-local-lv46-best-validate300.json
+          fi
+      - name: Upload Lance local-boundary results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-lance2-local-boundary-hg-cyndaquil
+          path: hgss_story_sim/results/lance2-local-*.json
           if-no-files-found: error
 
   red_model_sanity:
