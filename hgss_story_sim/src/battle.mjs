@@ -415,8 +415,21 @@ export function optimizePlayerMovesAndBuildForBoss(
   } = {},
 ) {
   const pool = candidateMovePool(mon.species, mon.level, stage, moveAccess, extraMachines);
+  const abilityCandidates = legalGen4Abilities(mon.species);
+  if (!abilityCandidates.length && mon.ability) abilityCandidates.push(mon.ability);
+  if (!abilityCandidates.length) abilityCandidates.push('');
   if (!pool.length) {
-    return optimizePlayerBuildForBoss({ ...mon, moves: ['Tackle'] }, foeTeam, { iv });
+    let bestFallback = null;
+    for (const ability of abilityCandidates) {
+      const built = optimizePlayerBuildForBoss(
+        { ...mon, ability, moves: ['Tackle'] },
+        foeTeam,
+        { iv },
+      );
+      const score = playerBuildScore(built, foeTeam);
+      if (!bestFallback || score > bestFallback.score) bestFallback = { built, score };
+    }
+    return bestFallback?.built || optimizePlayerBuildForBoss({ ...mon, moves: ['Tackle'] }, foeTeam, { iv });
   }
 
   const foeSignature = (foeTeam || []).map(foe =>
@@ -425,7 +438,7 @@ export function optimizePlayerMovesAndBuildForBoss(
   const cacheKey = [
     mon.species,
     mon.level,
-    mon.ability || '',
+    abilityCandidates.join(','),
     iv,
     stage,
     [...pool].sort().join(','),
@@ -451,6 +464,7 @@ export function optimizePlayerMovesAndBuildForBoss(
   // ceiling. The final legal EV spread/nature/item is selected afterwards.
   const proxyMon = {
     ...mon,
+    ability: abilityCandidates[0] || mon.ability || '',
     nature: 'Serious',
     item: '',
     ivs: uniformIvs(iv),
@@ -496,32 +510,36 @@ export function optimizePlayerMovesAndBuildForBoss(
 
   let best = null;
   for (const candidate of moveSets) {
-    const built = optimizePlayerBuildForBoss(
-      { ...mon, moves: candidate.moves },
-      foeTeam,
-      { iv },
-    );
-    const buildScore = playerBuildScore(built, foeTeam);
-    const builtMovesetScore = redMovesetProxyScore(built, candidate.moves, foeTeam);
-    const species = dex.species.get(mon.species);
-    const statusBonus = candidate.moves
-      .map(moveName => redMoveStatusUtility(species, moveName))
-      .sort((a, b) => b - a)
-      .slice(0, 2)
-      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.025 : 0.005), 0);
-    const score = 0.62 * buildScore + 0.32 * builtMovesetScore + statusBonus + candidate.proxyScore * 0.04;
-    if (
-      !best ||
-      score > best.score + 1e-12 ||
-      (Math.abs(score - best.score) <= 1e-12 &&
-        candidate.moves.join('/').localeCompare(best.mon.moves.join('/')) < 0)
-    ) {
-      best = {
-        mon: built,
-        score,
-        proxyScore: candidate.proxyScore,
-        shortlist,
-      };
+    for (const ability of abilityCandidates) {
+      const built = optimizePlayerBuildForBoss(
+        { ...mon, ability, moves: candidate.moves },
+        foeTeam,
+        { iv },
+      );
+      const buildScore = playerBuildScore(built, foeTeam);
+      const builtMovesetScore = redMovesetProxyScore(built, candidate.moves, foeTeam);
+      const species = dex.species.get(mon.species);
+      const statusBonus = candidate.moves
+        .map(moveName => redMoveStatusUtility(species, moveName))
+        .sort((a, b) => b - a)
+        .slice(0, 2)
+        .reduce((sum, value, index) => sum + value * (index === 0 ? 0.025 : 0.005), 0);
+      const score = 0.62 * buildScore + 0.32 * builtMovesetScore + statusBonus + candidate.proxyScore * 0.04;
+      if (
+        !best ||
+        score > best.score + 1e-12 ||
+        (Math.abs(score - best.score) <= 1e-12 &&
+          `${candidate.moves.join('/')}:${ability}`.localeCompare(
+            `${best.mon.moves.join('/')}:${best.mon.ability || ''}`
+          ) < 0)
+      ) {
+        best = {
+          mon: built,
+          score,
+          proxyScore: candidate.proxyScore,
+          shortlist,
+        };
+      }
     }
   }
 
@@ -536,12 +554,15 @@ export function optimizePlayerMovesAndBuildForBoss(
       evaluatedMovesets: moveSets.length,
       movesetProxyScore: Number(best?.proxyScore || 0),
       jointScore: Number(best?.score || 0),
+      abilityCandidates: [...abilityCandidates],
+      selectedAbility: best?.mon?.ability || mon.ability || null,
     },
   };
   redMoveBuildOptimizationCache.set(cacheKey, {
     moves: [...result.moves],
     item: result.item || '',
     nature: result.nature,
+    ability: result.ability || '',
     ivs: { ...(result.ivs || {}) },
     evs: { ...(result.evs || {}) },
     _buildOptimization: { ...(result._buildOptimization || {}) },
@@ -1048,26 +1069,97 @@ function previewEffectiveHpMultiplier(mon, incomingDamage) {
   return 1;
 }
 
+function legalGen4Abilities(speciesName) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return [];
+  const values = [species.abilities?.['0'], species.abilities?.['1']]
+    .filter(Boolean);
+  return [...new Set(values)];
+}
+
+function previewDefensiveAbilityMultiplier(target, move, defenderSpecies) {
+  const ability = dex.abilities.get(target?.ability || '');
+  const id = ability?.id || '';
+  const type = move?.type || '';
+  const effectiveness = 2 ** dex.getEffectiveness(move, defenderSpecies);
+
+  if (id === 'levitate' && type === 'Ground') return 0;
+  if (['waterabsorb', 'stormdrain', 'dryskin'].includes(id) && type === 'Water') return 0;
+  if (['voltabsorb', 'lightningrod', 'motordrive'].includes(id) && type === 'Electric') return 0;
+  if (id === 'flashfire' && type === 'Fire') return 0;
+  if (id === 'thickfat' && ['Fire', 'Ice'].includes(type)) return 0.5;
+  if (id === 'heatproof' && type === 'Fire') return 0.5;
+  if (['solidrock', 'filter'].includes(id) && effectiveness > 1) return 0.75;
+  if (id === 'wonderguard' && effectiveness <= 1) return 0;
+  return 1;
+}
+
+function previewOffensiveAbilityMultiplier(mon, move) {
+  const ability = dex.abilities.get(mon?.ability || '');
+  const id = ability?.id || '';
+  if (move.category === 'Physical' && ['hugepower', 'purepower'].includes(id)) return 2;
+  if (move.category === 'Physical' && id === 'hustle') return 1.2;
+  if (id === 'technician' && Number(move.basePower || 0) > 0 && Number(move.basePower || 0) <= 60) return 1.5;
+  if (id === 'ironfist' && move.flags?.punch) return 1.2;
+  if (id === 'reckless' && (move.recoil || move.hasCrashDamage)) return 1.2;
+  return 1;
+}
+
+function previewStabMultiplier(mon, attackerSpecies, move) {
+  const hasStab = attackerSpecies.types.includes(move.type);
+  if (!hasStab) return 1;
+  const ability = dex.abilities.get(mon?.ability || '');
+  return ability?.id === 'adaptability' ? 2 : 1.5;
+}
+
+function previewConditionalMoveMultiplier(mon, target, move) {
+  if (move.id === 'dreameater') {
+    const sleepSupport = (mon?.moves || []).some(moveName =>
+      ['hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'yawn', 'spore'].includes(
+        dex.moves.get(moveName).id
+      )
+    );
+    if (!sleepSupport && target?.status !== 'slp') return 0;
+    return target?.status === 'slp' ? 1 : 0.45;
+  }
+  if (move.id === 'lastresort') return 0.22;
+  if (move.id === 'suckerpunch') return 0.72;
+  return 1;
+}
+
 function previewMoveDamage(mon, target, moveName) {
   const move = dex.moves.get(moveName);
   const attacker = dex.species.get(mon.species);
   const defender = dex.species.get(target.species);
   if (!move.exists || !attacker.exists || !defender.exists || move.category === 'Status') return 0;
   if (!dex.getImmunity(move.type, defender)) return 0;
-  if (typeof move.damage === 'number') return Number(move.damage);
+
+  const abilityDefense = previewDefensiveAbilityMultiplier(target, move, defender);
+  if (abilityDefense <= 0) return 0;
+  const conditional = previewConditionalMoveMultiplier(mon, target, move);
+  if (conditional <= 0) return 0;
+  if (typeof move.damage === 'number') {
+    return Number(move.damage) * abilityDefense * conditional;
+  }
 
   const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
   const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
   const attack = previewStat(mon, attackStat);
   const defense = previewStat(target, defenseStat);
   const level = Math.max(1, Number(mon.level || 1));
-  const power = Math.max(1, effectiveMovePower(move));
-  const stab = attacker.types.includes(move.type) ? 1.5 : 1;
+  let power = Math.max(1, effectiveMovePower(move));
+  if (move.id === 'eruption' || move.id === 'waterspout') {
+    power *= 0.82;
+  }
+  const stab = previewStabMultiplier(mon, attacker, move);
   const effectiveness = 2 ** dex.getEffectiveness(move, defender);
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   return ((((2 * level / 5 + 2) * power * attack / Math.max(1, defense)) / 50) + 2) *
     stab * effectiveness * accuracy * 0.925 * moveStrategicMultiplier(move) *
-    previewItemDamageMultiplier(mon, move, target);
+    previewItemDamageMultiplier(mon, move, target) *
+    previewOffensiveAbilityMultiplier(mon, move) *
+    abilityDefense *
+    conditional;
 }
 
 function previewMatchupUtility(mon, target) {
