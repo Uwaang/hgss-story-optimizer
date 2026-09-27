@@ -5771,11 +5771,33 @@ async function cmdTutorSmoke() {
     throw new Error('Direct-capture Typhlosion Lv50 must not inherit Cyndaquil-only Eruption');
   }
 
+  const evolvedCapture = redCaptureChoice({
+    redCaptureOptions: [{
+      captureSpecies: 'Magikarp',
+      targetSpecies: 'Gyarados',
+      evolutionMinLevel: 20,
+      minLevel: 1,
+      maxLevel: 45,
+      evolutionSteps: [{
+        fromSpecies: 'Magikarp',
+        targetSpecies: 'Gyarados',
+        method: 'EVO_LEVEL',
+        param: 20,
+      }],
+    }],
+  }, 45);
+  if (evolvedCapture?.captureLevel !== 44 || evolvedCapture?.minimumFinalLevel !== 45) {
+    throw new Error(
+      `Expected Lv45 Gyarados path to reserve one level-up from Magikarp Lv44, got ${JSON.stringify(evolvedCapture)}`,
+    );
+  }
+
   console.log(JSON.stringify({
     before,
     after,
     inheritedTyphlosion,
     directTyphlosion,
+    evolvedCapture,
   }, null, 2));
 }
 
@@ -5903,6 +5925,20 @@ async function cmdTmSmoke() {
 }
 
 
+function minimumFinalLevelForEvolutionPath(option, captureLevel) {
+  let level = Math.max(1, Math.min(100, Math.floor(Number(captureLevel || 1))));
+  let requiredLevelUps = 0;
+  for (const step of option?.evolutionSteps || []) {
+    const method = String(step?.method || '');
+    if (!method.startsWith('EVO_LEVEL')) continue;
+    const rawThreshold = Number(step?.param);
+    const threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : 1;
+    level = Math.max(level + 1, threshold);
+    requiredLevelUps += 1;
+  }
+  return { minimumFinalLevel: level, requiredLevelUps };
+}
+
 function redCaptureChoice(form, commonLevel) {
   const level = Math.max(1, Math.min(100, Math.floor(Number(commonLevel || 1))));
   const options = (form.redCaptureOptions || [])
@@ -5911,15 +5947,27 @@ function redCaptureChoice(form, commonLevel) {
       level >= Number(option.minLevel || 1)
     )
     .map(option => {
-      const captureLevel = Math.min(level, Number(option.maxLevel || option.minLevel || 1));
-      return {
-        ...option,
-        captureLevel,
-      };
+      const minCapture = Math.max(1, Math.floor(Number(option.minLevel || 1)));
+      const maxCapture = Math.min(
+        level,
+        Math.max(minCapture, Math.floor(Number(option.maxLevel || option.minLevel || 1))),
+      );
+      for (let captureLevel = maxCapture; captureLevel >= minCapture; captureLevel -= 1) {
+        const evolution = minimumFinalLevelForEvolutionPath(option, captureLevel);
+        if (evolution.minimumFinalLevel > level) continue;
+        return {
+          ...option,
+          captureLevel,
+          minimumFinalLevel: evolution.minimumFinalLevel,
+          requiredLevelUps: evolution.requiredLevelUps,
+        };
+      }
+      return null;
     })
-    .filter(option => option.captureLevel >= Number(option.minLevel || 1))
+    .filter(Boolean)
     .sort((a, b) =>
       Number(b.captureLevel) - Number(a.captureLevel) ||
+      Number(a.requiredLevelUps || 0) - Number(b.requiredLevelUps || 0) ||
       Number(a.evolutionMinLevel || 1) - Number(b.evolutionMinLevel || 1) ||
       Number(a.expectedEncounters ?? Infinity) - Number(b.expectedEncounters ?? Infinity) ||
       String(a.captureSpecies).localeCompare(String(b.captureSpecies))
@@ -6213,6 +6261,10 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
         method: row.capture.method,
       },
       evolutionMinLevel: Number(row.capture.evolutionMinLevel || 1),
+      requiredLevelUps: Number(row.capture.requiredLevelUps || 0),
+      minimumFinalLevel: Number(row.capture.minimumFinalLevel || row.capture.captureLevel || 1),
+      evolutionPath: row.capture.path || [],
+      evolutionSteps: row.capture.evolutionSteps || [],
       grindExp: Number(row.grindExp),
       proxyUtility: Number(row.proxyUtility),
     })),
