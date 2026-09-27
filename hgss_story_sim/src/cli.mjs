@@ -5939,6 +5939,9 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     ties: Number(battle.ties || 0),
     winRate: Number(battle.winRate || 0),
     averageTurns: Number(battle.averageTurns || 0),
+    averagePlayerFaints: Number(battle.averageP1Faints || 0),
+    averageRedFaints: Number(battle.averageP2Faints || 0),
+    maxRedFaints: Number(battle.maxP2Faints || 0),
     team: state.members.map(row => ({
       familyId: row.familyId,
       species: row.species,
