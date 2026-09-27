@@ -1412,11 +1412,14 @@ async function memberContributionProfile(
 ) {
   const members = [];
   const requiredKey = requiredCandidate ? candidateIdentity(requiredCandidate) : null;
+  // Contribution must be paired at the same sampling density. In particular,
+  // do not compare a final 20-run full team against a 5-run ablation.
+  const contributionFull = await evaluateTeamAtRuns(state.team, requestedRuns);
 
   for (const candidate of state.team) {
     const key = candidateIdentity(candidate);
-    const usageRaw = state.evaluation?.memberUsage?.[key] || null;
-    const usage = usageForCandidate(state.evaluation, candidate);
+    const usageRaw = contributionFull?.memberUsage?.[key] || null;
+    const usage = usageForCandidate(contributionFull, candidate);
     if (requiredKey && key === requiredKey) {
       members.push({
         species: candidate.species,
@@ -1432,7 +1435,7 @@ async function memberContributionProfile(
 
     const reduced = state.team.filter(mon => candidateIdentity(mon) !== key);
     const removed = await evaluateTeamAtRuns(reduced, requestedRuns);
-    const ablation = memberAblationSummary(state.evaluation, removed, candidate.species);
+    const ablation = memberAblationSummary(contributionFull, removed, candidate.species);
     const winningBosses = new Set(
       (usageRaw?.bossUsage || [])
         .filter(row => Number(row.winningRunsUsed || 0) > 0)
