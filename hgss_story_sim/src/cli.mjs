@@ -3124,6 +3124,339 @@ async function cmdAllocatorCrossCompare() {
 }
 
 
+function contributionUsageSummary(evaluation) {
+  const members = Object.values(evaluation.memberUsage || {});
+  const rows = members.map(member => ({
+    species: member.species,
+    mandatoryStarter: Boolean(member.mandatoryStarter),
+    bossesUsedInWins: Number(member.bossesUsedInWins || 0),
+    winningMoveUses: Number(member.winningMoveUses || 0),
+    winningActiveTurns: Number(member.winningActiveTurns || 0),
+    peakWinningUseRate: Number(member.peakWinningUseRate || 0),
+    peakWinningActiveTurnsPerRun: Number(member.peakWinningActiveTurnsPerRun || 0),
+  }));
+  const nonStarter = rows.filter(row => !row.mandatoryStarter);
+  const target = nonStarter.length ? nonStarter : rows;
+  return {
+    members: rows,
+    membersWithWinningUse: target.filter(row => row.bossesUsedInWins > 0).length,
+    membersWithWinningMoves: target.filter(row => row.winningMoveUses > 0).length,
+    membersWithWinningActiveTurns: target.filter(row => row.winningActiveTurns > 0).length,
+    minPeakWinningUseRate: target.length
+      ? Math.min(...target.map(row => row.peakWinningUseRate))
+      : 0,
+    minPeakWinningActiveTurnsPerRun: target.length
+      ? Math.min(...target.map(row => row.peakWinningActiveTurnsPerRun))
+      : 0,
+  };
+}
+
+function contributionUsageCompare(a, b) {
+  const aa = contributionUsageSummary(a);
+  const bb = contributionUsageSummary(b);
+  if (aa.membersWithWinningMoves !== bb.membersWithWinningMoves) {
+    return bb.membersWithWinningMoves - aa.membersWithWinningMoves;
+  }
+  if (aa.membersWithWinningActiveTurns !== bb.membersWithWinningActiveTurns) {
+    return bb.membersWithWinningActiveTurns - aa.membersWithWinningActiveTurns;
+  }
+  if (aa.membersWithWinningUse !== bb.membersWithWinningUse) {
+    return bb.membersWithWinningUse - aa.membersWithWinningUse;
+  }
+  if (aa.minPeakWinningActiveTurnsPerRun !== bb.minPeakWinningActiveTurnsPerRun) {
+    return bb.minPeakWinningActiveTurnsPerRun - aa.minPeakWinningActiveTurnsPerRun;
+  }
+  if (aa.minPeakWinningUseRate !== bb.minPeakWinningUseRate) {
+    return bb.minPeakWinningUseRate - aa.minPeakWinningUseRate;
+  }
+  return 0;
+}
+
+async function contributionAblation(team, full, story, runs, moveAccess, expContext, grindPolicy, objective) {
+  const starter = team.find(candidate => candidate.exclusiveGroup === 'starter') || null;
+  const members = [];
+  for (const candidate of team) {
+    if (starter && candidateIdentity(candidate) === candidateIdentity(starter)) {
+      members.push({
+        species: candidate.species,
+        mandatoryStarter: true,
+        note: 'starter is mandatory and is not ablated',
+      });
+      continue;
+    }
+    const reduced = team.filter(mon => candidateIdentity(mon) !== candidateIdentity(candidate));
+    const without = await evaluateCandidates(
+      reduced,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    members.push(memberAblationSummary(full, without, candidate.species));
+  }
+  const removable = members.filter(member => !member.mandatoryStarter);
+  const geometricDeltas = removable.map(member => Number(member.geometricDelta || 0));
+  const scoreDeltas = removable.map(member => Number(member.scoreDelta || 0));
+  const coverageDeltas = removable.map(member => Number(member.coverageDelta || 0));
+  return {
+    members,
+    removableMembers: removable.length,
+    positiveGeometricMembers: geometricDeltas.filter(value => value > 1e-9).length,
+    positiveScoreMembers: scoreDeltas.filter(value => value > 1e-9).length,
+    minGeometricDelta: geometricDeltas.length ? Math.min(...geometricDeltas) : 0,
+    meanGeometricDelta: geometricDeltas.length
+      ? geometricDeltas.reduce((sum, value) => sum + value, 0) / geometricDeltas.length
+      : 0,
+    minScoreDelta: scoreDeltas.length ? Math.min(...scoreDeltas) : 0,
+    minCoverageDelta: coverageDeltas.length ? Math.min(...coverageDeltas) : 0,
+  };
+}
+
+function meaningfulCandidateCompare(a, b, objective = 'story-clear') {
+  const aAllPositive = a.contribution.positiveGeometricMembers === a.contribution.removableMembers;
+  const bAllPositive = b.contribution.positiveGeometricMembers === b.contribution.removableMembers;
+  if (aAllPositive !== bAllPositive) return aAllPositive ? -1 : 1;
+
+  if (aAllPositive && bAllPositive) {
+    return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      b.contribution.minGeometricDelta - a.contribution.minGeometricDelta ||
+      b.contribution.meanGeometricDelta - a.contribution.meanGeometricDelta;
+  }
+
+  if (a.contribution.positiveGeometricMembers !== b.contribution.positiveGeometricMembers) {
+    return b.contribution.positiveGeometricMembers - a.contribution.positiveGeometricMembers;
+  }
+  if (a.contribution.minGeometricDelta !== b.contribution.minGeometricDelta) {
+    return b.contribution.minGeometricDelta - a.contribution.minGeometricDelta;
+  }
+  return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
+}
+
+function contributionParetoDominates(a, b) {
+  const aCapture = Number(a.evaluation.captureSearch?.expectedEncounters || 0);
+  const bCapture = Number(b.evaluation.captureSearch?.expectedEncounters || 0);
+  const atLeastAsGood =
+    a.evaluation.storyClearGeometricScore >= b.evaluation.storyClearGeometricScore &&
+    a.evaluation.storyClearCoverageScore >= b.evaluation.storyClearCoverageScore &&
+    a.contribution.positiveGeometricMembers >= b.contribution.positiveGeometricMembers &&
+    a.contribution.minGeometricDelta >= b.contribution.minGeometricDelta &&
+    aCapture <= bCapture;
+  const strictlyBetter =
+    a.evaluation.storyClearGeometricScore > b.evaluation.storyClearGeometricScore ||
+    a.evaluation.storyClearCoverageScore > b.evaluation.storyClearCoverageScore ||
+    a.contribution.positiveGeometricMembers > b.contribution.positiveGeometricMembers ||
+    a.contribution.minGeometricDelta > b.contribution.minGeometricDelta ||
+    aCapture < bCapture;
+  return atLeastAsGood && strictlyBetter;
+}
+
+async function cmdMeaningfulSix() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '1'));
+  const finalRuns = Number(arg('final-runs', '20'));
+  const candidateCap = Number(arg('candidate-cap', '24'));
+  const shortlistCap = Number(arg('shortlist-cap', '24'));
+  const finalistCap = Number(arg('finalist-cap', '8'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) {
+    throw new Error('meaningful-six requires an existing six-member --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const baselineTeam = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(baselineTeam, starterName);
+  if (!starter) throw new Error('meaningful-six baseline must contain the selected starter');
+  if (!validateCandidateTeam(baselineTeam) || !teamRespectsExclusiveGroups(baselineTeam)) {
+    throw new Error('meaningful-six baseline violates team constraints');
+  }
+
+  const screenRows = await screenCandidates(
+    pool.candidates,
+    story,
+    moveAccess,
+    runs,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const eligibleScreenRows = screenRows.filter(row =>
+    row.candidate.exclusiveGroup !== 'starter' ||
+    candidateIdentity(row.candidate) === candidateIdentity(starter)
+  );
+  const screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap, objective)
+    .map(row => row.candidate);
+
+  const neighborhood = [];
+  const seen = new Set();
+  async function addTeam(team, source) {
+    const key = team.map(candidateIdentity).sort().join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    neighborhood.push({ team, evaluation, source });
+  }
+
+  await addTeam(baselineTeam, 'baseline');
+  for (const removed of baselineTeam) {
+    if (candidateIdentity(removed) === candidateIdentity(starter)) continue;
+    const kept = baselineTeam.filter(mon => candidateIdentity(mon) !== candidateIdentity(removed));
+    const existing = new Set(kept.map(candidateIdentity));
+    for (const replacement of screened) {
+      if (existing.has(candidateIdentity(replacement))) continue;
+      if (replacement.exclusiveGroup === 'starter') continue;
+      const team = [...kept, replacement];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      await addTeam(team, `replace:${removed.species}->${replacement.species}`);
+    }
+  }
+
+  const storyRanked = [...neighborhood].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const shortlist = storyRanked.slice(0, Math.max(1, shortlistCap));
+  const usageRanked = [...shortlist].sort((a, b) =>
+    contributionUsageCompare(a.evaluation, b.evaluation) ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const finalists = [];
+  const finalistKeys = new Set();
+  function addFinalist(state) {
+    if (!state || finalists.length >= finalistCap) return;
+    const key = stateTieKey(state);
+    if (finalistKeys.has(key)) return;
+    finalistKeys.add(key);
+    finalists.push(state);
+  }
+  addFinalist(storyRanked.find(state => state.source === 'baseline'));
+  const storySlots = Math.max(1, Math.ceil(finalistCap / 2));
+  for (const state of storyRanked.slice(0, storySlots)) addFinalist(state);
+  for (const state of usageRanked) addFinalist(state);
+  for (const state of storyRanked) addFinalist(state);
+
+  const rescored = [];
+  for (const state of finalists) {
+    const evaluation = await evaluateCandidates(
+      state.team,
+      story.bosses,
+      finalRuns,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    const contribution = await contributionAblation(
+      state.team,
+      evaluation,
+      story,
+      finalRuns,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    rescored.push({
+      team: state.team,
+      source: state.source,
+      evaluation,
+      contribution,
+      usage: contributionUsageSummary(evaluation),
+    });
+  }
+
+  const baseline = rescored.find(row =>
+    row.team.map(candidateIdentity).sort().join('|') ===
+      baselineTeam.map(candidateIdentity).sort().join('|')
+  ) || null;
+  const meaningfulRanked = [...rescored].sort((a, b) =>
+    meaningfulCandidateCompare(a, b, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const pareto = rescored.filter((row, index) =>
+    !rescored.some((other, otherIndex) =>
+      index !== otherIndex && contributionParetoDominates(other, row)
+    )
+  ).sort((a, b) =>
+    meaningfulCandidateCompare(a, b, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  function outputRow(row) {
+    if (!row) return null;
+    return {
+      team: row.team.map(mon => mon.species),
+      source: row.source,
+      evaluation: compactEvaluationForAblation(row.evaluation),
+      usage: row.usage,
+      contribution: row.contribution,
+    };
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; primary story search is unchanged and final member meaning is judged by paired member ablation',
+    version,
+    starter: starter.species,
+    baselineTeam: baselineTeam.map(mon => mon.species),
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    runsPerBoss: runs,
+    finalRunsPerBoss: finalRuns,
+    candidateCap,
+    shortlistCap,
+    finalistCap,
+    screenedCandidates: screened.map(mon => mon.species),
+    neighborhoodEvaluated: neighborhood.length,
+    finalistsEvaluated: rescored.length,
+    baseline: outputRow(baseline),
+    meaningfulTop: outputRow(meaningfulRanked[0]),
+    paretoFront: pareto.map(outputRow),
+    finalists: meaningfulRanked.map(outputRow),
+  }, null, 2));
+}
+
+
 function compactEvaluationForAblation(evaluation) {
   return {
     score: evaluation.score,
@@ -3762,6 +4095,7 @@ const commands = {
   'allocator-cross-compare': cmdAllocatorCrossCompare,
   'team-ablation': cmdTeamAblation,
   'team-usage': cmdTeamUsage,
+  'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -3772,7 +4106,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
