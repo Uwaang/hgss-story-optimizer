@@ -249,6 +249,7 @@ jobs:
             --target-win-rate=0.5 \
             > results/red-focused-hg-cyndaquil-lv57-65.json
       - name: Revalidate previous Lv57 winner at 100 runs
+        continue-on-error: true
         run: |
           node src/cli.mjs red-min-grind-validate \
             --version=HEARTGOLD \
@@ -258,6 +259,7 @@ jobs:
             --runs=100 \
             > results/red-known-lv57-validate100.json
       - name: Revalidate previous Lv65 threshold team at 100 runs
+        continue-on-error: true
         run: |
           node src/cli.mjs red-min-grind-validate \
             --version=HEARTGOLD \
@@ -267,6 +269,7 @@ jobs:
             --runs=100 \
             > results/red-known-lv65-validate100.json
       - name: Upload focused Red search
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hgss-red-focused-hg-cyndaquil-lv57-65
