@@ -695,6 +695,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         breakpointBossHorizon: expContext?.breakpointBossHorizon || 4,
         breakpointLevelLookahead: expContext?.breakpointLevelLookahead || 12,
         breakpointDiscount: expContext?.breakpointDiscount || 0.72,
+        activationTargets: expContext?.activationTargets || [],
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -3464,6 +3465,131 @@ async function cmdMeaningfulSix() {
 }
 
 
+async function cmdTeamActivation() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const targetName = String(arg('target', 'Abra')).trim();
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('target-level', '16')))));
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) throw new Error('team-activation requires --team=A,B,C,D,E,F');
+  if (!Number.isFinite(targetLevel)) throw new Error('Invalid --target-level');
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-activation requires the selected starter in the team');
+  const target = team.find(mon => mon.species === targetName);
+  if (!target) throw new Error(`Activation target not found in team: ${targetName}`);
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('team-activation team violates team constraints');
+  }
+
+  const baseline = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const activatedContext = {
+    ...expContext,
+    activationTargets: [{ key: candidateIdentity(target), level: targetLevel }],
+  };
+  const activated = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    activatedContext,
+    grindPolicy,
+    objective,
+  );
+
+  const baselineByBoss = new Map((baseline.rows || []).map(row => [row.boss, row]));
+  const activatedByBoss = new Map((activated.rows || []).map(row => [row.boss, row]));
+  const bossDeltas = [...baselineByBoss.keys()].map(boss => {
+    const before = baselineByBoss.get(boss);
+    const after = activatedByBoss.get(boss);
+    return {
+      boss,
+      baselineWinRate: Number(before?.winRate || 0),
+      activatedWinRate: Number(after?.winRate || 0),
+      delta: Number(after?.winRate || 0) - Number(before?.winRate || 0),
+      baselineLevels: before?.playerLevels || {},
+      activatedLevels: after?.playerLevels || {},
+    };
+  });
+  const targetKey = candidateIdentity(target);
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'fixed-team activation-breakpoint test using the same natural EXP budget; EXP after target acquisition is preferentially invested until the requested level, then the normal allocator resumes',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    target: target.species,
+    targetKey,
+    targetLevel,
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    baseline: {
+      ...compactEvaluationForAblation(baseline),
+      naturalFinalLevels: baseline.expSchedule?.finalLevels || null,
+      targetUsage: baseline.memberUsage?.[targetKey] || null,
+      activation: baseline.expSchedule?.activationTargets || [],
+      totalActivationExp: Number(baseline.expSchedule?.totalActivationExp || 0),
+    },
+    activated: {
+      ...compactEvaluationForAblation(activated),
+      naturalFinalLevels: activated.expSchedule?.finalLevels || null,
+      targetUsage: activated.memberUsage?.[targetKey] || null,
+      activation: activated.expSchedule?.activationTargets || [],
+      totalActivationExp: Number(activated.expSchedule?.totalActivationExp || 0),
+    },
+    deltas: {
+      score: activated.score - baseline.score,
+      geometric: activated.storyClearGeometricScore - baseline.storyClearGeometricScore,
+      coverage: activated.storyClearCoverageScore - baseline.storyClearCoverageScore,
+      bottom5: activated.bottom5BossWinRate - baseline.bottom5BossWinRate,
+      worst: activated.worstBossWinRate - baseline.worstBossWinRate,
+    },
+    bossDeltas,
+  }, null, 2));
+}
+
+
 function compactEvaluationForAblation(evaluation) {
   return {
     score: evaluation.score,
@@ -4102,6 +4228,7 @@ const commands = {
   'allocator-cross-compare': cmdAllocatorCrossCompare,
   'team-ablation': cmdTeamAblation,
   'team-usage': cmdTeamUsage,
+  'team-activation': cmdTeamActivation,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -4113,7 +4240,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
