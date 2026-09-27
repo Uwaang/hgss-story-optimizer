@@ -25,6 +25,7 @@ on:
           - default
           - allocator-story-matrix
           - allocator-saturation-matrix
+          - allocator-depth-matrix
           - team-ablation
           - team-usage
           - meaningful-six-refinement
@@ -33,6 +34,7 @@ on:
           - counterfactual-specialist-matrix
           - boss-local-oracle-matrix
           - resource-policy-oracle-matrix
+          - red-policy-confirm
           - activation-pilot
           - activation-soft-sweep
           - member-contribution-pilot
@@ -42,6 +44,58 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  allocator_depth_matrix_6:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-depth-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Compare baseline and top-two depth allocator
+        run: |
+          mkdir -p results
+          node src/cli.mjs allocator-depth-compare --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=10 --resources=all --spend-policy=natural --objective=story-clear > results/allocator-depth-${{ matrix.label }}.json
+      - name: Upload allocator depth comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-depth-${{ matrix.label }}
+          path: hgss_story_sim/results/allocator-depth-${{ matrix.label }}.json
+          if-no-files-found: error
+
   allocator_saturation_matrix_6:
     if: (github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-saturation-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
     runs-on: ubuntu-latest
@@ -92,6 +146,38 @@ jobs:
         with:
           name: hgss-allocator-saturation-${{ matrix.label }}
           path: hgss_story_sim/results/allocator-saturation-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  red_policy_confirm_2:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-policy-confirm') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            label: hg
+          - version: SOULSILVER
+            label: ss
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Confirm Cyndaquil Red Larvitar policy signal
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-local-resource-policy-probe --version=${{ matrix.version }} --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --targets=Red --candidates=Larvitar --runs=50 --top-per-boss=1 --candidate-cap=1 > results/red-policy-confirm-${{ matrix.label }}.json
+      - name: Upload Red policy confirmation
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-policy-confirm-${{ matrix.label }}
+          path: hgss_story_sim/results/red-policy-confirm-${{ matrix.label }}.json
           if-no-files-found: error
 
   resource_policy_oracle_matrix_6:
