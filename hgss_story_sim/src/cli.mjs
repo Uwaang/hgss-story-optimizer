@@ -3,9 +3,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { candidateBossUtility, candidateBossUtilityWithMoveAccess, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, optimizePlayerMovesAndBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
-import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
+import { buildCanonicalCandidatePool, buildRedOnlyCandidateForms, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -3096,10 +3096,135 @@ async function cmdSwitchSmoke() {
       `no-switch player policy still switched: ${noSwitchResult.p1VoluntarySwitches}`
     );
   }
+
+  const smartResult = await runBattle(
+    playerTeam,
+    enemyTeam,
+    7331,
+    { p1AiMode: 'smart' },
+  );
+  if (smartResult.p1AiMode !== 'smart') {
+    throw new Error(`Expected smart player policy, got ${smartResult.p1AiMode}`);
+  }
+  if (Number(smartResult.p1Usage?.Mareep?.leadStarts || 0) < 1) {
+    throw new Error(
+      `Expected smart lead selection to prefer Mareep into Totodile: ${JSON.stringify(smartResult.p1Usage)}`
+    );
+  }
+
+  // Arena Trap prevents the weak lead from voluntarily escaping, so this
+  // isolates the post-KO forced-switch policy.
+  const forcedSwitchTeam = [
+    {
+      species: 'Magikarp',
+      level: 5,
+      ability: 'Swift Swim',
+      nature: 'Serious',
+      moves: ['Splash'],
+    },
+    {
+      species: 'Geodude',
+      level: 20,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Tackle', 'Rock Throw'],
+    },
+    {
+      species: 'Chikorita',
+      level: 20,
+      ability: 'Overgrow',
+      nature: 'Serious',
+      moves: ['Razor Leaf', 'Tackle'],
+    },
+  ];
+  const forcedSwitchEnemy = [
+    {
+      species: 'Dugtrio',
+      level: 20,
+      ability: 'Arena Trap',
+      nature: 'Serious',
+      moves: ['Magnitude', 'Scratch'],
+    },
+  ];
+  const forcedSmartResult = await runBattle(
+    forcedSwitchTeam,
+    forcedSwitchEnemy,
+    7332,
+    { p1AiMode: 'smart', p1SmartLead: false },
+  );
+  if (Number(forcedSmartResult.p1ForcedSwitches || 0) < 1) {
+    throw new Error(
+      `Expected at least one smart forced switch after the trapped weak lead faints: ${JSON.stringify(forcedSmartResult)}`
+    );
+  }
+  if (Number(forcedSmartResult.p1Usage?.Chikorita?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected smart forced switch to prefer Chikorita into Dugtrio: ${JSON.stringify(forcedSmartResult.p1Usage)}`
+    );
+  }
+
+  // Choice-lock regression: Jolteon should use Thunderbolt on the first foe,
+  // then switch once Rhydon enters because the locked Electric move is useless.
+  const choiceLockPlayer = [
+    {
+      species: 'Jolteon',
+      level: 45,
+      ability: 'Volt Absorb',
+      item: 'Choice Specs',
+      nature: 'Modest',
+      moves: ['Thunderbolt', 'Shadow Ball', 'Signal Beam', 'Hyper Beam'],
+    },
+    {
+      species: 'Lapras',
+      level: 45,
+      ability: 'Water Absorb',
+      nature: 'Modest',
+      moves: ['Surf', 'Ice Beam', 'Body Slam', 'Confuse Ray'],
+    },
+  ];
+  const choiceLockEnemy = [
+    {
+      species: 'Squirtle',
+      level: 20,
+      ability: 'Torrent',
+      nature: 'Serious',
+      moves: ['Water Gun', 'Tackle'],
+    },
+    {
+      species: 'Rhydon',
+      level: 35,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Earthquake', 'Rock Blast'],
+    },
+  ];
+  const choiceLockResult = await runBattle(
+    choiceLockPlayer,
+    choiceLockEnemy,
+    7333,
+    { p1AiMode: 'smart', p1SmartLead: false },
+  );
+  if (Number(choiceLockResult.p1VoluntarySwitches || 0) < 1) {
+    throw new Error(
+      `Expected smart AI to switch a Choice-locked Jolteon out of Rhydon: ${JSON.stringify(choiceLockResult)}`
+    );
+  }
+  if (Number(choiceLockResult.p1Usage?.Lapras?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected Lapras to appear after the Choice-lock switch: ${JSON.stringify(choiceLockResult.p1Usage)}`
+    );
+  }
+
   if (result.p2VoluntarySwitches !== 0) {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
-  console.log(JSON.stringify({ greedy: result, noSwitch: noSwitchResult }, null, 2));
+  console.log(JSON.stringify({
+    greedy: result,
+    noSwitch: noSwitchResult,
+    smart: smartResult,
+    forcedSmart: forcedSmartResult,
+    choiceLockSmart: choiceLockResult,
+  }, null, 2));
 }
 
 async function cmdAllocatorCrossCompare() {
@@ -5707,6 +5832,1672 @@ async function cmdTmSmoke() {
   }, null, 2));
 }
 
+
+function redCaptureChoice(form, commonLevel) {
+  const level = Math.max(1, Math.min(100, Math.floor(Number(commonLevel || 1))));
+  const options = (form.redCaptureOptions || [])
+    .filter(option =>
+      level >= Number(option.evolutionMinLevel || 1) &&
+      level >= Number(option.minLevel || 1)
+    )
+    .map(option => {
+      const captureLevel = Math.min(level, Number(option.maxLevel || option.minLevel || 1));
+      return {
+        ...option,
+        captureLevel,
+      };
+    })
+    .filter(option => option.captureLevel >= Number(option.minLevel || 1))
+    .sort((a, b) =>
+      Number(b.captureLevel) - Number(a.captureLevel) ||
+      Number(a.evolutionMinLevel || 1) - Number(b.evolutionMinLevel || 1) ||
+      Number(a.expectedEncounters ?? Infinity) - Number(b.expectedEncounters ?? Infinity) ||
+      String(a.captureSpecies).localeCompare(String(b.captureSpecies))
+    );
+  return options[0] || null;
+}
+
+function redFormLevelRow(form, red, commonLevel, moveAccess = null, extraMachines = []) {
+  const capture = redCaptureChoice(form, commonLevel);
+  if (!capture) return null;
+  const targetExp = expAtLevel(form.growthRate, commonLevel);
+  const captureExp = expAtLevel(form.growthRate, capture.captureLevel);
+  if (targetExp === null || captureExp === null) return null;
+  const proxyUtility = moveAccess
+    ? candidateBossUtilityWithMoveAccess(form, red, commonLevel, moveAccess, extraMachines)
+    : candidateBossUtility(form, red, commonLevel);
+  return {
+    form,
+    familyId: form.familyId,
+    species: form.species,
+    commonLevel,
+    capture,
+    grindExp: Math.max(0, targetExp - captureExp),
+    proxyUtility: Math.max(0, Number(proxyUtility || 0)),
+  };
+}
+
+function redFamilyParetoRows(rows) {
+  const byFamily = new Map();
+  for (const row of rows) {
+    const bucket = byFamily.get(row.familyId) || [];
+    bucket.push(row);
+    byFamily.set(row.familyId, bucket);
+  }
+  const out = [];
+  for (const bucket of byFamily.values()) {
+    for (const row of bucket) {
+      const dominated = bucket.some(other =>
+        other !== row &&
+        Number(other.proxyUtility) >= Number(row.proxyUtility) &&
+        Number(other.grindExp) <= Number(row.grindExp) &&
+        (
+          Number(other.proxyUtility) > Number(row.proxyUtility) ||
+          Number(other.grindExp) < Number(row.grindExp)
+        )
+      );
+      if (!dominated) out.push(row);
+    }
+  }
+  return out;
+}
+
+function redTeamKey(rows, level) {
+  return level + ':' + rows
+    .map(row => row.familyId + '/' + row.species)
+    .sort()
+    .join('|');
+}
+
+function redBeamTeams(starterRows, candidateRows, level, beamWidth = 120) {
+  const lambdas = [0, 0.15, 0.35, 0.7, 1.5, 3.0];
+  const candidatePool = [...candidateRows].sort((a, b) =>
+    Number(b.proxyUtility) - Number(a.proxyUtility) ||
+    Number(a.grindExp) - Number(b.grindExp) ||
+    a.familyId.localeCompare(b.familyId) ||
+    a.species.localeCompare(b.species)
+  );
+
+  function keepDiverse(states) {
+    const chosen = new Map();
+    const perView = Math.max(4, Math.ceil(beamWidth / (lambdas.length + 2)));
+    const views = [
+      [...states].sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.totalExp) - Number(b.totalExp)
+      ),
+      [...states].sort((a, b) =>
+        Number(a.totalExp) - Number(b.totalExp) ||
+        Number(b.proxyUtility) - Number(a.proxyUtility)
+      ),
+      ...lambdas.map(lambda => [...states].sort((a, b) => {
+        const aScore = Number(a.proxyUtility) - lambda * (Number(a.totalExp) / 1_000_000);
+        const bScore = Number(b.proxyUtility) - lambda * (Number(b.totalExp) / 1_000_000);
+        return bScore - aScore ||
+          Number(a.totalExp) - Number(b.totalExp);
+      })),
+    ];
+    for (const view of views) {
+      for (const state of view.slice(0, perView)) {
+        const key = redTeamKey(state.members, level);
+        if (!chosen.has(key)) chosen.set(key, state);
+      }
+    }
+    return [...chosen.values()].slice(0, beamWidth);
+  }
+
+  const finals = [];
+  for (const starterRow of starterRows) {
+    let states = [{
+      members: [starterRow],
+      families: new Set([starterRow.familyId]),
+      proxyUtility: Number(starterRow.proxyUtility),
+      totalExp: Number(starterRow.grindExp),
+      lastIndex: -1,
+    }];
+
+    while (states.length && states[0].members.length < 6) {
+      const expanded = [];
+      for (const state of states) {
+        for (let index = state.lastIndex + 1; index < candidatePool.length; index += 1) {
+          const row = candidatePool[index];
+          if (state.families.has(row.familyId)) continue;
+          expanded.push({
+            members: [...state.members, row],
+            families: new Set([...state.families, row.familyId]),
+            proxyUtility: state.proxyUtility + Number(row.proxyUtility),
+            totalExp: state.totalExp + Number(row.grindExp),
+            lastIndex: index,
+          });
+        }
+      }
+      states = keepDiverse(expanded);
+    }
+    finals.push(...states.filter(state => state.members.length === 6));
+  }
+
+  const unique = new Map();
+  for (const state of keepDiverse(finals)) {
+    unique.set(redTeamKey(state.members, level), state);
+  }
+  return [...unique.values()];
+}
+
+function redSearchCandidatePool(levelRows, starterFamily, candidateCap = 42) {
+  const nonStarter = levelRows.filter(row => row.familyId !== starterFamily && row.form?.exclusiveGroup !== 'starter');
+  const selected = new Map();
+  function add(rows) {
+    for (const row of rows) selected.set(row.familyId + '/' + row.species, row);
+  }
+
+  add([...nonStarter]
+    .sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.grindExp) - Number(b.grindExp)
+    )
+    .slice(0, candidateCap));
+  add([...nonStarter]
+    .sort((a, b) => {
+      const ae = Number(a.proxyUtility) / (1 + Number(a.grindExp) / 100000);
+      const be = Number(b.proxyUtility) / (1 + Number(b.grindExp) / 100000);
+      return be - ae || Number(a.grindExp) - Number(b.grindExp);
+    })
+    .slice(0, candidateCap));
+  const useful = nonStarter.filter(row => Number(row.proxyUtility) > 0);
+  add([...useful]
+    .sort((a, b) =>
+      Number(a.grindExp) - Number(b.grindExp) ||
+      Number(b.proxyUtility) - Number(a.proxyUtility)
+    )
+    .slice(0, Math.max(12, Math.floor(candidateCap / 2))));
+
+  return [...selected.values()]
+    .sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.grindExp) - Number(b.grindExp)
+    )
+    .slice(0, Math.max(candidateCap, Math.floor(candidateCap * 1.75)));
+}
+
+const redPlayerBuildCache = new Map();
+
+function redOptimizedPlayerBuild(mon, enemyTeam) {
+  const foeSignature = (enemyTeam || []).map(foe => [
+    foe.species,
+    foe.level,
+    foe.item || '',
+    foe.nature || '',
+    (foe.moves || []).join('/'),
+    JSON.stringify(foe.ivs || {}),
+    JSON.stringify(foe.evs || {}),
+  ].join(':')).join('|');
+  const key = [
+    mon.species,
+    mon.level,
+    mon.ability || '',
+    (mon.moves || []).join('/'),
+    foeSignature,
+    'iv16-maxev-v1',
+  ].join('|');
+
+  let build = redPlayerBuildCache.get(key);
+  if (!build) {
+    const optimized = optimizePlayerBuildForBoss(mon, enemyTeam, { iv: 16 });
+    build = {
+      item: optimized.item || '',
+      nature: optimized.nature,
+      ivs: { ...(optimized.ivs || {}) },
+      evs: { ...(optimized.evs || {}) },
+      buildOptimization: { ...(optimized._buildOptimization || {}) },
+    };
+    redPlayerBuildCache.set(key, build);
+  }
+
+  return {
+    ...mon,
+    item: build.item,
+    nature: build.nature,
+    ivs: { ...build.ivs },
+    evs: { ...build.evs },
+    _buildOptimization: { ...build.buildOptimization, cache: 'in-process' },
+  };
+}
+
+async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase) {
+  const commonLevel = Number(state.members[0]?.commonLevel || 1);
+  const forms = state.members.map(row => row.form);
+  const levels = Object.fromEntries(forms.map(form => [candidateIdentity(form), commonLevel]));
+  const ordered = orderCandidatesForBoss(forms, red, levels);
+  let playerTeam = materializeCandidateTeam(
+    ordered,
+    red.stage,
+    commonLevel,
+    {
+      moveAccess,
+      levelsByCandidate: levels,
+    },
+  );
+
+  const extraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  playerTeam = playerTeam.map(mon => optimizePlayerMovesAndBuildForBoss(
+    mon,
+    enemyTeam,
+    {
+      iv: 16,
+      stage: red.stage,
+      moveAccess,
+      extraMachines,
+      shortlistCap: 12,
+      movesetFinalists: 8,
+    },
+  ));
+
+  const battle = await simulateMatchup(
+    playerTeam,
+    enemyTeam,
+    runs,
+    seedBase,
+    { p2Trainer: red, p1AiMode: 'smart' },
+  );
+  return {
+    key: redTeamKey(state.members, commonLevel),
+    commonLevel,
+    totalGrindExp: Number(state.totalExp),
+    proxyUtility: Number(state.proxyUtility),
+    wins: Number(battle.wins || 0),
+    losses: Number(battle.losses || 0),
+    ties: Number(battle.ties || 0),
+    winRate: Number(battle.winRate || 0),
+    averageTurns: Number(battle.averageTurns || 0),
+    averagePlayerFaints: Number(battle.averageP1Faints || 0),
+    averageRedFaints: Number(battle.averageP2Faints || 0),
+    maxRedFaints: Number(battle.maxP2Faints || 0),
+    team: state.members.map(row => ({
+      familyId: row.familyId,
+      species: row.species,
+      growthRate: row.form.growthRate,
+      captureSpecies: row.capture.captureSpecies,
+      captureLevel: Number(row.capture.captureLevel),
+      captureSource: {
+        type: row.capture.type,
+        map: row.capture.map,
+        method: row.capture.method,
+      },
+      evolutionMinLevel: Number(row.capture.evolutionMinLevel || 1),
+      grindExp: Number(row.grindExp),
+      proxyUtility: Number(row.proxyUtility),
+    })),
+    battleTeam: playerTeam.map(mon => ({
+      species: mon.species,
+      level: Number(mon.level),
+      moves: mon.moves || [],
+      ability: mon.ability || null,
+      item: mon.item || null,
+      nature: mon.nature || null,
+      ivs: mon.ivs || null,
+      evs: mon.evs || null,
+      buildOptimization: mon._buildOptimization || null,
+      movesetOptimization: mon._movesetOptimization || null,
+    })),
+  };
+}
+
+function redSearchEvaluationCompare(a, b) {
+  if (Number(a.winRate || 0) !== Number(b.winRate || 0)) {
+    return Number(b.winRate || 0) - Number(a.winRate || 0);
+  }
+  if (Number(a.averageRedFaints || 0) !== Number(b.averageRedFaints || 0)) {
+    return Number(b.averageRedFaints || 0) - Number(a.averageRedFaints || 0);
+  }
+  if (Number(a.maxRedFaints || 0) !== Number(b.maxRedFaints || 0)) {
+    return Number(b.maxRedFaints || 0) - Number(a.maxRedFaints || 0);
+  }
+  if (Number(a.averagePlayerFaints || 0) !== Number(b.averagePlayerFaints || 0)) {
+    return Number(a.averagePlayerFaints || 0) - Number(b.averagePlayerFaints || 0);
+  }
+  if (Number(a.totalGrindExp || 0) !== Number(b.totalGrindExp || 0)) {
+    return Number(a.totalGrindExp || 0) - Number(b.totalGrindExp || 0);
+  }
+  if (Number(a.proxyUtility || 0) !== Number(b.proxyUtility || 0)) {
+    return Number(b.proxyUtility || 0) - Number(a.proxyUtility || 0);
+  }
+  return String(a.key || '').localeCompare(String(b.key || ''));
+}
+
+function redStateFromMembers(members, commonLevel) {
+  return {
+    members: [...members],
+    commonLevel: Number(commonLevel),
+    proxyUtility: members.reduce((sum, row) => sum + Number(row.proxyUtility || 0), 0),
+    totalExp: members.reduce((sum, row) => sum + Number(row.grindExp || 0), 0),
+  };
+}
+
+function redDeterministicRng(seed) {
+  let state = (Number(seed) >>> 0) || 1;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function redGaInitialStates(starterRows, candidateRows, commonLevel, populationSize, rng, seedStates = []) {
+  const selected = new Map();
+  function addState(state) {
+    if (!state || state.members?.length !== 6) return;
+    selected.set(redTeamKey(state.members, commonLevel), state);
+  }
+
+  for (const state of seedStates || []) addState(state);
+
+  const beamSeeds = redBeamTeams(
+    starterRows,
+    candidateRows,
+    commonLevel,
+    Math.max(populationSize * 4, 80),
+  );
+  for (const state of [...beamSeeds]
+    .sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )
+    .slice(0, Math.max(4, Math.floor(populationSize / 2)))) {
+    addState(state);
+  }
+
+  let attempts = 0;
+  while (selected.size < populationSize && attempts < populationSize * 80) {
+    attempts += 1;
+    const starter = starterRows[Math.floor(rng() * starterRows.length)] || starterRows[0];
+    if (!starter) break;
+    const members = [starter];
+    const families = new Set([starter.familyId]);
+    let guard = 0;
+    while (members.length < 6 && guard < candidateRows.length * 4) {
+      guard += 1;
+      const row = candidateRows[Math.floor(rng() * candidateRows.length)];
+      if (!row || families.has(row.familyId)) continue;
+      members.push(row);
+      families.add(row.familyId);
+    }
+    if (members.length === 6) addState(redStateFromMembers(members, commonLevel));
+  }
+  return [...selected.values()].slice(0, populationSize);
+}
+
+function redGaCrossoverState(parentA, parentB, candidateRows, commonLevel, rng) {
+  const starter = parentA?.members?.[0] || parentB?.members?.[0];
+  if (!starter) return parentA || parentB;
+  const members = [starter];
+  const families = new Set([starter.familyId]);
+  const pool = [
+    ...(parentA?.members || []).slice(1),
+    ...(parentB?.members || []).slice(1),
+  ];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  for (const row of pool) {
+    if (members.length >= 6) break;
+    if (!row || families.has(row.familyId)) continue;
+    members.push(row);
+    families.add(row.familyId);
+  }
+  let guard = 0;
+  while (members.length < 6 && guard < candidateRows.length * 4) {
+    guard += 1;
+    const row = candidateRows[Math.floor(rng() * candidateRows.length)];
+    if (!row || families.has(row.familyId)) continue;
+    members.push(row);
+    families.add(row.familyId);
+  }
+  return members.length === 6
+    ? redStateFromMembers(members, commonLevel)
+    : (parentA || parentB);
+}
+
+function redProjectStateToLevel(sourceState, starterRows, candidateRows, commonLevel) {
+  if (!sourceState?.members?.length) return null;
+  const available = [...starterRows, ...candidateRows];
+  const members = [];
+  const usedFamilies = new Set();
+
+  for (const source of sourceState.members) {
+    const exact = available
+      .filter(row =>
+        row.familyId === source.familyId &&
+        row.species === source.species &&
+        !usedFamilies.has(row.familyId)
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )[0];
+    const familyFallback = available
+      .filter(row =>
+        row.familyId === source.familyId &&
+        !usedFamilies.has(row.familyId)
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )[0];
+    const chosen = exact || familyFallback;
+    if (!chosen) return null;
+    members.push(chosen);
+    usedFamilies.add(chosen.familyId);
+  }
+
+  if (members.length !== 6) return null;
+  return redStateFromMembers(members, commonLevel);
+}
+
+function redGaMutateState(parent, candidateRows, commonLevel, rng) {
+  const members = [...parent.members];
+  if (members.length !== 6) return parent;
+  const mutationCount = rng() < 0.25 ? 2 : 1;
+  for (let mutation = 0; mutation < mutationCount; mutation += 1) {
+    const slot = 1 + Math.floor(rng() * 5);
+    const blocked = new Set(
+      members
+        .filter((_, index) => index !== slot)
+        .map(row => row.familyId)
+    );
+    const legal = candidateRows.filter(row => !blocked.has(row.familyId));
+    if (!legal.length) continue;
+    members[slot] = legal[Math.floor(rng() * legal.length)];
+  }
+  return redStateFromMembers(members, commonLevel);
+}
+
+async function redGaSearchLevel({
+  starterRows,
+  candidateRows,
+  commonLevel,
+  red,
+  enemyTeam,
+  moveAccess,
+  populationSize = 18,
+  generations = 4,
+  searchRuns = 1,
+  seed = 1,
+  seedStates = [],
+}) {
+  const rng = redDeterministicRng(seed);
+  let population = redGaInitialStates(
+    starterRows,
+    candidateRows,
+    commonLevel,
+    populationSize,
+    rng,
+    seedStates,
+  );
+  const cache = new Map();
+
+  async function evaluate(state) {
+    const key = redTeamKey(state.members, commonLevel);
+    if (!cache.has(key)) {
+      cache.set(key, {
+        state,
+        evaluation: await redEvaluateTeam(
+          state,
+          red,
+          enemyTeam,
+          moveAccess,
+          searchRuns,
+          910000 + Number(commonLevel) * 100,
+        ),
+      });
+    }
+    return cache.get(key).evaluation;
+  }
+
+  let ranked = [];
+  for (let generation = 0; generation < generations; generation += 1) {
+    const evaluated = [];
+    for (const state of population) {
+      evaluated.push({ state, evaluation: await evaluate(state) });
+    }
+    evaluated.sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+    ranked = evaluated;
+    if (generation === generations - 1) break;
+
+    const eliteCount = Math.max(3, Math.min(7, Math.ceil(populationSize / 3)));
+    const elites = evaluated.slice(0, eliteCount);
+    const next = new Map();
+    for (const row of elites) {
+      next.set(redTeamKey(row.state.members, commonLevel), row.state);
+    }
+
+    let attempts = 0;
+    while (next.size < populationSize && attempts < populationSize * 60) {
+      attempts += 1;
+      const parentA = elites[Math.floor(rng() * elites.length)]?.state;
+      if (!parentA) break;
+      let child;
+      if (elites.length > 1 && rng() < 0.35) {
+        const parentB = elites[Math.floor(rng() * elites.length)]?.state;
+        child = redGaCrossoverState(parentA, parentB, candidateRows, commonLevel, rng);
+        if (rng() < 0.7) {
+          child = redGaMutateState(child, candidateRows, commonLevel, rng);
+        }
+      } else {
+        child = redGaMutateState(parentA, candidateRows, commonLevel, rng);
+      }
+      next.set(redTeamKey(child.members, commonLevel), child);
+    }
+    population = [...next.values()].slice(0, populationSize);
+  }
+
+  const allEvaluated = [...cache.values()];
+  if (!allEvaluated.length) allEvaluated.push(...ranked);
+  allEvaluated.sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+  return {
+    evaluatedTeamCount: cache.size,
+    best: allEvaluated[0] || ranked[0] || null,
+    top: (allEvaluated.length ? allEvaluated : ranked).slice(0, 4),
+  };
+}
+
+async function cmdRedMinGrindSearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
+  const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '100')))));
+  const candidateCap = Math.max(12, Math.floor(Number(arg('candidate-cap', '42'))));
+  const beamWidth = Math.max(20, Math.floor(Number(arg('beam-width', '120'))));
+  const screenCap = Math.max(20, Math.floor(Number(arg('screen-cap', '120'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '5'))));
+  const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '24'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '50'))));
+  const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+
+  if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
+    throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  const proxyPairs = [];
+  const levelSummaries = [];
+  for (let commonLevel = levelMin; commonLevel <= levelMax; commonLevel += 1) {
+    const levelRows = redFamilyParetoRows(
+      redPool.forms
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+        .filter(Boolean)
+    );
+    const starterRows = levelRows
+      .filter(row =>
+        row.familyId === starterName &&
+        (row.form.redCaptureOptions || []).some(option => option.type === 'starter')
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )
+      .slice(0, 3);
+    if (!starterRows.length) continue;
+
+    const candidates = redSearchCandidatePool(levelRows, starterName, candidateCap);
+    const teams = redBeamTeams(starterRows, candidates, commonLevel, beamWidth)
+      .sort((a, b) =>
+        Number(a.totalExp) - Number(b.totalExp) ||
+        Number(b.proxyUtility) - Number(a.proxyUtility)
+      );
+
+    levelSummaries.push({
+      commonLevel,
+      feasibleForms: levelRows.length,
+      candidateForms: candidates.length,
+      generatedTeams: teams.length,
+      cheapestProxyTeamExp: teams[0]?.totalExp ?? null,
+      strongestProxy: teams.reduce((best, row) => Math.max(best, Number(row.proxyUtility)), 0),
+    });
+    proxyPairs.push(...teams.map(state => ({ ...state, commonLevel })));
+  }
+
+  const byKey = new Map();
+  for (const state of proxyPairs) {
+    const key = redTeamKey(state.members, state.commonLevel);
+    const prior = byKey.get(key);
+    if (!prior || Number(state.proxyUtility) > Number(prior.proxyUtility)) byKey.set(key, state);
+  }
+  const uniquePairs = [...byKey.values()];
+
+  const candidatesForScreen = new Map();
+  const costSorted = [...uniquePairs].sort((a, b) =>
+    Number(a.totalExp) - Number(b.totalExp) ||
+    Number(b.proxyUtility) - Number(a.proxyUtility)
+  );
+  let bestProxySeen = -Infinity;
+  for (const state of costSorted) {
+    if (Number(state.proxyUtility) > bestProxySeen + 1e-12) {
+      candidatesForScreen.set(redTeamKey(state.members, state.commonLevel), state);
+      bestProxySeen = Number(state.proxyUtility);
+    }
+  }
+  for (const state of [...uniquePairs]
+    .sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )
+    .slice(0, Math.floor(screenCap / 3))) {
+    candidatesForScreen.set(redTeamKey(state.members, state.commonLevel), state);
+  }
+  for (const state of [...uniquePairs]
+    .sort((a, b) => {
+      const ae = Number(a.proxyUtility) / (1 + Number(a.totalExp) / 1_000_000);
+      const be = Number(b.proxyUtility) / (1 + Number(b.totalExp) / 1_000_000);
+      return be - ae || Number(a.totalExp) - Number(b.totalExp);
+    })
+    .slice(0, Math.floor(screenCap / 3))) {
+    candidatesForScreen.set(redTeamKey(state.members, state.commonLevel), state);
+  }
+
+  // Preserve strength candidates across the full level range. A final
+  // cheapest-first truncation would otherwise remove all high-level teams
+  // before the real simulator gets a chance to test them.
+  const perLevel = new Map();
+  for (const state of uniquePairs) {
+    const bucket = perLevel.get(Number(state.commonLevel)) || [];
+    bucket.push(state);
+    perLevel.set(Number(state.commonLevel), bucket);
+  }
+  const screenSelected = new Map();
+  function addScreenState(state) {
+    if (!state || screenSelected.size >= screenCap) return;
+    screenSelected.set(redTeamKey(state.members, state.commonLevel), state);
+  }
+
+  for (const level of [...perLevel.keys()].sort((a, b) => a - b)) {
+    const bucket = perLevel.get(level) || [];
+    addScreenState([...bucket].sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )[0]);
+  }
+  for (const level of [...perLevel.keys()].sort((a, b) => a - b)) {
+    if (screenSelected.size >= screenCap) break;
+    const bucket = perLevel.get(level) || [];
+    addScreenState([...bucket].sort((a, b) => {
+      const ae = Number(a.proxyUtility) / (1 + Number(a.totalExp) / 1_000_000);
+      const be = Number(b.proxyUtility) / (1 + Number(b.totalExp) / 1_000_000);
+      return be - ae || Number(a.totalExp) - Number(b.totalExp);
+    })[0]);
+  }
+  for (const state of [...candidatesForScreen.values()]
+    .sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )) {
+    if (screenSelected.size >= screenCap) break;
+    addScreenState(state);
+  }
+  for (const state of costSorted) {
+    if (screenSelected.size >= screenCap) break;
+    addScreenState(state);
+  }
+
+  const screenStates = [...screenSelected.values()];
+
+  const screened = [];
+  for (const state of screenStates) {
+    screened.push(await redEvaluateTeam(
+      state,
+      red,
+      enemyTeam,
+      moveAccess,
+      screenRuns,
+      770001,
+    ));
+  }
+
+  const finalists = new Map();
+  const screenThresholdWins = Math.max(1, Math.ceil(targetWinRate * screenRuns));
+  for (const row of [...screened]
+    .filter(row => row.wins >= Math.max(1, screenThresholdWins - 1))
+    .sort((a, b) =>
+      Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+      Number(b.winRate) - Number(a.winRate)
+    )
+    .slice(0, finalistCap)) {
+    finalists.set(row.key, row);
+  }
+  for (const row of [...screened]
+    .sort((a, b) =>
+      Number(b.winRate) - Number(a.winRate) ||
+      Number(a.totalGrindExp) - Number(b.totalGrindExp)
+    )
+    .slice(0, Math.max(6, Math.floor(finalistCap / 2)))) {
+    finalists.set(row.key, row);
+  }
+
+  const finalRows = [];
+  for (const screenedRow of finalists.values()) {
+    const state = byKey.get(screenedRow.key);
+    if (!state) continue;
+    finalRows.push(await redEvaluateTeam(
+      state,
+      red,
+      enemyTeam,
+      moveAccess,
+      finalRuns,
+      880001,
+    ));
+  }
+  finalRows.sort((a, b) =>
+    Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+    Number(b.winRate) - Number(a.winRate)
+  );
+
+  const targets = [0.5, 0.7, 0.9];
+  const bestByTarget = Object.fromEntries(targets.map(target => {
+    const feasible = finalRows
+      .filter(row => Number(row.winRate) + 1e-12 >= target)
+      .sort((a, b) =>
+        Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+        Number(a.commonLevel) - Number(b.commonLevel) ||
+        Number(b.winRate) - Number(a.winRate)
+      );
+    return [String(target), feasible[0] || null];
+  }));
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'Red-only minimum-grind team search. All six members use one common level; objective cost is the sum of EXP required from the best source-backed capture level at or below that common level to the common level. Story route, other bosses, and route EXP allocation are intentionally ignored.',
+    version,
+    starter: starterName,
+    targetBoss: 'Red',
+    targetBossAceLevel: Number(red.aceLevel || 0),
+    assumptions: {
+      legendaryAndMythical: 'excluded',
+      captureLevel: 'highest source-backed legal capture level at or below the requested common level, using all sources available by Red',
+      evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
+      commonLevel: 'all six battle members have exactly the same level',
+      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently; Red-specific movesets are optimized from the legal pool; route ownership and money are ignored',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/legal-ability/item + Red-specific moveset optimization versus source-guided Red trainer AI',
+    },
+    search: {
+      levelMin,
+      levelMax,
+      candidateCap,
+      beamWidth,
+      generatedProxyPairs: uniquePairs.length,
+      screenCap,
+      screenedTeams: screened.length,
+      screenedLevelMin: screened.length ? Math.min(...screened.map(row => Number(row.commonLevel))) : null,
+      screenedLevelMax: screened.length ? Math.max(...screened.map(row => Number(row.commonLevel))) : null,
+      screenRuns,
+      targetWinRate,
+      finalistCap,
+      finalTeams: finalRows.length,
+      finalRuns,
+    },
+    pool: {
+      formCount: redPool.forms.length,
+      familyCount: redPool.familyCount,
+      notes: redPool.notes,
+    },
+    levelSummaries,
+    bestByTarget,
+    finalResults: finalRows.slice(0, 20),
+  }, null, 2));
+}
+
+async function cmdRedMinGrindGaSearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
+  const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '95')))));
+  const levelStep = Math.max(1, Math.floor(Number(arg('level-step', '4'))));
+  const candidateCap = Math.max(24, Math.floor(Number(arg('candidate-cap', '60'))));
+  const populationSize = Math.max(8, Math.floor(Number(arg('population', '18'))));
+  const generations = Math.max(1, Math.floor(Number(arg('generations', '4'))));
+  const searchRuns = Math.max(1, Math.floor(Number(arg('search-runs', '1'))));
+  const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '18'))));
+  const finalRuns = Math.max(searchRuns, Math.floor(Number(arg('final-runs', '40'))));
+  const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+  const refinePopulation = Math.max(populationSize, Math.floor(Number(arg('refine-population', '28'))));
+  const refineGenerations = Math.max(generations, Math.floor(Number(arg('refine-generations', '6'))));
+  const refineRuns = Math.max(searchRuns, Math.floor(Number(arg('refine-runs', '2'))));
+  const refineLevelCap = Math.max(1, Math.floor(Number(arg('refine-level-cap', '5'))));
+  const crossLevelPopulation = Math.max(8, Math.floor(Number(arg('cross-level-population', '18'))));
+  const crossLevelGenerations = Math.max(1, Math.floor(Number(arg('cross-level-generations', '3'))));
+  const crossLevelRuns = Math.max(1, Math.floor(Number(arg('cross-level-runs', '1'))));
+  const crossLevelSeedCap = Math.max(1, Math.floor(Number(arg('cross-level-seed-cap', '4'))));
+
+  if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
+    throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  function levelInput(commonLevel) {
+    const levelRows = redFamilyParetoRows(
+      redPool.forms
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+        .filter(Boolean)
+    );
+    const starterRows = levelRows
+      .filter(row =>
+        row.familyId === starterName &&
+        (row.form.redCaptureOptions || []).some(option => option.type === 'starter')
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )
+      .slice(0, 3);
+    const candidates = redSearchCandidatePool(levelRows, starterName, candidateCap);
+    return { levelRows, starterRows, candidates };
+  }
+
+  const coarseLevels = [];
+  for (let level = levelMin; level <= levelMax; level += levelStep) coarseLevels.push(level);
+  if (!coarseLevels.includes(levelMax)) coarseLevels.push(levelMax);
+  const redAce = Math.max(levelMin, Math.min(levelMax, Number(red.aceLevel || levelMax)));
+  if (!coarseLevels.includes(redAce)) coarseLevels.push(redAce);
+  coarseLevels.sort((a, b) => a - b);
+
+  const levelResults = new Map();
+  async function runLevel(commonLevel) {
+    if (levelResults.has(commonLevel)) return levelResults.get(commonLevel);
+    const input = levelInput(commonLevel);
+    if (!input.starterRows.length || input.candidates.length < 5) {
+      const skipped = { commonLevel, skipped: true, reason: 'insufficient candidates' };
+      levelResults.set(commonLevel, skipped);
+      return skipped;
+    }
+    const result = await redGaSearchLevel({
+      starterRows: input.starterRows,
+      candidateRows: input.candidates,
+      commonLevel,
+      red,
+      enemyTeam,
+      moveAccess,
+      populationSize,
+      generations,
+      searchRuns,
+      seed: 3000 + commonLevel * 17 + starterName.length * 101,
+    });
+    const row = {
+      commonLevel,
+      feasibleForms: input.levelRows.length,
+      candidateForms: input.candidates.length,
+      evaluatedTeamCount: result.evaluatedTeamCount,
+      best: result.best,
+      top: result.top,
+    };
+    levelResults.set(commonLevel, row);
+    return row;
+  }
+
+  for (const level of coarseLevels) await runLevel(level);
+
+  const coarseBestRows = [...levelResults.values()]
+    .filter(row => row?.best?.evaluation)
+    .map(row => row.best.evaluation);
+  const positive = coarseBestRows
+    .filter(row => Number(row.wins || 0) > 0)
+    .sort((a, b) =>
+      Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+      redSearchEvaluationCompare(a, b)
+    );
+  const reference = positive[0] || [...coarseBestRows].sort(redSearchEvaluationCompare)[0] || null;
+  if (reference) {
+    const radiusBelow = positive.length ? levelStep * 2 : levelStep;
+    const from = Math.max(levelMin, Number(reference.commonLevel) - radiusBelow);
+    const to = Math.min(levelMax, Number(reference.commonLevel) + levelStep * 2);
+    for (let level = from; level <= to; level += 1) await runLevel(level);
+  }
+
+  // Deepen only the lowest levels that already show a credible route through
+  // most of Red's team. This spends the expensive battle budget where it can
+  // actually lower the EXP optimum instead of repeatedly polishing Lv90+ teams.
+  const positiveLevelRows = [...levelResults.values()]
+    .filter(row => Number(row?.best?.evaluation?.wins || 0) > 0)
+    .sort((a, b) => Number(a.commonLevel) - Number(b.commonLevel));
+
+  let promisingLevels = [];
+  const narrowLevelWindow = levelMax - levelMin <= 12;
+  if (narrowLevelWindow) {
+    // For a deliberately focused search (for example Lv57-65), spread the
+    // expensive refinement budget across the whole interval. A single lucky
+    // low-level win should not prevent Lv63-65 from being searched deeply.
+    const source = [...levelResults.values()]
+      .filter(row => row?.best?.evaluation)
+      .sort((a, b) => Number(a.commonLevel) - Number(b.commonLevel));
+    if (source.length <= refineLevelCap) {
+      promisingLevels = source;
+    } else {
+      const chosen = new Map();
+      for (let i = 0; i < refineLevelCap; i += 1) {
+        const index = Math.round(i * (source.length - 1) / Math.max(1, refineLevelCap - 1));
+        const row = source[index];
+        if (row) chosen.set(Number(row.commonLevel), row);
+      }
+      promisingLevels = [...chosen.values()];
+    }
+  } else if (positiveLevelRows.length) {
+    const firstPositiveLevel = Number(positiveLevelRows[0].commonLevel);
+    const lowWindow = positiveLevelRows.filter(
+      row => Number(row.commonLevel) <= firstPositiveLevel + levelStep * 2
+    );
+    const source = lowWindow.length ? lowWindow : positiveLevelRows;
+    if (refineLevelCap === 1 || source.length === 1) {
+      promisingLevels = [source[0]];
+    } else {
+      const chosen = new Map();
+      for (let i = 0; i < refineLevelCap; i += 1) {
+        const index = Math.round(i * (source.length - 1) / Math.max(1, refineLevelCap - 1));
+        const row = source[index];
+        if (row) chosen.set(Number(row.commonLevel), row);
+      }
+      promisingLevels = [...chosen.values()];
+    }
+  } else {
+    promisingLevels = [...levelResults.values()]
+      .filter(row => row?.best?.evaluation)
+      .sort((a, b) =>
+        Number(b.best.evaluation.averageRedFaints || 0) - Number(a.best.evaluation.averageRedFaints || 0) ||
+        Number(a.commonLevel) - Number(b.commonLevel)
+      )
+      .slice(0, refineLevelCap);
+  }
+  const crossLevelRefinedLevels = [];
+  if (narrowLevelWindow) {
+    // Carry good team structures downward through the focused level window.
+    // Independent per-level GA runs can easily miss a strong Lv65 composition
+    // at Lv64 simply because mutation never reconstructs it. Re-materializing
+    // the same families at the lower common level gives the optimizer a smooth
+    // continuation path toward the minimum feasible level.
+    let carryStates = [];
+    const descendingLevels = [...levelResults.keys()].sort((a, b) => b - a);
+    for (const commonLevel of descendingLevels) {
+      const prior = levelResults.get(commonLevel);
+      const input = levelInput(commonLevel);
+      if (!prior?.best?.evaluation || !input.starterRows.length || input.candidates.length < 5) continue;
+
+      const projected = carryStates
+        .map(state => redProjectStateToLevel(
+          state,
+          input.starterRows,
+          input.candidates,
+          commonLevel,
+        ))
+        .filter(Boolean);
+      const ownSeeds = (prior.top || []).map(row => row.state).filter(Boolean);
+      const seedMap = new Map();
+      for (const state of [...projected, ...ownSeeds]) {
+        seedMap.set(redTeamKey(state.members, commonLevel), state);
+      }
+      const seedStates = [...seedMap.values()].slice(0, Math.max(crossLevelSeedCap, 2));
+
+      const descended = await redGaSearchLevel({
+        starterRows: input.starterRows,
+        candidateRows: input.candidates,
+        commonLevel,
+        red,
+        enemyTeam,
+        moveAccess,
+        populationSize: crossLevelPopulation,
+        generations: crossLevelGenerations,
+        searchRuns: crossLevelRuns,
+        seed: 9100 + commonLevel * 37 + starterName.length * 149,
+        seedStates,
+      });
+
+      const combinedTop = [
+        ...(prior.top || []),
+        ...(descended.top || []),
+      ].sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+      levelResults.set(commonLevel, {
+        ...prior,
+        crossLevelRefined: true,
+        evaluatedTeamCount:
+          Number(prior.evaluatedTeamCount || 0) +
+          Number(descended.evaluatedTeamCount || 0),
+        best: combinedTop[0] || descended.best || prior.best,
+        top: combinedTop.slice(0, 10),
+      });
+      crossLevelRefinedLevels.push(commonLevel);
+      carryStates = combinedTop
+        .map(row => row.state)
+        .filter(Boolean)
+        .slice(0, crossLevelSeedCap);
+    }
+  }
+
+  const refinedLevels = [];
+
+  for (const prior of promisingLevels) {
+    const commonLevel = Number(prior.commonLevel);
+    const input = levelInput(commonLevel);
+    if (!input.starterRows.length || input.candidates.length < 5) continue;
+    const refined = await redGaSearchLevel({
+      starterRows: input.starterRows,
+      candidateRows: input.candidates,
+      commonLevel,
+      red,
+      enemyTeam,
+      moveAccess,
+      populationSize: refinePopulation,
+      generations: refineGenerations,
+      searchRuns: refineRuns,
+      seed: 7300 + commonLevel * 29 + starterName.length * 131,
+      seedStates: (prior.top || []).map(row => row.state).filter(Boolean),
+    });
+    refinedLevels.push(commonLevel);
+    const combinedTop = [
+      ...(prior.top || []),
+      ...(refined.top || []),
+    ].sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+    const best = combinedTop[0] || refined.best || prior.best;
+    levelResults.set(commonLevel, {
+      ...prior,
+      refined: true,
+      evaluatedTeamCount: Number(prior.evaluatedTeamCount || 0) + Number(refined.evaluatedTeamCount || 0),
+      best,
+      top: combinedTop.slice(0, 8),
+    });
+  }
+
+  const searchCandidates = [];
+  for (const row of levelResults.values()) {
+    for (const top of row?.top || []) {
+      if (top?.state && top?.evaluation) searchCandidates.push(top);
+    }
+  }
+
+  const finalistMap = new Map();
+  function addFinalist(row) {
+    if (!row?.state || !row?.evaluation || finalistMap.size >= finalistCap) return;
+    finalistMap.set(row.evaluation.key, row);
+  }
+
+  if (narrowLevelWindow) {
+    for (const level of [...levelResults.keys()].sort((a, b) => a - b)) {
+      const row = [...searchCandidates]
+        .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+        .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[0];
+      addFinalist(row);
+    }
+  }
+
+  // First guarantee at least one validation candidate from the earliest levels
+  // where the short search has ever beaten Red. This is essential because the
+  // objective is minimum EXP, not maximum raw win rate at high level.
+  const positiveLevelsForValidation = [...new Set(
+    searchCandidates
+      .filter(row => Number(row.evaluation.wins || 0) > 0)
+      .map(row => Number(row.evaluation.commonLevel))
+  )].sort((a, b) => a - b);
+  const positiveLevelBudget = Math.max(3, Math.min(6, Math.floor(finalistCap / 2)));
+  for (const level of positiveLevelsForValidation.slice(0, positiveLevelBudget)) {
+    const row = [...searchCandidates]
+      .filter(candidate =>
+        Number(candidate.evaluation.commonLevel) === level &&
+        Number(candidate.evaluation.wins || 0) > 0
+      )
+      .sort((a, b) =>
+        Number(a.evaluation.totalGrindExp) - Number(b.evaluation.totalGrindExp) ||
+        redSearchEvaluationCompare(a.evaluation, b.evaluation)
+      )[0];
+    addFinalist(row);
+  }
+
+  // Reserve extra slots for adaptively refined states. Give every refined
+  // level one slot before taking second-best candidates.
+  for (const level of refinedLevels) {
+    const row = [...searchCandidates]
+      .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[0];
+    addFinalist(row);
+  }
+  for (const level of refinedLevels) {
+    const row = [...searchCandidates]
+      .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[1];
+    addFinalist(row);
+  }
+
+  // Cheapest observed winners are next, then strongest/deepest candidates.
+  for (const row of [...searchCandidates]
+    .filter(row => Number(row.evaluation.wins || 0) > 0)
+    .sort((a, b) =>
+      Number(a.evaluation.totalGrindExp) - Number(b.evaluation.totalGrindExp) ||
+      Number(a.evaluation.commonLevel) - Number(b.evaluation.commonLevel) ||
+      redSearchEvaluationCompare(a.evaluation, b.evaluation)
+    )
+    .slice(0, finalistCap)) addFinalist(row);
+
+  for (const row of [...searchCandidates]
+    .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))
+    .slice(0, finalistCap)) addFinalist(row);
+
+  for (const row of [...searchCandidates]
+    .sort((a, b) =>
+      Number(b.evaluation.averageRedFaints || 0) - Number(a.evaluation.averageRedFaints || 0) ||
+      Number(a.evaluation.totalGrindExp) - Number(b.evaluation.totalGrindExp)
+    )
+    .slice(0, finalistCap)) addFinalist(row);
+
+  const finalRows = [];
+  for (const row of finalistMap.values()) {
+    finalRows.push(await redEvaluateTeam(
+      row.state,
+      red,
+      enemyTeam,
+      moveAccess,
+      finalRuns,
+      990001,
+    ));
+  }
+  finalRows.sort((a, b) =>
+    Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+    Number(b.winRate) - Number(a.winRate)
+  );
+
+  const targets = [0.5, 0.7, 0.9];
+  const bestByTarget = Object.fromEntries(targets.map(target => {
+    const feasible = finalRows
+      .filter(row => Number(row.winRate) + 1e-12 >= target)
+      .sort((a, b) =>
+        Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+        Number(a.commonLevel) - Number(b.commonLevel) ||
+        Number(b.winRate) - Number(a.winRate)
+      );
+    return [String(target), feasible[0] || null];
+  }));
+
+  console.log(JSON.stringify({
+    schemaVersion: 2,
+    purpose: 'Red-only minimum-grind search using battle-guided genetic/local mutation search. All six members share one level; route progression and all other bosses are ignored.',
+    method: {
+      name: 'battle-guided genetic search',
+      referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real Red battle outcomes rather than story-wide greedy EXP allocation',
+      fitnessOrder: ['winRate', 'average Red fainted', 'max Red fainted', 'fewer player faints', 'lower total grind EXP'],
+    },
+    version,
+    starter: starterName,
+    targetBoss: 'Red',
+    targetBossAceLevel: Number(red.aceLevel || 0),
+    assumptions: {
+      legendaryAndMythical: 'excluded',
+      captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by Red',
+      evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
+      commonLevel: 'all six members exactly equal level',
+      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and Red-specific moveset optimization versus source-guided Red AI',
+    },
+    search: {
+      levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
+      coarseLevels,
+      evaluatedLevels: [...levelResults.keys()].sort((a, b) => a - b),
+      refinePopulation,
+      refineGenerations,
+      refineRuns,
+      refineLevelCap,
+      crossLevelPopulation,
+      crossLevelGenerations,
+      crossLevelRuns,
+      crossLevelSeedCap,
+      crossLevelRefinedLevels,
+      refinedLevels,
+      finalistCap,
+      finalRuns,
+      targetWinRate,
+    },
+    pool: {
+      formCount: redPool.forms.length,
+      familyCount: redPool.familyCount,
+      notes: redPool.notes,
+    },
+    bestByTarget,
+    finalResults: finalRows.slice(0, 20),
+    levelResults: [...levelResults.values()]
+      .sort((a, b) => Number(a.commonLevel) - Number(b.commonLevel))
+      .map(row => ({
+        commonLevel: row.commonLevel,
+        skipped: Boolean(row.skipped),
+        feasibleForms: row.feasibleForms ?? null,
+        candidateForms: row.candidateForms ?? null,
+        evaluatedTeamCount: row.evaluatedTeamCount ?? 0,
+        best: row.best?.evaluation ? {
+          winRate: row.best.evaluation.winRate,
+          wins: row.best.evaluation.wins,
+          averageRedFaints: row.best.evaluation.averageRedFaints,
+          maxRedFaints: row.best.evaluation.maxRedFaints,
+          totalGrindExp: row.best.evaluation.totalGrindExp,
+          team: row.best.evaluation.team.map(mon => mon.species),
+        } : null,
+      })),
+  }, null, 2));
+}
+
+
+
+
+async function cmdRedMinGrindLocalSwapSearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '62')))));
+  const teamNames = String(
+    arg('team', 'Typhlosion,Quagsire,Tyranitar,Corsola,Rhyperior,Cloyster')
+  ).split(',').map(value => value.trim()).filter(Boolean);
+  const candidateCap = Math.max(24, Math.floor(Number(arg('candidate-cap', '84'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '4'))));
+  const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '20'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '100'))));
+  const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+
+  if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
+    throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
+  }
+  if (teamNames.length !== 6) {
+    throw new Error('red-min-grind-local-swap-search requires exactly six anchor species');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  const levelRows = redFamilyParetoRows(
+    redPool.forms
+      .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+      .filter(Boolean)
+  );
+
+  function rowForSpecies(name) {
+    return levelRows
+      .filter(row => row.species === name)
+      .sort((a, b) =>
+        Number(a.grindExp) - Number(b.grindExp) ||
+        Number(b.proxyUtility) - Number(a.proxyUtility)
+      )[0] || null;
+  }
+
+  const anchorRows = teamNames.map(rowForSpecies);
+  if (anchorRows.some(row => !row)) {
+    throw new Error(
+      'Anchor contains species unavailable at the requested level: ' +
+      teamNames.filter((_, index) => !anchorRows[index]).join(', ')
+    );
+  }
+  if (new Set(anchorRows.map(row => row.familyId)).size !== 6) {
+    throw new Error('Anchor team contains duplicate evolution families');
+  }
+  if (anchorRows.filter(row => row.familyId === starterName).length !== 1) {
+    throw new Error('Anchor must contain exactly the selected starter family');
+  }
+  if (anchorRows.some(row => row.form?.exclusiveGroup === 'starter' && row.familyId !== starterName)) {
+    throw new Error('Anchor contains an unselected starter family');
+  }
+
+  // Put the selected starter in slot 0 so local mutation never removes it.
+  const starterIndex = anchorRows.findIndex(row => row.familyId === starterName);
+  const orderedAnchor = [
+    anchorRows[starterIndex],
+    ...anchorRows.filter((_, index) => index !== starterIndex),
+  ];
+  const anchorState = redStateFromMembers(orderedAnchor, commonLevel);
+
+  const candidateRows = redSearchCandidatePool(levelRows, starterName, candidateCap);
+  const states = new Map();
+  function addState(state) {
+    if (!state || state.members?.length !== 6) return;
+    states.set(redTeamKey(state.members, commonLevel), state);
+  }
+  addState(anchorState);
+
+  for (let slot = 1; slot < 6; slot += 1) {
+    const blockedFamilies = new Set(
+      orderedAnchor
+        .filter((_, index) => index !== slot)
+        .map(row => row.familyId)
+    );
+    for (const candidate of candidateRows) {
+      if (!candidate || candidate.form?.exclusiveGroup === 'starter') continue;
+      if (blockedFamilies.has(candidate.familyId)) continue;
+      const members = [...orderedAnchor];
+      members[slot] = candidate;
+      addState(redStateFromMembers(members, commonLevel));
+    }
+  }
+
+  const screenResults = [];
+  for (const state of states.values()) {
+    screenResults.push({
+      state,
+      evaluation: await redEvaluateTeam(
+        state,
+        red,
+        enemyTeam,
+        moveAccess,
+        screenRuns,
+        1550001,
+      ),
+    });
+  }
+  screenResults.sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+
+  const finalists = new Map();
+  function addFinalist(row) {
+    if (!row?.state || !row?.evaluation || finalists.size >= finalistCap) return;
+    finalists.set(row.evaluation.key, row);
+  }
+
+  // Always independently revalidate the anchor.
+  addFinalist(screenResults.find(row => row.evaluation.key === redTeamKey(anchorState.members, commonLevel)));
+
+  // Most promising battle outcomes.
+  for (const row of screenResults.slice(0, Math.max(6, Math.ceil(finalistCap * 0.65)))) {
+    addFinalist(row);
+  }
+
+  // Preserve cheap near-winners because minimum EXP is the primary objective.
+  for (const row of [...screenResults]
+    .filter(row =>
+      Number(row.evaluation.wins || 0) > 0 ||
+      Number(row.evaluation.averageRedFaints || 0) >= 5
+    )
+    .sort((a, b) =>
+      Number(a.evaluation.totalGrindExp) - Number(b.evaluation.totalGrindExp) ||
+      redSearchEvaluationCompare(a.evaluation, b.evaluation)
+    )) {
+    addFinalist(row);
+    if (finalists.size >= finalistCap) break;
+  }
+
+  const finalResults = [];
+  for (const row of finalists.values()) {
+    finalResults.push(await redEvaluateTeam(
+      row.state,
+      red,
+      enemyTeam,
+      moveAccess,
+      finalRuns,
+      1660001,
+    ));
+  }
+  finalResults.sort((a, b) =>
+    Number(b.winRate) - Number(a.winRate) ||
+    Number(a.totalGrindExp) - Number(b.totalGrindExp)
+  );
+
+  const feasible = finalResults
+    .filter(row => Number(row.winRate) + 1e-12 >= targetWinRate)
+    .sort((a, b) =>
+      Number(a.totalGrindExp) - Number(b.totalGrindExp) ||
+      Number(b.winRate) - Number(a.winRate)
+    );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'one-slot local neighborhood search around a proven Red team, with independent high-run validation',
+    version,
+    starter: starterName,
+    commonLevel,
+    anchorTeam: orderedAnchor.map(row => row.species),
+    search: {
+      candidateCap,
+      candidateForms: candidateRows.length,
+      generatedNeighbors: states.size,
+      screenRuns,
+      finalistCap,
+      finalRuns,
+      targetWinRate,
+    },
+    anchorScreen: screenResults.find(
+      row => row.evaluation.key === redTeamKey(anchorState.members, commonLevel)
+    )?.evaluation || null,
+    bestAtTarget: feasible[0] || null,
+    finalResults,
+  }, null, 2));
+}
+
+async function cmdRedBattleModelSanity() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(
+    arg('team', 'Typhlosion,Kingdra,Seaking,Lanturn,Hitmonlee,Electivire')
+  ).split(',').map(value => value.trim()).filter(Boolean);
+  const levels = String(arg('levels', '50,55,60,65,70'))
+    .split(',')
+    .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))))
+    .filter(Number.isFinite);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+  if (teamNames.length !== 6) {
+    throw new Error('red-battle-model-sanity requires exactly six target species');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  const results = [];
+  for (const commonLevel of levels) {
+    const rows = teamNames.map(name => {
+      const candidates = redPool.forms
+        .filter(form => form.species === name)
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+        .filter(Boolean)
+        .sort((a, b) =>
+          Number(a.grindExp) - Number(b.grindExp) ||
+          Number(b.proxyUtility) - Number(a.proxyUtility)
+        );
+      return candidates[0] || null;
+    });
+    if (rows.some(row => !row)) {
+      results.push({
+        commonLevel,
+        status: 'unavailable-form-at-level',
+        missing: teamNames.filter((_, index) => !rows[index]),
+      });
+      continue;
+    }
+    const familyIds = rows.map(row => row.familyId);
+    if (new Set(familyIds).size !== 6) {
+      throw new Error('red-battle-model-sanity team contains duplicate evolution families');
+    }
+    if (rows.filter(row => row.familyId === starterName).length !== 1) {
+      throw new Error('sanity team must contain exactly the selected starter family');
+    }
+    const state = redStateFromMembers(rows, commonLevel);
+    results.push({
+      status: 'evaluated',
+      ...(await redEvaluateTeam(
+        state,
+        red,
+        enemyTeam,
+        moveAccess,
+        runs,
+        1440001 + commonLevel * 100,
+      )),
+    });
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'low-level calibration of the Red-only player model before deeper team-search tuning',
+    version,
+    starter: starterName,
+    team: teamNames,
+    levels,
+    runsPerLevel: runs,
+    assumptions: {
+      ivs: 'all stats fixed at 16',
+      evs: 'max practical 252/252/4 spread selected per Pokemon from a compact candidate set',
+      nature: 'selected per Pokemon from offensive, speed, defensive, and neutral candidates',
+      heldItems: 'allowed and selected from a conservative Gen-4 shortlist; acquisition cost ignored',
+      bagItems: 'disabled for the player',
+      commonLevel: 'all six members have exactly the same level',
+      expCost: 'source-backed capture level to common level',
+      playerAi: 'smart',
+    },
+    results,
+  }, null, 2));
+}
+
+async function cmdRedMinGrindValidate() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  if (teamNames.length !== 6) {
+    throw new Error('red-min-grind-validate requires exactly six target species via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
+  const rows = teamNames.map(name => {
+    const candidates = redPool.forms
+      .filter(form => form.species === name)
+      .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+      .filter(Boolean)
+      .sort((a, b) =>
+        Number(a.grindExp) - Number(b.grindExp) ||
+        Number(b.proxyUtility) - Number(a.proxyUtility)
+      );
+    if (!candidates.length) {
+      throw new Error('Red-only form not available at requested level: ' + name);
+    }
+    return candidates[0];
+  });
+
+  const familyIds = rows.map(row => row.familyId);
+  if (new Set(familyIds).size !== 6) {
+    throw new Error('red-min-grind-validate team contains duplicate evolution families');
+  }
+  const starterRows = rows.filter(row => row.familyId === starterName);
+  if (starterRows.length !== 1) {
+    throw new Error('team must contain exactly the selected starter family: ' + starterName);
+  }
+  if (rows.some(row => row.form?.exclusiveGroup === 'starter' && row.familyId !== starterName)) {
+    throw new Error('team contains an unselected starter family');
+  }
+
+  const state = redStateFromMembers(rows, commonLevel);
+  const evaluation = await redEvaluateTeam(
+    state,
+    red,
+    enemyTeam,
+    moveAccess,
+    runs,
+    1234001,
+  );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'high-run validation of an explicit Red-only equal-level team with capture-level-aware EXP cost',
+    version,
+    starter: starterName,
+    commonLevel,
+    runs,
+    evaluation,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -5770,6 +7561,11 @@ const commands = {
   'counterfactual-specialist-probe': cmdCounterfactualSpecialistProbe,
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
+  'red-min-grind-search': cmdRedMinGrindSearch,
+  'red-min-grind-ga-search': cmdRedMinGrindGaSearch,
+  'red-min-grind-validate': cmdRedMinGrindValidate,
+  'red-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
+  'red-battle-model-sanity': cmdRedBattleModelSanity,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -5781,7 +7577,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-min-grind-local-swap-search, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();

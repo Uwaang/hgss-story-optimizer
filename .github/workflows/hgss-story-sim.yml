@@ -2,6 +2,11 @@ name: HGSS story simulator
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  HGSS_SOURCE_CACHE_DIR: ${{ github.workspace }}/hgss_story_sim/.cache/source
+
+concurrency:
+  group: hgss-story-sim-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 on:
   push:
@@ -23,6 +28,11 @@ on:
         type: choice
         options:
           - default
+          - red-min-grind-pilot
+          - red-model-sanity
+          - red-focused-search
+          - red-local-swap-search
+          - red-min-grind-matrix
           - allocator-story-matrix
           - allocator-saturation-matrix
           - allocator-depth-matrix
@@ -44,6 +54,301 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  red_min_grind_matrix_6:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-matrix'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Search minimum-grind Red team
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-ga-search --version=${{ matrix.version }} --starter=${{ matrix.starter }} --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-${{ matrix.label }}.json
+      - name: Validate best observed 50 percent team at 100 runs
+        shell: bash
+        run: |
+          FILE=results/red-min-grind-${{ matrix.label }}.json
+          TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
+          LEVEL=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(String(v.commonLevel));" "$FILE")
+          if [ -n "$TEAM" ] && [ -n "$LEVEL" ]; then
+            node src/cli.mjs red-min-grind-validate --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team="$TEAM" --level="$LEVEL" --runs=100 > results/red-min-grind-${{ matrix.label }}-validate100.json
+          else
+            echo '{"status":"no-50-percent-finalist"}' > results/red-min-grind-${{ matrix.label }}-validate100.json
+          fi
+      - name: Upload Red minimum-grind matrix result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-min-grind-${{ matrix.label }}
+          path: hgss_story_sim/results/red-min-grind-${{ matrix.label }}*.json
+          if-no-files-found: error
+
+  red_min_grind_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-pilot'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Search HG Cyndaquil minimum-grind Red team
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-ga-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 --refine-population=22 --refine-generations=4 --refine-runs=1 --refine-level-cap=3 > results/red-min-grind-hg-cyndaquil.json
+      - name: Upload Red minimum-grind pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-min-grind-hg-cyndaquil
+          path: hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
+          if-no-files-found: error
+
+  red_model_sanity:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-model-sanity'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Calibrate Red player model at low levels
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-battle-model-sanity --version=HEARTGOLD --starter=Cyndaquil --levels=50,55,60,65,70 --runs=5 > results/red-battle-model-sanity-hg-cyndaquil.json
+      - name: Upload Red player-model sanity
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-battle-model-sanity-hg-cyndaquil
+          path: hgss_story_sim/results/red-battle-model-sanity-hg-cyndaquil.json
+          if-no-files-found: error
+
+  red_focused_search:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Focused Lv60-65 Red search with 100-run finalists
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-ga-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level-min=60 \
+            --level-max=65 \
+            --level-step=1 \
+            --candidate-cap=84 \
+            --population=28 \
+            --generations=6 \
+            --search-runs=2 \
+            --cross-level-population=22 \
+            --cross-level-generations=4 \
+            --cross-level-runs=2 \
+            --cross-level-seed-cap=6 \
+            --refine-population=40 \
+            --refine-generations=7 \
+            --refine-runs=2 \
+            --refine-level-cap=6 \
+            --finalist-cap=18 \
+            --final-runs=100 \
+            --target-win-rate=0.5 \
+            > results/red-focused-hg-cyndaquil-lv60-65.json
+      - name: Revalidate previous Lv57 winner at 100 runs
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Ampharos,Rhyperior \
+            --level=57 \
+            --runs=100 \
+            > results/red-known-lv57-validate100.json
+      - name: Project current Lv65 winner to Lv63
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
+            --level=63 \
+            --runs=100 \
+            > results/red-current-winner-lv63-validate100.json
+      - name: Project current Lv65 winner to Lv64
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
+            --level=64 \
+            --runs=100 \
+            > results/red-current-winner-lv64-validate100.json
+      - name: Revalidate current Lv65 winner at 100 runs
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
+            --level=65 \
+            --runs=100 \
+            > results/red-current-winner-lv65-validate100.json
+      - name: Upload focused Red search
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-focused-hg-cyndaquil-lv60-65
+          path: hgss_story_sim/results/red-*.json
+          if-no-files-found: error
+
+  red_local_swap_search:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-local-swap-search'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Lv62 one-slot neighborhood search
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-local-swap-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=62 \
+            --team=Typhlosion,Quagsire,Tyranitar,Corsola,Rhyperior,Cloyster \
+            --candidate-cap=84 \
+            --screen-runs=4 \
+            --finalist-cap=20 \
+            --final-runs=100 \
+            --target-win-rate=0.5 \
+            > results/red-local-swap-hg-cyndaquil-lv62.json
+      - name: Upload local Red neighborhood result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-local-swap-hg-cyndaquil-lv62
+          path: hgss_story_sim/results/red-local-swap-hg-cyndaquil-lv62.json
+          if-no-files-found: error
+
   allocator_depth_matrix_6:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-depth-matrix'
     runs-on: ubuntu-latest
@@ -83,8 +388,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Compare baseline and top-two depth allocator
         run: |
           mkdir -p results
@@ -135,8 +454,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Compare baseline and saturation allocator
         run: |
           mkdir -p results
@@ -167,8 +500,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Confirm Cyndaquil Red Larvitar policy signal
         run: |
           mkdir -p results
@@ -225,8 +572,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Run resource and player-policy hard-boss oracle
         run: |
           mkdir -p results
@@ -277,8 +638,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Run boss-local fixed-state oracle
         run: |
           mkdir -p results
@@ -329,8 +704,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Probe hard-wall specialist replacements
         run: |
           mkdir -p results
@@ -381,8 +770,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Build boss interaction matrix
         run: |
           mkdir -p results
@@ -405,8 +808,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Build HG Cyndaquil boss interaction matrix
         run: |
           mkdir -p results
@@ -428,8 +845,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Syntax check
         run: |
           node --check src/hgss-data.mjs
@@ -473,6 +904,8 @@ jobs:
         run: npm run route-smoke
       - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Red-only min-grind smoke test
+        run: node src/cli.mjs red-min-grind-search --version=HEARTGOLD --starter=Cyndaquil --level-min=80 --level-max=80 --candidate-cap=12 --beam-width=24 --screen-cap=12 --screen-runs=1 --finalist-cap=4 --final-runs=1 --target-win-rate=0.5 > /tmp/red-min-grind-smoke.json
       - name: Boss-local oracle smoke test
         run: node src/cli.mjs boss-local-oracle-probe --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --runs=1 --targets=Misty --candidates=Magnemite --candidate-cap=1 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > /tmp/boss-local-oracle-smoke.json
       - name: Player matchup switching smoke test
@@ -578,8 +1011,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize ${{ matrix.expAllocator }} allocator
         run: |
           mkdir -p results
@@ -606,8 +1053,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize soft allocator scale ${{ matrix.softScale }}
         run: |
           mkdir -p results
@@ -633,8 +1094,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize fine soft scale ${{ matrix.softScale }}
         run: |
           mkdir -p results
@@ -661,8 +1136,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize story-clear with ${{ matrix.expAllocator }} allocator
         run: |
           mkdir -p results
@@ -690,8 +1179,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize story-clear soft scale ${{ matrix.softScale }}
         run: |
           mkdir -p results
@@ -719,8 +1222,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize all-resource story-clear with ${{ matrix.expAllocator }}
         run: |
           mkdir -p results
@@ -748,8 +1265,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Compare soft baseline vs Abra level-16 activation
         run: |
           mkdir -p results
@@ -772,8 +1303,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Compare baseline vs Abra level-16 activation
         run: |
           mkdir -p results
@@ -796,8 +1341,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Refine HG Cyndaquil six-member team by one-slot swaps
         run: |
           mkdir -p results
@@ -820,8 +1379,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize HG Cyndaquil with contribution-aware final rerank
         run: |
           mkdir -p results
@@ -844,8 +1417,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize HG Cyndaquil with contribution-aware reranking
         run: |
           mkdir -p results
@@ -878,8 +1465,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Ablate candidate team
         run: |
           mkdir -p results
@@ -907,8 +1508,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Refine only Abra slot at 20 runs
         run: |
           mkdir -p results
@@ -953,8 +1568,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Measure member usage for ${{ matrix.version }} ${{ matrix.starter }}
         run: |
           mkdir -p results
@@ -999,8 +1628,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Ablate members for ${{ matrix.version }} ${{ matrix.starter }}
         run: |
           mkdir -p results
@@ -1029,8 +1672,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize ${{ matrix.version }} ${{ matrix.starter }} with ${{ matrix.expAllocator }}
         run: |
           mkdir -p results
@@ -1058,8 +1715,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize ${{ matrix.version }} ${{ matrix.starter }} story-clear
         run: |
           mkdir -p results
@@ -1088,8 +1759,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Validate ${{ matrix.version }} ${{ matrix.starter }} with denser sampling
         run: |
           mkdir -p results
@@ -1114,8 +1799,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Run fixed-team allocator 2x2 cross-test
         run: |
           mkdir -p results
@@ -1142,8 +1841,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize HG Cyndaquil with ${{ matrix.expAllocator }} EXP
         run: |
           mkdir -p results
@@ -1166,8 +1879,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Run controlled trainer AI A/B
         run: |
           mkdir -p results
@@ -1190,8 +1917,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize HG Cyndaquil through Red with source-backed trainer AI
         run: |
           mkdir -p results
@@ -1219,8 +1960,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Optimize through Red for ${{ matrix.version }} ${{ matrix.starter }}
         run: |
           mkdir -p results
@@ -1243,8 +1998,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --no-fund
       - name: Run current-vs-expanded convergence benchmark
         run: |
           mkdir -p results

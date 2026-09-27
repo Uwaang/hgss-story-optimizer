@@ -478,6 +478,301 @@ export async function buildCanonicalCandidatePool({
   };
 }
 
+
+const LEGENDARY_OR_MYTHICAL_SPECIES = new Set([
+  'Articuno', 'Zapdos', 'Moltres', 'Mewtwo', 'Mew',
+  'Raikou', 'Entei', 'Suicune', 'Lugia', 'Ho-Oh', 'Celebi',
+  'Regirock', 'Regice', 'Registeel', 'Latias', 'Latios',
+  'Kyogre', 'Groudon', 'Rayquaza', 'Jirachi', 'Deoxys',
+  'Uxie', 'Mesprit', 'Azelf', 'Dialga', 'Palkia', 'Heatran',
+  'Regigigas', 'Giratina', 'Cresselia', 'Phione', 'Manaphy',
+  'Darkrai', 'Shaymin', 'Arceus',
+]);
+
+function levelRequirementForEvolution(evo) {
+  const method = String(evo?.method || '');
+  const raw = Number(evo?.param);
+  if (method.startsWith('EVO_LEVEL') && Number.isFinite(raw) && raw > 0) return raw;
+  return 1;
+}
+
+function evolutionAllowedInHgssRedExperiment(evo) {
+  const method = String(evo?.method || '');
+  // These methods name Diamond/Pearl/Platinum-only field mechanics in the
+  // pinned HGSS evolution table. They cannot be triggered inside HGSS itself.
+  // Trade, trade-item, stone, friendship, move, party-member, gender and
+  // time-of-day evolutions remain allowed because this experiment ignores
+  // route effort but still requires an HGSS-feasible species.
+  return !new Set([
+    'EVO_CORONET',
+    'EVO_ETERNA',
+    'EVO_ROUTE217',
+    'EVO_BEAUTY',
+  ]).has(method);
+}
+
+function manualSpeciesConstant(name) {
+  const special = {
+    "Farfetch'd": 'SPECIES_FARFETCHD',
+    'Mr. Mime': 'SPECIES_MR_MIME',
+    'Mime Jr.': 'SPECIES_MIME_JR',
+    'Nidoran-F': 'SPECIES_NIDORAN_F',
+    'Nidoran-M': 'SPECIES_NIDORAN_M',
+    'Ho-Oh': 'SPECIES_HO_OH',
+    'Porygon-Z': 'SPECIES_PORYGON_Z',
+  };
+  if (special[name]) return special[name];
+  return 'SPECIES_' + String(name).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+export async function buildRedOnlyCandidateForms({
+  commit,
+  bosses,
+  access,
+  version = 'HEARTGOLD',
+  targetBossLabel = 'Red',
+  excludeLegendary = true,
+}) {
+  if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
+    throw new Error('version must be HEARTGOLD or SOULSILVER');
+  }
+  const targetBoss = (bosses || []).find(boss => boss.label === targetBossLabel);
+  if (!targetBoss) throw new Error('Target boss not found: ' + targetBossLabel);
+  const maxStage = Number(targetBoss.stage);
+
+  const [encounterJson, headbuttJson, evoJson, personalJson] = await Promise.all([
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/arc/headbutt.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/evo.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
+  ]);
+  const encounterByMap = buildEncounterIndex(encounterJson.encounters || []);
+  const headbuttByMap = new Map((headbuttJson.tables || []).map(row => [row.Map, row]));
+  const growthBySpecies = new Map((personalJson.baseStats || []).map(row => [
+    `SPECIES_${row.species}`,
+    row.growthRate,
+  ]));
+  const evoByBase = new Map((evoJson.evoTable || []).map(row => [row.baseSpecies, row.evos || []]));
+  const parentByTarget = new Map();
+  for (const row of evoJson.evoTable || []) {
+    for (const evo of row.evos || []) {
+      if (evo.target && evo.target !== 'SPECIES_NONE' && !parentByTarget.has(evo.target)) {
+        parentByTarget.set(evo.target, row.baseSpecies);
+      }
+    }
+  }
+
+  const directCaptureBySpecies = new Map();
+  function addDirectCapture(speciesConst, option) {
+    if (!speciesConst || speciesConst === 'SPECIES_NONE') return;
+    const bucket = directCaptureBySpecies.get(speciesConst) || [];
+    const key = [
+      option.type || '',
+      option.map || '',
+      option.method || '',
+      option.stage ?? '',
+      option.minLevel ?? '',
+      option.maxLevel ?? '',
+      option.exclusiveGroup || '',
+    ].join('|');
+    if (!bucket.some(row => row._key === key)) bucket.push({ ...option, _key: key });
+    directCaptureBySpecies.set(speciesConst, bucket);
+  }
+
+  const cumulativeMaps = new Set();
+  const methods = Object.keys(access.methodUnlockStage || {}).filter(method => method !== 'headbutt');
+  for (const stageDef of access.stages || []) {
+    const stage = Number(stageDef.stage);
+    if (stage > maxStage) break;
+    for (const map of stageDef.addMaps || []) cumulativeMaps.add(map);
+
+    for (const map of cumulativeMaps) {
+      const encounter = encounterByMap.get(map);
+      if (encounter) {
+        for (const method of methods) {
+          if (stage < Number(access.methodUnlockStage?.[method] ?? 99)) continue;
+          for (const entry of methodEntries(encounter, method, version)) {
+            addDirectCapture(entry.speciesConst, {
+              type: 'wild',
+              map,
+              method,
+              stage,
+              minLevel: entry.minLevel,
+              maxLevel: entry.maxLevel,
+              encounterProbability: entry.encounterProbability,
+              expectedEncounters: entry.expectedEncounters,
+            });
+          }
+        }
+      }
+
+      const headbuttUnlock = Number(access.methodUnlockStage?.headbutt ?? 99);
+      if (stage >= headbuttUnlock) {
+        const table = headbuttByMap.get(map);
+        for (const entry of headbuttEntries(table, version)) {
+          addDirectCapture(entry.speciesConst, {
+            type: 'headbutt',
+            map,
+            method: 'headbutt',
+            stage,
+            minLevel: entry.minLevel,
+            maxLevel: entry.maxLevel,
+            encounterProbability: entry.encounterProbability,
+            expectedEncounters: entry.expectedEncounters,
+          });
+        }
+      }
+    }
+  }
+
+  for (const manual of access.manualAcquisitions || []) {
+    if (Number(manual.availableFrom || 0) > maxStage) continue;
+    const level = Number(manual.level);
+    if (!Number.isFinite(level)) continue;
+    addDirectCapture(manualSpeciesConstant(manual.species), {
+      type: manual.source || 'manual',
+      map: manual.map || null,
+      method: manual.source || 'manual',
+      stage: Number(manual.availableFrom || 0),
+      minLevel: level,
+      maxLevel: level,
+      exclusiveGroup: manual.exclusiveGroup || null,
+      note: manual.note || null,
+    });
+  }
+
+  const formMap = new Map();
+  function recordReachableForm(captureSpeciesConst, captureOption, targetSpeciesConst, evolutionMinLevel, path) {
+    const targetName = constantToName(targetSpeciesConst, 'SPECIES_');
+    const rootName = familyRoot(targetSpeciesConst, parentByTarget);
+    if (
+      excludeLegendary &&
+      (LEGENDARY_OR_MYTHICAL_SPECIES.has(targetName) || LEGENDARY_OR_MYTHICAL_SPECIES.has(rootName))
+    ) {
+      return;
+    }
+    const key = `${rootName}|${targetName}`;
+    const row = formMap.get(key) || {
+      species: targetName,
+      familyId: rootName,
+      growthRate: growthBySpecies.get(targetSpeciesConst) || growthBySpecies.get(captureSpeciesConst) || null,
+      availableFrom: 0,
+      exclusiveGroup: null,
+      redCaptureOptions: [],
+      evolutionPaths: [],
+    };
+    if (captureOption.exclusiveGroup === 'starter') row.exclusiveGroup = 'starter';
+    row.redCaptureOptions.push({
+      captureSpecies: constantToName(captureSpeciesConst, 'SPECIES_'),
+      targetSpecies: targetName,
+      evolutionMinLevel,
+      path: path.map(speciesConst => constantToName(speciesConst, 'SPECIES_')),
+      type: captureOption.type,
+      map: captureOption.map,
+      method: captureOption.method,
+      stage: captureOption.stage,
+      minLevel: captureOption.minLevel,
+      maxLevel: captureOption.maxLevel,
+      encounterProbability: captureOption.encounterProbability ?? null,
+      expectedEncounters: captureOption.expectedEncounters ?? null,
+    });
+    row.evolutionPaths.push({
+      captureSpecies: constantToName(captureSpeciesConst, 'SPECIES_'),
+      targetSpecies: targetName,
+      minLevel: evolutionMinLevel,
+      path: path.map(speciesConst => constantToName(speciesConst, 'SPECIES_')),
+    });
+    formMap.set(key, row);
+  }
+
+  for (const [captureSpeciesConst, captureOptions] of directCaptureBySpecies.entries()) {
+    for (const captureOption of captureOptions) {
+      const queue = [{
+        speciesConst: captureSpeciesConst,
+        evolutionMinLevel: 1,
+        path: [captureSpeciesConst],
+      }];
+      const bestThreshold = new Map();
+
+      while (queue.length) {
+        const current = queue.shift();
+        const prior = bestThreshold.get(current.speciesConst);
+        if (prior !== undefined && prior <= current.evolutionMinLevel) continue;
+        bestThreshold.set(current.speciesConst, current.evolutionMinLevel);
+        recordReachableForm(
+          captureSpeciesConst,
+          captureOption,
+          current.speciesConst,
+          current.evolutionMinLevel,
+          current.path,
+        );
+
+        for (const evo of evoByBase.get(current.speciesConst) || []) {
+          if (!evo.target || evo.target === 'SPECIES_NONE') continue;
+          if (!evolutionAllowedInHgssRedExperiment(evo)) continue;
+          if (current.path.includes(evo.target)) continue;
+          const requiredLevel = levelRequirementForEvolution(evo);
+          queue.push({
+            speciesConst: evo.target,
+            evolutionMinLevel: Math.max(current.evolutionMinLevel, requiredLevel),
+            path: [...current.path, evo.target],
+          });
+        }
+      }
+    }
+  }
+
+  const forms = [...formMap.values()].map(row => {
+    const options = row.redCaptureOptions
+      .filter(option =>
+        Number.isFinite(Number(option.minLevel)) &&
+        Number.isFinite(Number(option.maxLevel))
+      )
+      .sort((a, b) =>
+        Number(b.maxLevel) - Number(a.maxLevel) ||
+        Number(a.evolutionMinLevel) - Number(b.evolutionMinLevel) ||
+        String(a.captureSpecies).localeCompare(String(b.captureSpecies))
+      );
+    const entryLevelMin = options.length
+      ? Math.min(...options.map(option => Number(option.minLevel)))
+      : null;
+    const entryLevelMax = options.length
+      ? Math.max(...options.map(option => Number(option.maxLevel)))
+      : null;
+    return {
+      ...row,
+      entryLevelMin,
+      entryLevelMax,
+      redCaptureOptions: options,
+      evolutionPaths: row.evolutionPaths
+        .sort((a, b) =>
+          Number(a.minLevel) - Number(b.minLevel) ||
+          a.captureSpecies.localeCompare(b.captureSpecies)
+        ),
+    };
+  }).filter(row => row.redCaptureOptions.length && row.growthRate);
+
+  forms.sort((a, b) =>
+    a.familyId.localeCompare(b.familyId) ||
+    a.species.localeCompare(b.species)
+  );
+
+  return {
+    version,
+    targetBoss: targetBoss.label,
+    targetStage: maxStage,
+    excludeLegendary,
+    forms,
+    familyCount: new Set(forms.map(row => row.familyId)).size,
+    notes: [
+      'Capture options include every source-backed wild/headbutt/manual level available by Red, not only the earliest story source.',
+      'For a requested common level, the search may use the highest legal capture level at or below that common level.',
+      'Trade/stone/friendship and other HGSS-feasible non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold. DPPt-only field evolutions (magnetic field, Moss/Ice Rock, Beauty) are excluded.',
+      'Legendary and mythical species are excluded by a curated Gen 1-4 set when excludeLegendary=true.',
+    ],
+  };
+}
+
 export function validateCandidateTeam(team) {
   const exclusive = new Set();
   const families = new Set();

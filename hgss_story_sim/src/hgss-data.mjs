@@ -1,3 +1,7 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+
 const DEFAULT_PRET_COMMIT = '9d8b7591f09b65804da2fb2dfd56f320633e0d36';
 const PRET_RAW_ROOT = 'https://raw.githubusercontent.com/pret/pokeheartgold';
 
@@ -10,7 +14,25 @@ export function pretUrls(commit = DEFAULT_PRET_COMMIT) {
   };
 }
 
+function sourceCachePath(url) {
+  const root = String(process.env.HGSS_SOURCE_CACHE_DIR || '').trim();
+  if (!root) return null;
+  const text = String(url || '');
+  if (!text.startsWith('https://raw.githubusercontent.com/pret/pokeheartgold/')) return null;
+  const hash = createHash('sha256').update(text).digest('hex');
+  return path.join(root, hash.slice(0, 2), hash + '.txt');
+}
+
 export async function fetchText(url) {
+  const cachePath = sourceCachePath(url);
+  if (cachePath) {
+    try {
+      return await fs.readFile(cachePath, 'utf8');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+
   const headers = { 'user-agent': 'hgss-story-sim/0.1' };
   if (process.env.GITHUB_TOKEN && String(url).startsWith('https://api.github.com/')) {
     headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
@@ -20,7 +42,17 @@ export async function fetchText(url) {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} while fetching ${url}`);
   }
-  return response.text();
+  const text = await response.text();
+
+  if (cachePath) {
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    try {
+      await fs.writeFile(cachePath, text, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+  return text;
 }
 
 export function parseTrainerConstants(headerText) {
