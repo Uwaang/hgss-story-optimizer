@@ -4270,14 +4270,21 @@ async function cmdCounterfactualSpecialistProbe() {
         replacementWinRate,
         delta: replacementWinRate - baselineWinRate,
         revivedObservedZero: Number(before?.wins || 0) === 0 && Number(after?.wins || 0) > 0,
-        replacement: bossLevelAndLoadout(
-          evaluation,
-          team,
-          replacement,
-          boss,
-          story,
-          moveAccess,
-        ),
+        replacement: {
+          ...bossLevelAndLoadout(
+            evaluation,
+            team,
+            replacement,
+            boss,
+            story,
+            moveAccess,
+          ),
+          usage: bossUsageForCandidate(
+            evaluation,
+            candidateIdentity(replacement),
+            boss.label,
+          ),
+        },
       };
     });
 
