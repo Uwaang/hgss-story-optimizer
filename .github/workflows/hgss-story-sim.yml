@@ -457,7 +457,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        level: [55, 57, 60]
+        level: [57]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -482,6 +482,8 @@ jobs:
             --screen-runs=1 \
             --final-cap=6 \
             --final-runs=8 \
+            --hybrid-runs=2 \
+            --hybrid-pre-cap=72 \
             > results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
       - name: Upload level search
         uses: actions/upload-artifact@v4
