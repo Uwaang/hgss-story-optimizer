@@ -4133,8 +4133,13 @@ function counterfactualCandidatePool({
 }
 
 function bossLevelAndLoadout(evaluation, team, candidate, boss, story, moveAccess) {
-  const battleIndex = story.bosses.findIndex(item => item.label === boss.label);
-  const levelsBefore = evaluation?.expSchedule?.battles?.[battleIndex]?.levelsBefore || {};
+  // evaluation.rows follows the actually materialized route. story.bosses can contain
+  // version/route entries omitted from that route, so indexing expSchedule with the
+  // global story index can drift (most visibly for Kanto bosses).
+  const battleIndex = (evaluation?.rows || []).findIndex(row => row.boss === boss.label);
+  const levelsBefore = battleIndex >= 0
+    ? evaluation?.expSchedule?.battles?.[battleIndex]?.levelsBefore || {}
+    : {};
   const key = candidateIdentity(candidate);
   const level = Number(levelsBefore[key]);
   const effectiveMoveAccess = resourceMoveAccessVariants(moveAccess)
