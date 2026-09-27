@@ -6242,7 +6242,17 @@ function targetBossBuildScore(mon) {
   );
 }
 
-function optimizeTargetBossTeamBuilds(baseTeam, enemyTeam, targetBoss, moveAccess, extraMachines) {
+function optimizeTargetBossTeamBuilds(
+  baseTeam,
+  enemyTeam,
+  targetBoss,
+  moveAccess,
+  extraMachines,
+  {
+    shortlistCap = 12,
+    movesetFinalists = 8,
+  } = {},
+) {
   const policy = targetBossHeldItemPolicy(targetBoss?.stage);
   const bannedBySlot = baseTeam.map(() => new Set(policy.unavailable || []));
 
@@ -6256,8 +6266,8 @@ function optimizeTargetBossTeamBuilds(baseTeam, enemyTeam, targetBoss, moveAcces
         stage: targetBoss.stage,
         moveAccess,
         extraMachines,
-        shortlistCap: 12,
-        movesetFinalists: 8,
+        shortlistCap,
+        movesetFinalists,
         excludedItems: [...excluded],
       },
     );
@@ -6325,7 +6335,15 @@ function optimizeTargetBossTeamBuilds(baseTeam, enemyTeam, targetBoss, moveAcces
   };
 }
 
-async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase) {
+async function redEvaluateTeam(
+  state,
+  red,
+  enemyTeam,
+  moveAccess,
+  runs,
+  seedBase,
+  buildSearch = {},
+) {
   const commonLevel = Number(state.members[0]?.commonLevel || 1);
   const forms = state.members.map(row => row.form);
   const levels = Object.fromEntries(forms.map(form => [candidateIdentity(form), commonLevel]));
@@ -6359,6 +6377,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     red,
     moveAccess,
     extraMachines,
+    buildSearch,
   );
   playerTeam = optimizedBuilds.team;
 
@@ -7406,6 +7425,10 @@ async function cmdRedMinGrindGaSearch() {
 
 async function cmdRedMinGrindLocalSwapSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '62')))));
   const teamNames = String(
@@ -7416,17 +7439,23 @@ async function cmdRedMinGrindLocalSwapSearch() {
   const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '20'))));
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '100'))));
   const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+  const moveShortlistCap = Math.max(8, Math.min(20, Math.floor(Number(arg('move-shortlist-cap', '12')))));
+  const movesetFinalists = Math.max(4, Math.min(32, Math.floor(Number(arg('moveset-finalists', '8')))));
+  const buildSearch = { shortlistCap: moveShortlistCap, movesetFinalists };
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
   }
   if (teamNames.length !== 6) {
-    throw new Error('red-min-grind-local-swap-search requires exactly six anchor species');
+    throw new Error('boss-min-grind-local-swap-search requires exactly six anchor species');
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7434,7 +7463,8 @@ async function cmdRedMinGrindLocalSwapSearch() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7519,6 +7549,7 @@ async function cmdRedMinGrindLocalSwapSearch() {
         moveAccess,
         screenRuns,
         1550001,
+        buildSearch,
       ),
     });
   }
@@ -7561,6 +7592,7 @@ async function cmdRedMinGrindLocalSwapSearch() {
       moveAccess,
       finalRuns,
       1660001,
+      buildSearch,
     ));
   }
   finalResults.sort((a, b) =>
@@ -7577,9 +7609,12 @@ async function cmdRedMinGrindLocalSwapSearch() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'one-slot local neighborhood search around a proven Red team, with independent high-run validation',
+    purpose: 'one-slot local neighborhood search around a proven target-boss team, with deeper build search and independent high-run validation',
     version,
     starter: starterName,
+    targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     commonLevel,
     anchorTeam: orderedAnchor.map(row => row.species),
     search: {
@@ -7590,6 +7625,8 @@ async function cmdRedMinGrindLocalSwapSearch() {
       finalistCap,
       finalRuns,
       targetWinRate,
+      moveShortlistCap,
+      movesetFinalists,
     },
     anchorScreen: screenResults.find(
       row => row.evaluation.key === redTeamKey(anchorState.members, commonLevel)
@@ -7709,6 +7746,9 @@ async function cmdRedMinGrindValidate() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  const moveShortlistCap = Math.max(8, Math.min(20, Math.floor(Number(arg('move-shortlist-cap', '12')))));
+  const movesetFinalists = Math.max(4, Math.min(32, Math.floor(Number(arg('moveset-finalists', '8')))));
+  const buildSearch = { shortlistCap: moveShortlistCap, movesetFinalists };
   if (teamNames.length !== 6) {
     throw new Error('red-min-grind-validate requires exactly six target species via --team=A,B,C,D,E,F');
   }
@@ -7774,6 +7814,7 @@ async function cmdRedMinGrindValidate() {
     moveAccess,
     runs,
     1234001,
+    buildSearch,
   );
 
   console.log(JSON.stringify({
@@ -7786,6 +7827,7 @@ async function cmdRedMinGrindValidate() {
     targetBossStage: Number(red.stage),
     commonLevel,
     runs,
+    buildSearch,
     evaluation,
   }, null, 2));
 }
@@ -7859,6 +7901,7 @@ const commands = {
   'red-min-grind-validate': cmdRedMinGrindValidate,
   'boss-min-grind-validate': cmdRedMinGrindValidate,
   'red-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
+  'boss-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
   'red-battle-model-sanity': cmdRedBattleModelSanity,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
@@ -7871,7 +7914,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-min-grind-local-swap-search, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-min-grind-local-swap-search, boss-min-grind-local-swap-search, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
