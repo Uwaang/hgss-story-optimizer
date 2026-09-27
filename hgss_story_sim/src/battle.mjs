@@ -491,6 +491,7 @@ export function optimizePlayerMovesAndBuildForBoss(
     extraMachines = [],
     shortlistCap = 12,
     movesetFinalists = 8,
+    excludedItems = [],
   } = {},
 ) {
   const pool = candidateMovePool(
@@ -504,18 +505,28 @@ export function optimizePlayerMovesAndBuildForBoss(
   const abilityCandidates = legalGen4Abilities(mon.species);
   if (!abilityCandidates.length && mon.ability) abilityCandidates.push(mon.ability);
   if (!abilityCandidates.length) abilityCandidates.push('');
+  const excludedItemIds = new Set(
+    (excludedItems || []).map(item => dex.items.get(item || '').id).filter(Boolean),
+  );
+  const buildItems = RED_BUILD_ITEMS.filter(item =>
+    !excludedItemIds.has(dex.items.get(item || '').id)
+  );
   if (!pool.length) {
     let bestFallback = null;
     for (const ability of abilityCandidates) {
       const built = optimizePlayerBuildForBoss(
         { ...mon, ability, moves: ['Tackle'] },
         foeTeam,
-        { iv },
+        { iv, items: buildItems },
       );
       const score = playerBuildScore(built, foeTeam);
       if (!bestFallback || score > bestFallback.score) bestFallback = { built, score };
     }
-    return bestFallback?.built || optimizePlayerBuildForBoss({ ...mon, moves: ['Tackle'] }, foeTeam, { iv });
+    return bestFallback?.built || optimizePlayerBuildForBoss(
+      { ...mon, moves: ['Tackle'] },
+      foeTeam,
+      { iv, items: buildItems },
+    );
   }
 
   const foeSignature = (foeTeam || []).map(foe =>
@@ -531,7 +542,8 @@ export function optimizePlayerMovesAndBuildForBoss(
     foeSignature,
     shortlistCap,
     movesetFinalists,
-    'red-moves-build-v1',
+    [...excludedItemIds].sort().join(','),
+    'target-boss-moves-build-v2',
   ].join('||');
   if (redMoveBuildOptimizationCache.has(cacheKey)) {
     const cached = redMoveBuildOptimizationCache.get(cacheKey);
@@ -600,7 +612,7 @@ export function optimizePlayerMovesAndBuildForBoss(
       const built = optimizePlayerBuildForBoss(
         { ...mon, ability, moves: candidate.moves },
         foeTeam,
-        { iv },
+        { iv, items: buildItems },
       );
       const buildScore = playerBuildScore(built, foeTeam);
       const builtMovesetScore = redMovesetProxyScore(built, candidate.moves, foeTeam);
@@ -637,7 +649,7 @@ export function optimizePlayerMovesAndBuildForBoss(
       moveAccess,
       extraMachines,
       mon._captureSpecies || mon.species,
-    ) }, foeTeam, { iv })),
+    ) }, foeTeam, { iv, items: buildItems })),
     _movesetOptimization: {
       mode: 'target-boss-specific-shortlist-enumeration',
       legalMoveCount: pool.length,
