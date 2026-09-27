@@ -1022,6 +1022,8 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
+    let p1Faints = 0;
+    let p2Faints = 0;
     for await (const chunk of streams.omniscient) {
       for (const line of chunk.split('\n')) {
         const parts = line.split('|');
@@ -1046,8 +1048,11 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
           }
         }
         if (event === 'faint' && actor.startsWith('p1')) {
+          p1Faints += 1;
           const key = p1UsageKey(actor, p1KeyByDisplayName);
           if (key && p1Usage[key]) p1Usage[key].faints += 1;
+        } else if (event === 'faint' && actor.startsWith('p2')) {
+          p2Faints += 1;
         }
         if (line.startsWith('|turn|')) {
           turns = Number(parts[2] || turns);
@@ -1058,7 +1063,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       }
       if (winner) break;
     }
-    return { winner, turns };
+    return { winner, turns, p1Faints, p2Faints };
   })();
 
   await streams.omniscient.write(`>start ${JSON.stringify({ formatid: 'gen4customgame', seed: seedArray(seed) })}\n` +
@@ -1094,6 +1099,9 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2ForcedSwitches = 0;
   let totalP2MoveDecisions = 0;
   let totalP2TrainerItemUses = 0;
+  let totalP1Faints = 0;
+  let totalP2Faints = 0;
+  let maxP2Faints = 0;
   const p1Usage = {};
   let p1AiMode = options.p1AiMode || 'greedy';
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
@@ -1108,6 +1116,9 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
     totalP2MoveDecisions += result.p2MoveDecisions || 0;
     totalP2TrainerItemUses += result.p2TrainerItemsUsed?.length || 0;
+    totalP1Faints += Number(result.p1Faints || 0);
+    totalP2Faints += Number(result.p2Faints || 0);
+    maxP2Faints = Math.max(maxP2Faints, Number(result.p2Faints || 0));
     for (const [key, usage] of Object.entries(result.p1Usage || {})) {
       const aggregate = p1Usage[key] || {
         runsAvailable: 0,
@@ -1159,6 +1170,9 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
     averageP2MoveDecisions: totalP2MoveDecisions / runs,
     averageP2TrainerItemUses: totalP2TrainerItemUses / runs,
+    averageP1Faints: totalP1Faints / runs,
+    averageP2Faints: totalP2Faints / runs,
+    maxP2Faints,
     p1Usage,
     p1AiMode,
     p2AiMode,
