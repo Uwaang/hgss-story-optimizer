@@ -444,26 +444,11 @@ jobs:
             --levels=30,40,50,57,60 \
             --runs=3 \
             > results/hg-cyndaquil-equal-level-route-pilot.json
-      - name: HG Cyndaquil equal-level team search pilot
-        run: |
-          node src/cli.mjs equal-level-story-search \
-            --version=HEARTGOLD \
-            --starter=Cyndaquil \
-            --level=57 \
-            --candidate-cap=18 \
-            --beam-width=18 \
-            --proxy-finalists=10 \
-            --screen-runs=1 \
-            --final-cap=4 \
-            --final-runs=8 \
-            > results/hg-cyndaquil-equal-level-search-lv57.json
       - name: Upload equal-level pilot
         uses: actions/upload-artifact@v4
         with:
           name: hg-cyndaquil-equal-level-route-pilot
-          path: |
-            hgss_story_sim/results/hg-cyndaquil-equal-level-route-pilot.json
-            hgss_story_sim/results/hg-cyndaquil-equal-level-search-lv57.json
+          path: hgss_story_sim/results/hg-cyndaquil-equal-level-route-pilot.json
           if-no-files-found: error
 
 
@@ -472,7 +457,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        level: [45, 50, 55, 57, 60]
+        level: [55, 57, 60]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -491,11 +476,11 @@ jobs:
             --version=HEARTGOLD \
             --starter=Cyndaquil \
             --level=${{ matrix.level }} \
-            --candidate-cap=18 \
-            --beam-width=18 \
-            --proxy-finalists=10 \
+            --candidate-cap=24 \
+            --beam-width=24 \
+            --proxy-finalists=14 \
             --screen-runs=1 \
-            --final-cap=4 \
+            --final-cap=6 \
             --final-runs=8 \
             > results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
       - name: Upload level search
