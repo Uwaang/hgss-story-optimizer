@@ -466,6 +466,45 @@ jobs:
             hgss_story_sim/results/hg-cyndaquil-equal-level-search-lv57.json
           if-no-files-found: error
 
+
+  equal_level_story_level_matrix:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [45, 50, 55, 57, 60]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Search equal-level team
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=${{ matrix.level }} \
+            --candidate-cap=18 \
+            --beam-width=18 \
+            --proxy-finalists=10 \
+            --screen-runs=1 \
+            --final-cap=4 \
+            --final-runs=8 \
+            > results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
+      - name: Upload level search
+        uses: actions/upload-artifact@v4
+        with:
+          name: hg-cyndaquil-equal-level-search-lv${{ matrix.level }}
+          path: hgss_story_sim/results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
