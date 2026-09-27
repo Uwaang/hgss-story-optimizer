@@ -31,6 +31,7 @@ on:
           - red-min-grind-pilot
           - red-model-sanity
           - red-focused-search
+          - red-local-swap-search
           - red-min-grind-matrix
           - allocator-story-matrix
           - allocator-saturation-matrix
@@ -201,7 +202,7 @@ jobs:
           if-no-files-found: error
 
   red_focused_search:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -298,6 +299,54 @@ jobs:
         with:
           name: hgss-red-focused-hg-cyndaquil-lv60-65
           path: hgss_story_sim/results/red-*.json
+          if-no-files-found: error
+
+  red_local_swap_search:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-local-swap-search') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Lv62 one-slot neighborhood search
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-local-swap-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=62 \
+            --team=Typhlosion,Quagsire,Tyranitar,Corsola,Rhyperior,Cloyster \
+            --candidate-cap=84 \
+            --screen-runs=4 \
+            --finalist-cap=20 \
+            --final-runs=100 \
+            --target-win-rate=0.5 \
+            > results/red-local-swap-hg-cyndaquil-lv62.json
+      - name: Upload local Red neighborhood result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-local-swap-hg-cyndaquil-lv62
+          path: hgss_story_sim/results/red-local-swap-hg-cyndaquil-lv62.json
           if-no-files-found: error
 
   allocator_depth_matrix_6:
