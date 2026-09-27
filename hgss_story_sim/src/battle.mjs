@@ -1084,9 +1084,12 @@ function previewDefensiveAbilityMultiplier(target, move, defenderSpecies) {
   const effectiveness = 2 ** dex.getEffectiveness(move, defenderSpecies);
 
   if (id === 'levitate' && type === 'Ground') return 0;
-  if (['waterabsorb', 'stormdrain', 'dryskin'].includes(id) && type === 'Water') return 0;
-  if (['voltabsorb', 'lightningrod', 'motordrive'].includes(id) && type === 'Electric') return 0;
+  // In Gen 4, Storm Drain and Lightning Rod only redirect attacks in
+  // doubles; their immunity/stat-boost behavior starts in Gen 5.
+  if (['waterabsorb', 'dryskin'].includes(id) && type === 'Water') return 0;
+  if (['voltabsorb', 'motordrive'].includes(id) && type === 'Electric') return 0;
   if (id === 'flashfire' && type === 'Fire') return 0;
+  if (id === 'dryskin' && type === 'Fire') return 1.25;
   if (id === 'thickfat' && ['Fire', 'Ice'].includes(type)) return 0.5;
   if (id === 'heatproof' && type === 'Fire') return 0.5;
   if (['solidrock', 'filter'].includes(id) && effectiveness > 1) return 0.75;
