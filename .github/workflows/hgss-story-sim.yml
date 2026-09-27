@@ -149,11 +149,16 @@ jobs:
         run: |
           mkdir -p results
           node src/cli.mjs red-min-grind-ga-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-hg-cyndaquil.json
+      - name: Low-level Red player-model sanity
+        run: |
+          node src/cli.mjs red-battle-model-sanity --version=HEARTGOLD --starter=Cyndaquil --levels=50,55,60,65,70 --runs=5 > results/red-battle-model-sanity-hg-cyndaquil.json
       - name: Upload Red minimum-grind pilot
         uses: actions/upload-artifact@v4
         with:
           name: hgss-red-min-grind-hg-cyndaquil
-          path: hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
+          path: |
+            hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
+            hgss_story_sim/results/red-battle-model-sanity-hg-cyndaquil.json
           if-no-files-found: error
 
   allocator_depth_matrix_6:
