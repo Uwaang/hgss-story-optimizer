@@ -4015,6 +4015,363 @@ async function cmdBossInteractionMatrix() {
   }, null, 2));
 }
 
+
+function weakestElectiveMember(team, starter, evaluation, explicitSpecies = '') {
+  const starterKey = candidateIdentity(starter);
+  const explicit = explicitSpecies
+    ? team.find(candidate =>
+        candidateIdentity(candidate) !== starterKey &&
+        candidate.species === explicitSpecies
+      )
+    : null;
+  if (explicitSpecies && !explicit) {
+    throw new Error(\`Replacement target not found or is mandatory starter: \${explicitSpecies}\`);
+  }
+
+  const ranked = team
+    .filter(candidate => candidateIdentity(candidate) !== starterKey)
+    .map(candidate => {
+      const key = candidateIdentity(candidate);
+      const usage = evaluation?.memberUsage?.[key] || {};
+      const finalLevel = Number(
+        evaluation?.expSchedule?.finalLevels?.[key] ??
+        evaluation?.finalLevels?.[candidate.species] ??
+        0
+      );
+      return {
+        candidate,
+        key,
+        bossesUsedInWins: Number(usage.bossesUsedInWins || 0),
+        winningMoveUses: Number(usage.winningMoveUses || 0),
+        winningActiveTurns: Number(usage.winningActiveTurns || 0),
+        peakWinningUseRate: Number(usage.peakWinningUseRate || 0),
+        peakWinningActiveTurnsPerRun: Number(usage.peakWinningActiveTurnsPerRun || 0),
+        finalLevel: Number.isFinite(finalLevel) ? finalLevel : 0,
+      };
+    })
+    .sort((a, b) =>
+      a.bossesUsedInWins - b.bossesUsedInWins ||
+      a.winningMoveUses - b.winningMoveUses ||
+      a.winningActiveTurns - b.winningActiveTurns ||
+      a.peakWinningUseRate - b.peakWinningUseRate ||
+      a.peakWinningActiveTurnsPerRun - b.peakWinningActiveTurnsPerRun ||
+      a.finalLevel - b.finalLevel ||
+      a.candidate.species.localeCompare(b.candidate.species)
+    );
+
+  return explicit
+    ? ranked.find(row => candidateIdentity(row.candidate) === candidateIdentity(explicit))
+    : ranked[0];
+}
+
+function counterfactualCandidatePool({
+  pool,
+  baselineTeam,
+  starter,
+  bosses,
+  topPerBoss,
+  candidateCap,
+  explicitCandidates,
+}) {
+  const starterKey = candidateIdentity(starter);
+  const existing = new Set(baselineTeam.map(candidateIdentity));
+  const legal = pool.candidates.filter(candidate => {
+    const key = candidateIdentity(candidate);
+    if (existing.has(key)) return false;
+    if (candidate.exclusiveGroup === 'starter' && key !== starterKey) return false;
+    return true;
+  });
+
+  if (explicitCandidates.length) {
+    const wanted = new Set(explicitCandidates);
+    return legal
+      .filter(candidate => wanted.has(candidate.species))
+      .slice(0, candidateCap);
+  }
+
+  const selected = new Map();
+  for (const boss of bosses) {
+    const ranked = legal
+      .map(candidate => ({
+        candidate,
+        potential: candidateAceLevelPotential(candidate, boss),
+      }))
+      .filter(row => row.potential !== null)
+      .sort((a, b) =>
+        Number(b.potential || 0) - Number(a.potential || 0) ||
+        Number(a.candidate.availableFrom || 0) - Number(b.candidate.availableFrom || 0) ||
+        a.candidate.species.localeCompare(b.candidate.species)
+      )
+      .slice(0, topPerBoss);
+
+    ranked.forEach((row, index) => {
+      const key = candidateIdentity(row.candidate);
+      const current = selected.get(key) || {
+        candidate: row.candidate,
+        topBossCount: 0,
+        reciprocalRank: 0,
+        potentialSum: 0,
+        bossPotential: {},
+      };
+      current.topBossCount += 1;
+      current.reciprocalRank += 1 / (index + 1);
+      current.potentialSum += Number(row.potential || 0);
+      current.bossPotential[boss.label] = Number(row.potential || 0);
+      selected.set(key, current);
+    });
+  }
+
+  return [...selected.values()]
+    .sort((a, b) =>
+      b.topBossCount - a.topBossCount ||
+      b.reciprocalRank - a.reciprocalRank ||
+      b.potentialSum - a.potentialSum ||
+      a.candidate.species.localeCompare(b.candidate.species)
+    )
+    .slice(0, candidateCap)
+    .map(row => row.candidate);
+}
+
+function bossLevelAndLoadout(evaluation, team, candidate, boss, story, moveAccess) {
+  const battleIndex = story.bosses.findIndex(item => item.label === boss.label);
+  const levelsBefore = evaluation?.expSchedule?.battles?.[battleIndex]?.levelsBefore || {};
+  const key = candidateIdentity(candidate);
+  const level = Number(levelsBefore[key]);
+  const effectiveMoveAccess = resourceMoveAccessVariants(moveAccess)
+    .find(variant => variant.resourceProfile === evaluation.effectiveResourceProfile) || moveAccess;
+  const materialized = materializeCandidateTeam(
+    orderCandidatesForBoss(team, boss, levelsBefore),
+    boss.stage,
+    boss.aceLevel,
+    {
+      moveAccess: effectiveMoveAccess,
+      singleUsePlan: evaluation.singleUsePlan,
+      purchasablePlan: evaluation.purchasablePlan,
+      levelsByCandidate: levelsBefore,
+    },
+  );
+  const mon = materialized.find(item => item._candidateKey === key) || null;
+  return {
+    naturalLevel: Number.isFinite(level) ? level : null,
+    materializedSpecies: mon?.species || null,
+    moves: mon?.moves || [],
+    ability: mon?.ability || null,
+    item: mon?.item || null,
+  };
+}
+
+async function cmdCounterfactualSpecialistProbe() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const replaceOnly = String(arg('replace', '')).trim();
+  const targetBossNames = String(arg('targets', 'Clair,Lance,Misty,Blue,Red'))
+    .split(',').map(value => value.trim()).filter(Boolean);
+  const explicitCandidates = String(arg('candidates', ''))
+    .split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const topPerBoss = Math.max(1, Math.floor(Number(arg('top-per-boss', '3'))));
+  const candidateCap = Math.max(1, Math.floor(Number(arg('candidate-cap', '10'))));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) {
+    throw new Error('counterfactual-specialist-probe requires exactly six members via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const targetBosses = targetBossNames.map(name => {
+    const boss = story.bosses.find(item => item.label === name);
+    if (!boss) throw new Error(\`Unknown target boss: \${name}\`);
+    return boss;
+  });
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+
+  const baselineTeam = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(baselineTeam, starterName);
+  if (!starter) throw new Error('counterfactual-specialist-probe requires the selected starter in the team');
+  if (!validateCandidateTeam(baselineTeam) || !teamRespectsExclusiveGroups(baselineTeam)) {
+    throw new Error('counterfactual-specialist-probe baseline team violates team constraints');
+  }
+
+  const baseline = await evaluateCandidates(
+    baselineTeam,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const weak = weakestElectiveMember(baselineTeam, starter, baseline, replaceOnly);
+  if (!weak) throw new Error('No elective member is available for replacement');
+
+  const kept = baselineTeam.filter(mon => candidateIdentity(mon) !== weak.key);
+  const candidates = counterfactualCandidatePool({
+    pool,
+    baselineTeam,
+    starter,
+    bosses: targetBosses,
+    topPerBoss,
+    candidateCap,
+    explicitCandidates,
+  });
+
+  const baselineRows = new Map((baseline.rows || []).map(row => [row.boss, row]));
+  const probes = [];
+  for (const replacement of candidates) {
+    const team = [...kept, replacement];
+    if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    const replacementRows = new Map((evaluation.rows || []).map(row => [row.boss, row]));
+    const targets = targetBosses.map(boss => {
+      const before = baselineRows.get(boss.label);
+      const after = replacementRows.get(boss.label);
+      const baselineWinRate = Number(before?.winRate || 0);
+      const replacementWinRate = Number(after?.winRate || 0);
+      return {
+        boss: boss.label,
+        aceLevel: Number(boss.aceLevel || 0),
+        baselineWins: Number(before?.wins || 0),
+        replacementWins: Number(after?.wins || 0),
+        baselineWinRate,
+        replacementWinRate,
+        delta: replacementWinRate - baselineWinRate,
+        revivedObservedZero: Number(before?.wins || 0) === 0 && Number(after?.wins || 0) > 0,
+        replacement: bossLevelAndLoadout(
+          evaluation,
+          team,
+          replacement,
+          boss,
+          story,
+          moveAccess,
+        ),
+      };
+    });
+
+    const revived = targets.filter(row => row.revivedObservedZero);
+    const improved = targets.filter(row => row.delta > 1e-12);
+    const regressed = targets.filter(row => row.delta < -1e-12);
+    probes.push({
+      replacement,
+      team,
+      evaluation,
+      summary: {
+        replacement: replacement.species,
+        team: team.map(mon => mon.species),
+        proxyPotential: Object.fromEntries(targetBosses.map(boss => [
+          boss.label,
+          candidateAceLevelPotential(replacement, boss),
+        ])),
+        revivedObservedZeroCount: revived.length,
+        revivedObservedZeroBosses: revived.map(row => row.boss),
+        improvedTargetCount: improved.length,
+        regressedTargetCount: regressed.length,
+        targetDeltaSum: targets.reduce((sum, row) => sum + row.delta, 0),
+        maxTargetGain: Math.max(0, ...targets.map(row => row.delta)),
+        scoreDelta: Number(evaluation.score || 0) - Number(baseline.score || 0),
+        geometricDelta:
+          Number(evaluation.storyClearGeometricScore || 0) -
+          Number(baseline.storyClearGeometricScore || 0),
+        coverageDelta:
+          Number(evaluation.storyClearCoverageScore || 0) -
+          Number(baseline.storyClearCoverageScore || 0),
+        bottom5Delta:
+          Number(evaluation.bottom5BossWinRate || 0) -
+          Number(baseline.bottom5BossWinRate || 0),
+        targets,
+      },
+    });
+  }
+
+  probes.sort((a, b) =>
+    b.summary.revivedObservedZeroCount - a.summary.revivedObservedZeroCount ||
+    b.summary.improvedTargetCount - a.summary.improvedTargetCount ||
+    b.summary.targetDeltaSum - a.summary.targetDeltaSum ||
+    b.summary.maxTargetGain - a.summary.maxTargetGain ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    a.replacement.species.localeCompare(b.replacement.species)
+  );
+
+  const best = probes[0] || null;
+  const baselineTargets = targetBosses.map(boss => {
+    const row = baselineRows.get(boss.label);
+    return {
+      boss: boss.label,
+      wins: Number(row?.wins || 0),
+      losses: Number(row?.losses || 0),
+      winRate: Number(row?.winRate || 0),
+      observedZero: Number(row?.wins || 0) === 0,
+    };
+  });
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'bridge diagnostic: replace one weak/dead elective slot with hard-boss specialist candidates and re-plan the same natural route EXP/resource budget. This does not change the optimizer or objective.',
+    version,
+    starter: starter.species,
+    baselineTeam: baselineTeam.map(mon => mon.species),
+    runsPerBoss: runs,
+    targetBosses: targetBosses.map(boss => boss.label),
+    replaceOnly: replaceOnly || null,
+    selectedWeakSlot: {
+      species: weak.candidate.species,
+      key: weak.key,
+      bossesUsedInWins: weak.bossesUsedInWins,
+      winningMoveUses: weak.winningMoveUses,
+      winningActiveTurns: weak.winningActiveTurns,
+      peakWinningUseRate: weak.peakWinningUseRate,
+      peakWinningActiveTurnsPerRun: weak.peakWinningActiveTurnsPerRun,
+      finalLevel: weak.finalLevel,
+    },
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    topPerBoss,
+    candidateCap,
+    explicitCandidates,
+    screenedCandidates: candidates.map(candidate => candidate.species),
+    baseline: {
+      ...compactEvaluationForAblation(baseline),
+      targets: baselineTargets,
+    },
+    bestProbe: best?.summary || null,
+    probes: probes.map(row => row.summary),
+  }, null, 2));
+}
+
 async function cmdTrainerAiCompare() {
   const runs = Number(arg('runs', '20'));
   const story = await loadStory();
@@ -4451,6 +4808,7 @@ const commands = {
   'team-usage': cmdTeamUsage,
   'team-activation': cmdTeamActivation,
   'boss-interaction-matrix': cmdBossInteractionMatrix,
+  'counterfactual-specialist-probe': cmdCounterfactualSpecialistProbe,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -4462,7 +4820,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
