@@ -822,33 +822,53 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
       _buildOptimization: { ...cached._buildOptimization },
     };
   }
-  let best = null;
 
+  // Stage 1: choose promising EV/nature pairs without an item. This keeps the
+  // build search cheap enough to sit inside the GA while still considering all
+  // requested max-EV spreads and nature families.
+  const baseBuilds = [];
   for (const spread of spreads) {
     for (const nature of natures) {
-      for (const item of items) {
-        const candidate = {
-          ...mon,
-          ivs,
-          evs: { ...spread.evs },
-          nature,
-          item,
+      const candidate = {
+        ...mon,
+        ivs,
+        evs: { ...spread.evs },
+        nature,
+        item: '',
+      };
+      baseBuilds.push({
+        mon: candidate,
+        score: playerBuildScore(candidate, foeTeam),
+        evSpread: spread.label,
+      });
+    }
+  }
+  baseBuilds.sort((a, b) =>
+    Number(b.score) - Number(a.score) ||
+    `${a.evSpread}:${a.mon.nature}`.localeCompare(`${b.evSpread}:${b.mon.nature}`)
+  );
+
+  // Stage 2: only the strongest few EV/nature bases receive the held-item
+  // sweep. 4 * 12 = 48 item evaluations instead of a 7*9*12 full product.
+  const finalistBases = baseBuilds.slice(0, Math.min(4, baseBuilds.length));
+  let best = null;
+  for (const base of finalistBases) {
+    for (const item of items) {
+      const candidate = { ...base.mon, item };
+      const score = playerBuildScore(candidate, foeTeam);
+      if (
+        !best ||
+        score > best.score + 1e-12 ||
+        (Math.abs(score - best.score) <= 1e-12 &&
+          `${base.evSpread}:${candidate.nature}:${item}`.localeCompare(
+            `${best.evSpread}:${best.mon.nature}:${best.mon.item}`
+          ) < 0)
+      ) {
+        best = {
+          mon: candidate,
+          score,
+          evSpread: base.evSpread,
         };
-        const score = playerBuildScore(candidate, foeTeam);
-        if (
-          !best ||
-          score > best.score + 1e-12 ||
-          (Math.abs(score - best.score) <= 1e-12 &&
-            `${spread.label}:${nature}:${item}`.localeCompare(
-              `${best.evSpread}:${best.mon.nature}:${best.mon.item}`
-            ) < 0)
-        ) {
-          best = {
-            mon: candidate,
-            score,
-            evSpread: spread.label,
-          };
-        }
       }
     }
   }
@@ -861,6 +881,7 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
       nature: best?.mon?.nature || mon.nature || NEUTRAL_NATURE,
       item: best?.mon?.item || mon.item || '',
       proxyScore: Number(best?.score || 0),
+      searchMode: 'staged-ev-nature-then-item',
     },
   };
   if (cacheKey) {
@@ -874,7 +895,6 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
   }
   return result;
 }
-
 export function orderPlayerTeamForLead(team, foeTeam) {
   const lead = Array.isArray(foeTeam) ? foeTeam[0] : null;
   if (!lead) return [...team];
