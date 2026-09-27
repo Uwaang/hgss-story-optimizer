@@ -922,8 +922,9 @@ async function evaluateCandidates(
 async function cmdPool() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const full = arg('full', 'false') === 'true';
+  const evolutionPolicy = String(arg('evolution-policy', 'level-only')).toLowerCase();
   const story = await loadStory();
-  const pool = await loadCanonicalPool(version, story);
+  const pool = await loadCanonicalPool(version, story, evolutionPolicy);
 
   if (full) {
     console.log(JSON.stringify(pool, null, 2));
@@ -938,12 +939,17 @@ async function cmdPool() {
     version: pool.version,
     sourceCommit: pool.sourceCommit,
     accessMode: pool.accessMode,
+    evolutionPolicy: pool.evolutionPolicy || evolutionPolicy,
+    evolutionAccess: pool.evolutionAccess || null,
     candidateCount: pool.candidates.length,
     newCandidatesByStage: byStage,
     firstTwenty: pool.candidates.slice(0, 20).map(mon => ({
       species: mon.species,
       availableFrom: mon.availableFrom,
       familyId: mon.familyId,
+      searchKey: candidateIdentity(mon),
+      terminalSpecies: mon.terminalSpecies || null,
+      evolutionVariantId: mon.evolutionVariantId || null,
       growthRate: mon.growthRate ?? null,
       catchRate: mon.catchRate ?? null,
       captureSearch: mon.captureSearch ?? null,
@@ -5987,6 +5993,18 @@ function buildEqualLevelRouteBuildPlan(
   return plan;
 }
 
+const equalLevelPreparationCache = new Map();
+
+function equalLevelPreparationKey(candidates, routeBosses, commonLevel, moveAccess) {
+  return JSON.stringify({
+    team: candidates.map(candidateIdentity).sort(),
+    route: routeBosses.map(boss => [String(boss.key || boss.label), Number(boss.stage)]),
+    commonLevel: Number(commonLevel),
+    resourceProfile: moveAccess?.resourceProfile || null,
+    spendPolicy: moveAccess?.spendPolicy || null,
+  });
+}
+
 async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess, options = {}) {
   const expCost = equalLevelTeamExpCost(candidates, commonLevel);
   if (!expCost.legal) {
@@ -6011,34 +6029,62 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       index,
     ])
   );
-  const levels = Object.fromEntries(
-    candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
-  );
-  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
-  const singleUsePlan = planSingleUseMachines(
-    candidates,
-    routeBosses,
-    moveAccess,
-    { levelsByBattle },
-  );
-  const purchasable = planPurchasableMachines(
-    candidates,
-    routeBosses,
-    moveAccess,
-    singleUsePlan,
-    { levelsByBattle },
-  );
-  const purchasablePlan = purchasable.assignments;
-  const routeBuildPlan = buildEqualLevelRouteBuildPlan(
+  const preparationKey = equalLevelPreparationKey(
     candidates,
     routeBosses,
     commonLevel,
     moveAccess,
-    singleUsePlan,
-    purchasablePlan,
-    levels,
   );
-  const candidatesByKey = new Map(candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  let prepared = equalLevelPreparationCache.get(preparationKey);
+  if (!prepared) {
+    const levels = Object.fromEntries(
+      candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
+    );
+    const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+    const singleUsePlan = planSingleUseMachines(
+      candidates,
+      routeBosses,
+      moveAccess,
+      { levelsByBattle },
+    );
+    const purchasable = planPurchasableMachines(
+      candidates,
+      routeBosses,
+      moveAccess,
+      singleUsePlan,
+      { levelsByBattle },
+    );
+    const purchasablePlan = purchasable.assignments;
+    const routeBuildPlan = buildEqualLevelRouteBuildPlan(
+      candidates,
+      routeBosses,
+      commonLevel,
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      levels,
+    );
+    prepared = {
+      levels,
+      levelsByBattle,
+      singleUsePlan,
+      purchasable,
+      purchasablePlan,
+      routeBuildPlan,
+      candidatesByKey: new Map(
+        candidates.map(candidate => [candidateIdentity(candidate), candidate])
+      ),
+    };
+    equalLevelPreparationCache.set(preparationKey, prepared);
+  }
+  const {
+    levels,
+    singleUsePlan,
+    purchasable,
+    purchasablePlan,
+    routeBuildPlan,
+    candidatesByKey,
+  } = prepared;
   const rows = [];
   let weightedWins = 0;
   let weightedRuns = 0;
@@ -6156,6 +6202,10 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     singleUsePlan,
     purchasablePlan,
     routeBuildPlan,
+    preparationCache: {
+      entries: equalLevelPreparationCache.size,
+      reused: equalLevelPreparationCache.has(preparationKey),
+    },
     playerModel: {
       iv: 16,
       evNatureAbility: 'fixed per evolution family for all 27 battles',
@@ -7138,6 +7188,10 @@ async function cmdEqualLevelStorySearch() {
       candidateCap,
       screenedCandidates: screenedRows.map(row => ({
         species: row.candidate.species,
+        familyId: candidateFamilyIdentity(row.candidate),
+        searchKey: candidateIdentity(row.candidate),
+        terminalSpecies: row.candidate.terminalSpecies || null,
+        speciesByStage: row.candidate.speciesByStage || [],
         proxy: row.proxy,
         grindExp: row.grindExp,
       })),
