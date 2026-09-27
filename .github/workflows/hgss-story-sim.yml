@@ -348,7 +348,7 @@ jobs:
 
 
   meaningful_six_refinement_pilot:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'meaningful-six-refinement'
     runs-on: ubuntu-latest
     defaults:
       run:
