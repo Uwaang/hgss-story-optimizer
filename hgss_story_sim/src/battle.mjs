@@ -663,6 +663,14 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
     });
 }
 
+function natureStatMultiplier(natureName, stat) {
+  const nature = dex.natures.get(natureName || NEUTRAL_NATURE);
+  if (!nature?.exists) return 1;
+  if (nature.plus === stat) return 1.1;
+  if (nature.minus === stat) return 0.9;
+  return 1;
+}
+
 function previewStat(mon, stat) {
   const species = dex.species.get(mon.species);
   if (!species.exists) return 1;
@@ -673,7 +681,40 @@ function previewStat(mon, stat) {
   if (stat === 'hp') {
     return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + level + 10;
   }
-  return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+  const raw = Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+  return Math.floor(raw * natureStatMultiplier(mon.nature, stat));
+}
+
+function previewItemDamageMultiplier(mon, move, target) {
+  const item = dex.items.get(mon?.item || '');
+  if (!item?.exists || !move?.exists) return 1;
+  if (item.id === 'choiceband' && move.category === 'Physical') return 1.5;
+  if (item.id === 'choicespecs' && move.category === 'Special') return 1.5;
+  if (item.id === 'lifeorb') return 1.3;
+  if (item.id === 'expertbelt') {
+    const defender = dex.species.get(target?.species || '');
+    if (defender.exists && dex.getImmunity(move.type, defender) && dex.getEffectiveness(move, defender) > 0) {
+      return 1.2;
+    }
+  }
+  if (item.id === 'muscleband' && move.category === 'Physical') return 1.1;
+  if (item.id === 'wiseglasses' && move.category === 'Special') return 1.1;
+  return 1;
+}
+
+function previewSpeedMultiplier(mon) {
+  const item = dex.items.get(mon?.item || '');
+  return item?.id === 'choicescarf' ? 1.5 : 1;
+}
+
+function previewEffectiveHpMultiplier(mon, incomingDamage) {
+  const item = dex.items.get(mon?.item || '');
+  if (!item?.exists) return 1;
+  if (item.id === 'leftovers') return 1.12;
+  if (item.id === 'sitrusberry') return 1.25;
+  if (item.id === 'focussash' && Number(incomingDamage || 0) >= previewStat(mon, 'hp')) return 1.9;
+  if (item.id === 'lumberry') return 1.05;
+  return 1;
 }
 
 function previewMoveDamage(mon, target, moveName) {
@@ -694,7 +735,8 @@ function previewMoveDamage(mon, target, moveName) {
   const effectiveness = 2 ** dex.getEffectiveness(move, defender);
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   return ((((2 * level / 5 + 2) * power * attack / Math.max(1, defense)) / 50) + 2) *
-    stab * effectiveness * accuracy * 0.925 * moveStrategicMultiplier(move);
+    stab * effectiveness * accuracy * 0.925 * moveStrategicMultiplier(move) *
+    previewItemDamageMultiplier(mon, move, target);
 }
 
 function previewMatchupUtility(mon, target) {
@@ -702,11 +744,96 @@ function previewMatchupUtility(mon, target) {
   const out = Math.max(0, ...(mon.moves || []).map(move => previewMoveDamage(mon, target, move)));
   const incoming = Math.max(0, ...(target.moves || []).map(move => previewMoveDamage(target, mon, move)));
   const targetHp = Math.max(1, previewStat(target, 'hp'));
-  const ownHp = Math.max(1, previewStat(mon, 'hp'));
-  const ownSpeed = previewStat(mon, 'spe');
-  const foeSpeed = previewStat(target, 'spe');
+  const baseOwnHp = Math.max(1, previewStat(mon, 'hp'));
+  const ownHp = baseOwnHp * previewEffectiveHpMultiplier(mon, incoming);
+  const ownSpeed = previewStat(mon, 'spe') * previewSpeedMultiplier(mon);
+  const foeSpeed = previewStat(target, 'spe') * previewSpeedMultiplier(target);
   const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
   return (out / targetHp) * speedFactor / Math.max(0.25, incoming / ownHp);
+}
+
+const RED_BUILD_EV_SPREADS = [
+  { label: 'atk-spe', evs: { hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252 } },
+  { label: 'spa-spe', evs: { hp: 4, atk: 0, def: 0, spa: 252, spd: 0, spe: 252 } },
+  { label: 'hp-atk', evs: { hp: 252, atk: 252, def: 4, spa: 0, spd: 0, spe: 0 } },
+  { label: 'hp-spa', evs: { hp: 252, atk: 0, def: 4, spa: 252, spd: 0, spe: 0 } },
+  { label: 'hp-def', evs: { hp: 252, atk: 0, def: 252, spa: 0, spd: 4, spe: 0 } },
+  { label: 'hp-spd', evs: { hp: 252, atk: 0, def: 4, spa: 0, spd: 252, spe: 0 } },
+  { label: 'hp-spe', evs: { hp: 252, atk: 0, def: 4, spa: 0, spd: 0, spe: 252 } },
+];
+const RED_BUILD_NATURES = [
+  'Adamant', 'Jolly', 'Modest', 'Timid',
+  'Impish', 'Careful', 'Bold', 'Calm',
+  'Serious',
+];
+const RED_BUILD_ITEMS = [
+  '', 'Leftovers', 'Life Orb', 'Expert Belt',
+  'Choice Band', 'Choice Specs', 'Choice Scarf',
+  'Focus Sash', 'Sitrus Berry', 'Muscle Band',
+  'Wise Glasses', 'Lum Berry',
+];
+
+function playerBuildScore(mon, foeTeam) {
+  const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
+  if (!foes.length) return 0;
+  const utilities = foes
+    .map(foe => previewMatchupUtility(mon, foe))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (!utilities.length) return 0;
+  const mean = utilities.reduce((sum, value) => sum + value, 0) / utilities.length;
+  const worst = utilities[0];
+  const best = utilities[utilities.length - 1];
+  return 0.6 * mean + 0.15 * worst + 0.25 * best;
+}
+
+export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
+  const iv = Math.max(0, Math.min(31, Math.floor(Number(options.iv ?? 16))));
+  const ivs = uniformIvs(iv);
+  const spreads = options.evSpreads || RED_BUILD_EV_SPREADS;
+  const natures = options.natures || RED_BUILD_NATURES;
+  const items = options.items || RED_BUILD_ITEMS;
+  let best = null;
+
+  for (const spread of spreads) {
+    for (const nature of natures) {
+      for (const item of items) {
+        const candidate = {
+          ...mon,
+          ivs,
+          evs: { ...spread.evs },
+          nature,
+          item,
+        };
+        const score = playerBuildScore(candidate, foeTeam);
+        if (
+          !best ||
+          score > best.score + 1e-12 ||
+          (Math.abs(score - best.score) <= 1e-12 &&
+            `${spread.label}:${nature}:${item}`.localeCompare(
+              `${best.evSpread}:${best.mon.nature}:${best.mon.item}`
+            ) < 0)
+        ) {
+          best = {
+            mon: candidate,
+            score,
+            evSpread: spread.label,
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    ...(best?.mon || { ...mon, ivs }),
+    _buildOptimization: {
+      iv,
+      evSpread: best?.evSpread || null,
+      nature: best?.mon?.nature || mon.nature || NEUTRAL_NATURE,
+      item: best?.mon?.item || mon.item || '',
+      proxyScore: Number(best?.score || 0),
+    },
+  };
 }
 
 export function orderPlayerTeamForLead(team, foeTeam) {
