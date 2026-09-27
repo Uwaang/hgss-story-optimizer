@@ -290,6 +290,12 @@ async function loadStory() {
   return { config, source, bosses: extractBosses(source, config) };
 }
 
+async function loadEqualLevelStory() {
+  const config = await readJson('config/equal-level-story-bosses.json');
+  const source = await loadPretTrainerData(config.sourceCommit);
+  return { config, source, bosses: extractBosses(source, config) };
+}
+
 async function loadCanonicalPool(version, story = null) {
   const context = story || await loadStory();
   const access = await readJson('config/story-access.canonical.json');
@@ -6102,7 +6108,7 @@ async function cmdEqualLevelStorySearch() {
     throw new Error('equal-level-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
   }
 
-  const story = await loadStory();
+  const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool(version, story),
     loadMoveAccess('all', 'unbounded'),
@@ -6253,7 +6259,7 @@ async function cmdEqualLevelStoryEvaluate() {
   }
   if (!levels.length) throw new Error('equal-level-story-evaluate requires at least one valid level');
 
-  const story = await loadStory();
+  const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool(version, story),
     loadMoveAccess('all', 'unbounded'),
