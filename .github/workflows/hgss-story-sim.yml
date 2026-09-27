@@ -227,27 +227,31 @@ jobs:
             pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
         run: npm install --prefer-offline --no-audit --no-fund
-      - name: Focused Lv57-65 Red search with 100-run finalists
+      - name: Focused Lv60-65 Red search with 100-run finalists
         run: |
           mkdir -p results
           node src/cli.mjs red-min-grind-ga-search \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --level-min=57 \
+            --level-min=60 \
             --level-max=65 \
             --level-step=1 \
-            --candidate-cap=72 \
-            --population=24 \
-            --generations=5 \
+            --candidate-cap=84 \
+            --population=28 \
+            --generations=6 \
             --search-runs=2 \
-            --refine-population=36 \
+            --cross-level-population=22 \
+            --cross-level-generations=4 \
+            --cross-level-runs=2 \
+            --cross-level-seed-cap=6 \
+            --refine-population=40 \
             --refine-generations=7 \
             --refine-runs=2 \
-            --refine-level-cap=5 \
+            --refine-level-cap=6 \
             --finalist-cap=18 \
             --final-runs=100 \
             --target-win-rate=0.5 \
-            > results/red-focused-hg-cyndaquil-lv57-65.json
+            > results/red-focused-hg-cyndaquil-lv60-65.json
       - name: Revalidate previous Lv57 winner at 100 runs
         continue-on-error: true
         run: |
@@ -258,21 +262,41 @@ jobs:
             --level=57 \
             --runs=100 \
             > results/red-known-lv57-validate100.json
-      - name: Revalidate previous Lv65 threshold team at 100 runs
+      - name: Project current Lv65 winner to Lv63
         continue-on-error: true
         run: |
           node src/cli.mjs red-min-grind-validate \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Gengar,Jolteon \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
+            --level=63 \
+            --runs=100 \
+            > results/red-current-winner-lv63-validate100.json
+      - name: Project current Lv65 winner to Lv64
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
+            --level=64 \
+            --runs=100 \
+            > results/red-current-winner-lv64-validate100.json
+      - name: Revalidate current Lv65 winner at 100 runs
+        continue-on-error: true
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Houndoom,Tyranitar,Quagsire,Wormadam,Hitmonlee \
             --level=65 \
             --runs=100 \
-            > results/red-known-lv65-validate100.json
+            > results/red-current-winner-lv65-validate100.json
       - name: Upload focused Red search
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hgss-red-focused-hg-cyndaquil-lv57-65
+          name: hgss-red-focused-hg-cyndaquil-lv60-65
           path: hgss_story_sim/results/red-*.json
           if-no-files-found: error
 
