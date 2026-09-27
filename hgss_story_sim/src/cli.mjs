@@ -3172,82 +3172,22 @@ function contributionUsageCompare(a, b) {
   return 0;
 }
 
-async function contributionAblation(team, full, story, runs, moveAccess, expContext, grindPolicy, objective) {
-  const starter = team.find(candidate => candidate.exclusiveGroup === 'starter') || null;
-  const members = [];
-  for (const candidate of team) {
-    if (starter && candidateIdentity(candidate) === candidateIdentity(starter)) {
-      members.push({
-        species: candidate.species,
-        mandatoryStarter: true,
-        note: 'starter is mandatory and is not ablated',
-      });
-      continue;
-    }
-    const reduced = team.filter(mon => candidateIdentity(mon) !== candidateIdentity(candidate));
-    const without = await evaluateCandidates(
-      reduced,
-      story.bosses,
-      runs,
-      moveAccess,
-      expContext,
-      grindPolicy,
-      objective,
-    );
-    members.push(memberAblationSummary(full, without, candidate.species));
-  }
-  const removable = members.filter(member => !member.mandatoryStarter);
-  const geometricDeltas = removable.map(member => Number(member.geometricDelta || 0));
-  const scoreDeltas = removable.map(member => Number(member.scoreDelta || 0));
-  const coverageDeltas = removable.map(member => Number(member.coverageDelta || 0));
-  return {
-    members,
-    removableMembers: removable.length,
-    positiveGeometricMembers: geometricDeltas.filter(value => value > 1e-9).length,
-    positiveScoreMembers: scoreDeltas.filter(value => value > 1e-9).length,
-    minGeometricDelta: geometricDeltas.length ? Math.min(...geometricDeltas) : 0,
-    meanGeometricDelta: geometricDeltas.length
-      ? geometricDeltas.reduce((sum, value) => sum + value, 0) / geometricDeltas.length
-      : 0,
-    minScoreDelta: scoreDeltas.length ? Math.min(...scoreDeltas) : 0,
-    minCoverageDelta: coverageDeltas.length ? Math.min(...coverageDeltas) : 0,
-  };
-}
-
-function meaningfulCandidateCompare(a, b, objective = 'story-clear') {
-  const aAllPositive = a.contribution.positiveGeometricMembers === a.contribution.removableMembers;
-  const bAllPositive = b.contribution.positiveGeometricMembers === b.contribution.removableMembers;
-  if (aAllPositive !== bAllPositive) return aAllPositive ? -1 : 1;
-
-  if (aAllPositive && bAllPositive) {
-    return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
-      b.contribution.minGeometricDelta - a.contribution.minGeometricDelta ||
-      b.contribution.meanGeometricDelta - a.contribution.meanGeometricDelta;
-  }
-
-  if (a.contribution.positiveGeometricMembers !== b.contribution.positiveGeometricMembers) {
-    return b.contribution.positiveGeometricMembers - a.contribution.positiveGeometricMembers;
-  }
-  if (a.contribution.minGeometricDelta !== b.contribution.minGeometricDelta) {
-    return b.contribution.minGeometricDelta - a.contribution.minGeometricDelta;
-  }
-  return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
-}
-
 function contributionParetoDominates(a, b) {
+  const ac = a.contribution || {};
+  const bc = b.contribution || {};
   const aCapture = Number(a.evaluation.captureSearch?.expectedEncounters || 0);
   const bCapture = Number(b.evaluation.captureSearch?.expectedEncounters || 0);
   const atLeastAsGood =
     a.evaluation.storyClearGeometricScore >= b.evaluation.storyClearGeometricScore &&
     a.evaluation.storyClearCoverageScore >= b.evaluation.storyClearCoverageScore &&
-    a.contribution.positiveGeometricMembers >= b.contribution.positiveGeometricMembers &&
-    a.contribution.minGeometricDelta >= b.contribution.minGeometricDelta &&
+    Number(ac.meaningfulElectiveCount || 0) >= Number(bc.meaningfulElectiveCount || 0) &&
+    Number(ac.weakestSupportedBossGain || 0) >= Number(bc.weakestSupportedBossGain || 0) &&
     aCapture <= bCapture;
   const strictlyBetter =
     a.evaluation.storyClearGeometricScore > b.evaluation.storyClearGeometricScore ||
     a.evaluation.storyClearCoverageScore > b.evaluation.storyClearCoverageScore ||
-    a.contribution.positiveGeometricMembers > b.contribution.positiveGeometricMembers ||
-    a.contribution.minGeometricDelta > b.contribution.minGeometricDelta ||
+    Number(ac.meaningfulElectiveCount || 0) > Number(bc.meaningfulElectiveCount || 0) ||
+    Number(ac.weakestSupportedBossGain || 0) > Number(bc.weakestSupportedBossGain || 0) ||
     aCapture < bCapture;
   return atLeastAsGood && strictlyBetter;
 }
@@ -3369,26 +3309,35 @@ async function cmdMeaningfulSix() {
   for (const state of usageRanked) addFinalist(state);
   for (const state of storyRanked) addFinalist(state);
 
+  const finalEvaluationCache = new Map();
+  async function evaluateFinalTeamAtRuns(team, requestedRuns) {
+    const key = team.map(candidateIdentity).sort().join('|') +
+      `@runs=${requestedRuns}@objective=${objective}`;
+    if (!finalEvaluationCache.has(key)) {
+      finalEvaluationCache.set(
+        key,
+        await evaluateCandidates(
+          team,
+          story.bosses,
+          requestedRuns,
+          moveAccess,
+          expContext,
+          grindPolicy,
+          objective,
+        )
+      );
+    }
+    return finalEvaluationCache.get(key);
+  }
+
   const rescored = [];
   for (const state of finalists) {
-    const evaluation = await evaluateCandidates(
-      state.team,
-      story.bosses,
+    const evaluation = await evaluateFinalTeamAtRuns(state.team, finalRuns);
+    const contribution = await memberContributionProfile(
+      { team: state.team, evaluation },
+      evaluateFinalTeamAtRuns,
       finalRuns,
-      moveAccess,
-      expContext,
-      grindPolicy,
-      objective,
-    );
-    const contribution = await contributionAblation(
-      state.team,
-      evaluation,
-      story,
-      finalRuns,
-      moveAccess,
-      expContext,
-      grindPolicy,
-      objective,
+      starter,
     );
     rescored.push({
       team: state.team,
@@ -3404,7 +3353,11 @@ async function cmdMeaningfulSix() {
       baselineTeam.map(candidateIdentity).sort().join('|')
   ) || null;
   const meaningfulRanked = [...rescored].sort((a, b) =>
-    meaningfulCandidateCompare(a, b, objective) ||
+    memberContributionCompare(
+      { evaluation: a.evaluation, memberContribution: a.contribution },
+      { evaluation: b.evaluation, memberContribution: b.contribution },
+      objective,
+    ) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
   const pareto = rescored.filter((row, index) =>
@@ -3412,7 +3365,11 @@ async function cmdMeaningfulSix() {
       index !== otherIndex && contributionParetoDominates(other, row)
     )
   ).sort((a, b) =>
-    meaningfulCandidateCompare(a, b, objective) ||
+    memberContributionCompare(
+      { evaluation: a.evaluation, memberContribution: a.contribution },
+      { evaluation: b.evaluation, memberContribution: b.contribution },
+      objective,
+    ) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
 
@@ -3429,7 +3386,7 @@ async function cmdMeaningfulSix() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; primary story search is unchanged and final member meaning is judged by paired member ablation',
+    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; a member is meaningful only when removing it hurts at least one boss and that member is actually used in winning runs for a helped boss',
     version,
     starter: starter.species,
     baselineTeam: baselineTeam.map(mon => mon.species),
