@@ -6436,6 +6436,89 @@ async function redEvaluateTeam(
   };
 }
 
+
+async function redEvaluateTeamCrossBoss(
+  state,
+  battleBoss,
+  battleEnemyTeam,
+  buildBoss,
+  buildEnemyTeam,
+  moveAccess,
+  runs,
+  seedBase,
+  buildSearch = {},
+) {
+  const commonLevel = Number(state.members[0]?.commonLevel || 1);
+  const forms = state.members.map(row => row.form);
+  const levels = Object.fromEntries(forms.map(form => [candidateIdentity(form), commonLevel]));
+  const ordered = orderCandidatesForBoss(forms, buildBoss, levels);
+  let playerTeam = materializeCandidateTeam(
+    ordered,
+    buildBoss.stage,
+    commonLevel,
+    {
+      moveAccess,
+      levelsByCandidate: levels,
+    },
+  );
+
+  const captureSpeciesByFamily = new Map(
+    state.members.map(row => [row.familyId, row.capture?.captureSpecies || row.species]),
+  );
+  playerTeam = playerTeam.map(mon => ({
+    ...mon,
+    _captureSpecies: captureSpeciesByFamily.get(mon._candidateKey) || mon.species,
+  }));
+
+  const extraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(buildBoss.stage || 0));
+
+  const optimizedBuilds = optimizeTargetBossTeamBuilds(
+    playerTeam,
+    buildEnemyTeam,
+    buildBoss,
+    moveAccess,
+    extraMachines,
+    buildSearch,
+  );
+  playerTeam = optimizedBuilds.team;
+
+  const battle = await simulateMatchup(
+    playerTeam,
+    battleEnemyTeam,
+    runs,
+    seedBase,
+    { p2Trainer: battleBoss, p1AiMode: 'smart' },
+  );
+
+  return {
+    key: redTeamKey(state.members, commonLevel),
+    commonLevel,
+    buildBoss: buildBoss.label,
+    battleBoss: battleBoss.label,
+    wins: Number(battle.wins || 0),
+    losses: Number(battle.losses || 0),
+    ties: Number(battle.ties || 0),
+    winRate: Number(battle.winRate || 0),
+    averageTurns: Number(battle.averageTurns || 0),
+    averagePlayerFaints: Number(battle.averageP1Faints || 0),
+    averageRedFaints: Number(battle.averageP2Faints || 0),
+    maxRedFaints: Number(battle.maxP2Faints || 0),
+    battleTeam: playerTeam.map(mon => ({
+      species: mon.species,
+      level: Number(mon.level),
+      moves: mon.moves || [],
+      ability: mon.ability || null,
+      item: mon.item || null,
+      nature: mon.nature || null,
+      ivs: mon.ivs || null,
+      evs: mon.evs || null,
+    })),
+  };
+}
+
 function redSearchEvaluationCompare(a, b) {
   if (Number(a.winRate || 0) !== Number(b.winRate || 0)) {
     return Number(b.winRate || 0) - Number(a.winRate || 0);
@@ -7742,6 +7825,10 @@ async function cmdRedMinGrindValidate() {
   const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
   const targetStageRaw = arg('target-stage', '');
   const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
+  const buildBossLabel = String(arg('build-boss', targetBossLabel));
+  const buildTrainerKey = String(arg('build-trainer-key', '')).trim();
+  const buildStageRaw = arg('build-stage', '');
+  const buildStage = buildStageRaw === '' ? null : Number(buildStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
@@ -7759,6 +7846,11 @@ async function cmdRedMinGrindValidate() {
     trainerKey: targetTrainerKey,
     stage: targetStage,
   });
+  const buildBoss = resolveExperimentBoss(story, {
+    label: buildBossLabel,
+    trainerKey: buildTrainerKey,
+    stage: buildStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7766,23 +7858,24 @@ async function cmdRedMinGrindValidate() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel,
-      targetStage: red.stage,
+      targetBossLabel: buildBossLabel,
+      targetStage: buildBoss.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
   ]);
 
   const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const buildEnemyTeam = hgssTrainerToShowdownTeam(buildBoss.trainer, buildBoss);
   const redExtraMachines = [
     ...(moveAccess.singleUseMachines || []),
     ...(moveAccess.purchasableMachines || []),
-  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(buildBoss.stage || 0));
 
   const rows = teamNames.map(name => {
     const candidates = redPool.forms
       .filter(form => form.species === name)
-      .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
+      .map(form => redFormLevelRow(form, buildBoss, commonLevel, moveAccess, redExtraMachines))
       .filter(Boolean)
       .sort((a, b) =>
         Number(a.grindExp) - Number(b.grindExp) ||
@@ -7807,15 +7900,27 @@ async function cmdRedMinGrindValidate() {
   }
 
   const state = redStateFromMembers(rows, commonLevel);
-  const evaluation = await redEvaluateTeam(
-    state,
-    red,
-    enemyTeam,
-    moveAccess,
-    runs,
-    1234001,
-    buildSearch,
-  );
+  const evaluation = buildBoss.label === red.label && buildBoss.key === red.key
+    ? await redEvaluateTeam(
+        state,
+        red,
+        enemyTeam,
+        moveAccess,
+        runs,
+        1234001,
+        buildSearch,
+      )
+    : await redEvaluateTeamCrossBoss(
+        state,
+        red,
+        enemyTeam,
+        buildBoss,
+        buildEnemyTeam,
+        moveAccess,
+        runs,
+        1234001,
+        buildSearch,
+      );
 
   console.log(JSON.stringify({
     schemaVersion: 1,
@@ -7825,6 +7930,9 @@ async function cmdRedMinGrindValidate() {
     targetBoss: targetBossLabel,
     targetTrainerKey: red.key,
     targetBossStage: Number(red.stage),
+    buildBoss: buildBossLabel,
+    buildTrainerKey: buildBoss.key,
+    buildBossStage: Number(buildBoss.stage),
     commonLevel,
     runs,
     buildSearch,
