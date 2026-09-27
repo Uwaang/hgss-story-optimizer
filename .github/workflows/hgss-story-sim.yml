@@ -27,6 +27,7 @@ on:
           - team-ablation
           - team-usage
           - meaningful-six-refinement
+          - activation-pilot
           - member-contribution-pilot
           - contribution-candidate-probe
           - abra-slot-refinement
@@ -346,6 +347,30 @@ jobs:
           path: hgss_story_sim/results/story-resources-${{ matrix.expAllocator }}.json
           if-no-files-found: error
 
+
+  abra_activation_pilot:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Compare baseline vs Abra level-16 activation
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-activation --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Pidgey,Qwilfish,Caterpie --target=Abra --target-level=16 --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/abra-activation-hg-cyndaquil.json
+      - name: Upload Abra activation pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-abra-activation-hg-cyndaquil
+          path: hgss_story_sim/results/abra-activation-hg-cyndaquil.json
+          if-no-files-found: error
 
   meaningful_six_refinement_pilot:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'meaningful-six-refinement'
