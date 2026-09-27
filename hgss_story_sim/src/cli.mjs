@@ -741,7 +741,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   );
   let weightedWins = 0;
   let weightedRuns = 0;
-  for (const [battleIndex, boss] of battleBosses.entries()) {
+  for (const [battleIndex, boss] of routeBosses.entries()) {
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
     const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
     const playerTeam = materializeCandidateTeam(
