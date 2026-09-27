@@ -290,6 +290,49 @@ async function loadStory() {
   return { config, source, bosses: extractBosses(source, config) };
 }
 
+function resolveExperimentBoss(story, {
+  label,
+  trainerKey = '',
+  stage = null,
+}) {
+  const key = String(trainerKey || '').trim();
+  if (!key) {
+    const boss = story.bosses.find(row => row.label === label);
+    if (!boss) throw new Error('Target boss definition not found: ' + label);
+    return boss;
+  }
+
+  const trainerId = story.source.constants.get(key);
+  if (trainerId === undefined) {
+    throw new Error('Target trainer constant not found: ' + key);
+  }
+  const trainer = story.source.trainers[trainerId];
+  if (!trainer) {
+    throw new Error('Target trainer id is outside trainers.json: ' + trainerId);
+  }
+  const trainerClassId = story.source.trainerClasses.get(trainer.class);
+  if (trainerClassId === undefined) {
+    throw new Error('Trainer class constant not found: ' + trainer.class);
+  }
+  const resolvedStage = Number(stage);
+  if (!Number.isFinite(resolvedStage)) {
+    throw new Error('Explicit target-stage is required with target-trainer-key');
+  }
+  return {
+    stage: resolvedStage,
+    key,
+    label,
+    kind: 'experiment-target',
+    sourceRef: null,
+    appliesToStarter: null,
+    trainerId,
+    trainerClassId,
+    trainerGender: story.source.trainerGenders.get(trainer.class) || 'TRAINER_MALE',
+    aceLevel: Math.max(...trainer.party.map(mon => Number(mon.level || 1))),
+    trainer,
+  };
+}
+
 async function loadCanonicalPool(version, story = null) {
   const context = story || await loadStory();
   const access = await readJson('config/story-access.canonical.json');
@@ -6672,6 +6715,9 @@ async function cmdRedMinGrindSearch() {
 async function cmdRedMinGrindGaSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
   const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '95')))));
@@ -6697,8 +6743,11 @@ async function cmdRedMinGrindGaSearch() {
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === targetBossLabel);
-  if (!red) throw new Error('Target boss definition not found: ' + targetBossLabel);
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -6707,6 +6756,7 @@ async function cmdRedMinGrindGaSearch() {
       access,
       version,
       targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7066,6 +7116,8 @@ async function cmdRedMinGrindGaSearch() {
     version,
     starter: starterName,
     targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     targetBossAceLevel: Number(red.aceLevel || 0),
     assumptions: {
       legendaryAndMythical: 'excluded',
@@ -7422,6 +7474,9 @@ async function cmdRedBattleModelSanity() {
 async function cmdRedMinGrindValidate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
@@ -7431,8 +7486,11 @@ async function cmdRedMinGrindValidate() {
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === targetBossLabel);
-  if (!red) throw new Error('Target boss definition not found: ' + targetBossLabel);
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7441,6 +7499,7 @@ async function cmdRedMinGrindValidate() {
       access,
       version,
       targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7495,6 +7554,8 @@ async function cmdRedMinGrindValidate() {
     version,
     starter: starterName,
     targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     commonLevel,
     runs,
     evaluation,
