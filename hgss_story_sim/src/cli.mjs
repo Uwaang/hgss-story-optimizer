@@ -822,7 +822,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     expSchedule,
     finalTeam,
     finalLevels,
-    routeBattleCount: battleBosses.length,
+    routeBattleCount: routeBosses.length,
     fullRouteBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
