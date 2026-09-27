@@ -61,7 +61,7 @@ jobs:
       - name: Search HG Cyndaquil minimum-grind Red team
         run: |
           mkdir -p results
-          node src/cli.mjs red-min-grind-ga-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=95 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-hg-cyndaquil.json
+          node src/cli.mjs red-min-grind-ga-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-hg-cyndaquil.json
       - name: Upload Red minimum-grind pilot
         uses: actions/upload-artifact@v4
         with:
