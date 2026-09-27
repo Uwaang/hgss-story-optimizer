@@ -7501,6 +7501,54 @@ async function cmdEvolutionLegalitySmoke() {
   }, null, 2));
 }
 
+async function cmdEvolutionCheckpointSmoke() {
+  const story = await loadEqualLevelStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const bosses = storyBattlesForCandidates(story.bosses, []);
+  const byLabel = new Map(bosses.map(boss => [String(boss.label), boss]));
+
+  function variant(origin, terminal) {
+    const candidate = pool.candidates.find(row =>
+      row.species === origin && row.terminalSpecies === terminal
+    );
+    if (!candidate) throw new Error('Missing evolution variant: ' + origin + '->' + terminal);
+    return candidate;
+  }
+
+  function speciesAt(origin, terminal, bossLabel, level) {
+    const candidate = variant(origin, terminal);
+    const boss = byLabel.get(bossLabel);
+    const mon = materializeCandidateTeam(
+      [candidate],
+      boss.stage,
+      level,
+      {
+        levelsByCandidate: { [candidateIdentity(candidate)]: level },
+        boss,
+      },
+    )[0];
+    return mon?.species || null;
+  }
+
+  const rows = [
+    { check: 'Gastly->Gengar', actual: speciesAt('Gastly', 'Gengar', 'Morty', 57), expected: 'Gengar' },
+    { check: 'Abra->Alakazam', actual: speciesAt('Abra', 'Alakazam', 'Whitney', 57), expected: 'Alakazam' },
+    { check: 'Geodude->Golem', actual: speciesAt('Geodude', 'Golem', 'Morty', 57), expected: 'Golem' },
+    { check: 'Rhyperior blocked for Blue', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Blue', 65), expected: 'Rhydon' },
+    { check: 'Rhyperior legal for Will 2', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Will 2', 65), expected: 'Rhyperior' },
+  ];
+  const failures = rows.filter(row => row.actual !== row.expected);
+  if (failures.length) {
+    throw new Error('Evolution checkpoint smoke failed: ' + JSON.stringify(failures));
+  }
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    evolutionPolicy: pool.evolutionPolicy,
+    rows,
+    protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -7566,6 +7614,7 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
   'equal-level-story-search': cmdEqualLevelStorySearch,
+  'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
   'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,

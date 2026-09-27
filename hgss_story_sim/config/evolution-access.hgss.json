@@ -7,7 +7,8 @@
     "EVO_TRADE_ITEM requires both trading and a source-backed item source.",
     "Rare wild held-item sources are derived automatically from pinned pret personal+encounter data and treated as repeatable; drop-rate friction is ignored.",
     "Curated fixed/shop sources below are conservative story stages. Weekday inconvenience is ignored, but National Dex / Rock Climb gates are respected.",
-    "Same-stage post-boss item gates use route-order checkpoints, so post-Blue items are unavailable for Blue but legal for the rematch Elite Four."
+    "Same-stage post-boss item gates use route-order checkpoints, so post-Blue items are unavailable for Blue but legal for the rematch Elite Four.",
+    "Post-16-badge evolution items are checkpointed after Blue and before the rematch Elite Four because Blue and the rematch share numeric stage 20."
   ],
   "tradeUnlockStage": 0,
   "items": {

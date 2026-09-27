@@ -834,9 +834,9 @@ jobs:
           path: |
             hgss_story_sim/.cache/battles
             hgss_story_sim/.cache/preparations
-          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-${{ github.run_id }}
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-
       - name: Level-only A/B baseline
         run: |
           mkdir -p results
@@ -874,9 +874,9 @@ jobs:
           path: |
             hgss_story_sim/.cache/battles
             hgss_story_sim/.cache/preparations
-          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-${{ github.run_id }}
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-
       - name: Trade-aware wide-progress sweep
         run: |
           mkdir -p results
@@ -956,9 +956,9 @@ jobs:
           path: |
             hgss_story_sim/.cache/battles
             hgss_story_sim/.cache/preparations
-          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
           restore-keys: |
-            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
       - name: Search architecture comparison
         run: |
           mkdir -p results
@@ -1196,6 +1196,8 @@ jobs:
           node --check src/availability.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
+      - name: Trade-evolution checkpoint legality smoke
+        run: node src/cli.mjs evolution-checkpoint-smoke
       - name: Trade evolution legality smoke test
         run: node src/cli.mjs evolution-legality-smoke
       - name: Validate source-backed availability
