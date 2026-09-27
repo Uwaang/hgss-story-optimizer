@@ -470,17 +470,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - name: Install dependencies
         run: npm install
       - name: Restore equal-level battle cache
         uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-lv${{ matrix.level }}-${{ github.run_id }}
+          key: eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-lv${{ matrix.level }}-
+            eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-
       - name: Search equal-level team
         run: |
           mkdir -p results
@@ -520,15 +518,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - run: npm install
       - uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-cache-ab-${{ github.run_id }}
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-${{ github.run_id }}
           restore-keys: |
-            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-cache-ab-
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-
       - name: Run cache A/B
         run: |
           mkdir -p results
@@ -598,15 +594,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - run: npm install
       - uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
           restore-keys: |
-            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-${{ matrix.experiment }}-
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
       - name: Search design
         run: |
           mkdir -p results
@@ -636,15 +630,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - run: npm install
       - uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-completion-lv${{ matrix.level }}-${{ github.run_id }}
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-completion-lv${{ matrix.level }}-
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-
       - name: Completion lookahead level sweep
         run: |
           mkdir -p results
@@ -686,15 +678,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - run: npm install
       - uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-validation-${{ matrix.label }}-${{ github.run_id }}
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-${{ github.run_id }}
           restore-keys: |
-            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-validation-${{ matrix.label }}-
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-
       - name: High-run boss validation
         run: |
           mkdir -p results
@@ -727,8 +717,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hgss_story_sim/package-lock.json
       - run: npm install
       - uses: actions/download-artifact@v4
         with:
@@ -737,9 +725,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: hgss_story_sim/.cache/battles
-          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-sweep-validate-lv${{ matrix.level }}-${{ github.run_id }}
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-${{ github.run_id }}
           restore-keys: |
-            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-sweep-validate-lv${{ matrix.level }}-
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-
       - name: Validate discovered top team
         run: |
           mkdir -p results
