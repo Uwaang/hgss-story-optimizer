@@ -5898,6 +5898,340 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
   };
 }
 
+
+function equalLevelCandidateProxy(candidate, bosses, commonLevel) {
+  const values = bosses.map(boss => {
+    if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) return 0;
+    return Math.log1p(Math.max(0, Number(candidateBossUtility(candidate, boss, commonLevel) || 0)));
+  });
+  const ordered = [...values].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(5, ordered.length));
+  return {
+    mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
+    bottom5: bottom.length ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length : 0,
+    max: values.length ? Math.max(...values) : 0,
+  };
+}
+
+function equalLevelTeamProxy(team, bosses, commonLevel) {
+  const bossScores = bosses.map(boss => {
+    const values = team
+      .filter(candidate => Number(candidate.availableFrom || 0) <= Number(boss.stage || 0))
+      .map(candidate => Math.log1p(Math.max(
+        0,
+        Number(candidateBossUtility(candidate, boss, commonLevel) || 0),
+      )))
+      .sort((a, b) => b - a);
+    return Number(values[0] || 0) + 0.35 * Number(values[1] || 0);
+  });
+  const ordered = [...bossScores].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(5, ordered.length));
+  const mean = bossScores.length
+    ? bossScores.reduce((sum, value) => sum + value, 0) / bossScores.length
+    : 0;
+  const bottom5 = bottom.length
+    ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length
+    : 0;
+  return {
+    mean,
+    bottom5,
+    composite: 0.65 * mean + 0.35 * bottom5,
+  };
+}
+
+function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel, cap) {
+  const starterKey = candidateIdentity(starter);
+  const rows = candidates
+    .filter(candidate =>
+      (candidate.exclusiveGroup !== 'starter' || candidateIdentity(candidate) === starterKey) &&
+      equalLevelCapturePlan(candidate, commonLevel).legal
+    )
+    .map(candidate => {
+      const exp = equalLevelCapturePlan(candidate, commonLevel);
+      return {
+        candidate,
+        proxy: equalLevelCandidateProxy(candidate, bosses, commonLevel),
+        grindExp: Number(exp.grindExp || 0),
+      };
+    });
+  const selected = new Map();
+  const add = row => {
+    if (!row || selected.size >= cap) return;
+    selected.set(candidateIdentity(row.candidate), row);
+  };
+
+  add(rows.find(row => candidateIdentity(row.candidate) === starterKey));
+
+  const byUtility = [...rows].sort((a, b) =>
+    b.proxy.mean - a.proxy.mean ||
+    b.proxy.max - a.proxy.max ||
+    a.grindExp - b.grindExp ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+  for (const row of byUtility.slice(0, Math.max(8, Math.ceil(cap * 0.55)))) add(row);
+
+  const useful = rows.filter(row => row.proxy.mean > 0);
+  const byExp = [...useful].sort((a, b) =>
+    a.grindExp - b.grindExp ||
+    b.proxy.mean - a.proxy.mean ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+  for (const row of byExp.slice(0, Math.max(4, Math.ceil(cap * 0.2)))) add(row);
+
+  const hardBosses = bosses.filter(boss =>
+    ['Clair', 'Lance', 'Misty', 'Blue', 'Red'].includes(String(boss.label))
+  );
+  for (const boss of hardBosses) {
+    const specialists = [...rows]
+      .filter(row => Number(row.candidate.availableFrom || 0) <= Number(boss.stage || 0))
+      .sort((a, b) =>
+        Number(candidateBossUtility(b.candidate, boss, commonLevel) || 0) -
+          Number(candidateBossUtility(a.candidate, boss, commonLevel) || 0) ||
+        a.grindExp - b.grindExp ||
+        a.candidate.species.localeCompare(b.candidate.species)
+      );
+    add(specialists[0]);
+    add(specialists[1]);
+  }
+
+  for (const row of byUtility) add(row);
+  return [...selected.values()];
+}
+
+function selectEqualLevelProxyBeam(states, width) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  const byComposite = [...states].sort((a, b) =>
+    b.proxy.composite - a.proxy.composite ||
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  const byBottom = [...states].sort((a, b) =>
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    b.proxy.mean - a.proxy.mean ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    b.proxy.composite - a.proxy.composite ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byComposite.slice(0, Math.ceil(width * 0.6))) add(state);
+  for (const state of byBottom.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byComposite) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
+function equalLevelEvaluationCompare(a, b) {
+  return (
+    Number(b.storyClearCoverageScore || 0) - Number(a.storyClearCoverageScore || 0) ||
+    Number(b.bottom5BossWinRate || 0) - Number(a.bottom5BossWinRate || 0) ||
+    Number(b.storyClearGeometricScore || 0) - Number(a.storyClearGeometricScore || 0) ||
+    Number(b.score || 0) - Number(a.score || 0) ||
+    Number(a.equalLevelExp?.totalGrindExp || Infinity) -
+      Number(b.equalLevelExp?.totalGrindExp || Infinity)
+  );
+}
+
+function equalLevelSearchRow(team, evaluation, proxy = null) {
+  return {
+    team: team.map(candidate => candidate.species),
+    finalTeam: evaluation.finalTeam || [],
+    commonLevel: Number(evaluation.commonLevel),
+    totalGrindExp: evaluation.equalLevelExp?.totalGrindExp ?? null,
+    score: Number(evaluation.score || 0),
+    worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+    bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+    storyClearGeometricScore: Number(evaluation.storyClearGeometricScore || 0),
+    storyClearCoverageScore: Number(evaluation.storyClearCoverageScore || 0),
+    proxy,
+    bosses: (evaluation.rows || []).map(row => ({
+      boss: row.boss,
+      wins: row.wins,
+      losses: row.losses,
+      ties: row.ties,
+      winRate: row.winRate,
+      playerLead: row.playerLead || null,
+      availableMons: row.availableMons || [],
+    })),
+    expMembers: evaluation.equalLevelExp?.members || [],
+  };
+}
+
+function equalLevelParetoRows(rows) {
+  return rows.filter((row, index) => !rows.some((other, otherIndex) => {
+    if (index === otherIndex) return false;
+    const atLeastAsGood =
+      Number(other.storyClearCoverageScore || 0) >= Number(row.storyClearCoverageScore || 0) &&
+      Number(other.bottom5BossWinRate || 0) >= Number(row.bottom5BossWinRate || 0) &&
+      Number(other.storyClearGeometricScore || 0) >= Number(row.storyClearGeometricScore || 0) &&
+      Number(other.score || 0) >= Number(row.score || 0) &&
+      Number(other.totalGrindExp || Infinity) <= Number(row.totalGrindExp || Infinity);
+    const strictlyBetter =
+      Number(other.storyClearCoverageScore || 0) > Number(row.storyClearCoverageScore || 0) ||
+      Number(other.bottom5BossWinRate || 0) > Number(row.bottom5BossWinRate || 0) ||
+      Number(other.storyClearGeometricScore || 0) > Number(row.storyClearGeometricScore || 0) ||
+      Number(other.score || 0) > Number(row.score || 0) ||
+      Number(other.totalGrindExp || Infinity) < Number(row.totalGrindExp || Infinity);
+    return atLeastAsGood && strictlyBetter;
+  }));
+}
+
+async function cmdEqualLevelStorySearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '57')))));
+  const candidateCap = Math.max(8, Math.floor(Number(arg('candidate-cap', '24'))));
+  const beamWidth = Math.max(4, Math.floor(Number(arg('beam-width', '24'))));
+  const proxyFinalists = Math.max(4, Math.floor(Number(arg('proxy-finalists', '12'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
+  const finalCap = Math.max(1, Math.floor(Number(arg('final-cap', '5'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '10'))));
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('equal-level-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const starter = findStarterCandidate(pool.candidates, starterName);
+  const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
+  const screenedRows = selectEqualLevelCandidateRows(
+    pool.candidates,
+    starter,
+    routeBosses,
+    commonLevel,
+    candidateCap,
+  );
+  const screened = screenedRows.map(row => row.candidate);
+  const starterKey = candidateIdentity(starter);
+  if (!screened.some(candidate => candidateIdentity(candidate) === starterKey)) {
+    throw new Error('starter was lost during equal-level candidate screening');
+  }
+
+  let beam = [{
+    team: [starter],
+    proxy: equalLevelTeamProxy([starter], routeBosses, commonLevel),
+    expCost: equalLevelTeamExpCost([starter], commonLevel),
+  }];
+
+  for (let size = 2; size <= 6; size += 1) {
+    const expanded = [];
+    const seen = new Set();
+    for (const state of beam) {
+      const families = new Set(state.team.map(candidateIdentity));
+      for (const candidate of screened) {
+        const candidateKey = candidateIdentity(candidate);
+        if (families.has(candidateKey)) continue;
+        const team = [...state.team, candidate];
+        if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+        const key = team.map(candidateIdentity).sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const expCost = equalLevelTeamExpCost(team, commonLevel);
+        if (!expCost.legal || expCost.totalGrindExp === null) continue;
+        expanded.push({
+          team,
+          proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+          expCost,
+        });
+      }
+    }
+    beam = selectEqualLevelProxyBeam(expanded, beamWidth);
+    if (!beam.length) break;
+  }
+
+  const proxyStates = [...beam]
+    .sort((a, b) =>
+      b.proxy.composite - a.proxy.composite ||
+      b.proxy.bottom5 - a.proxy.bottom5 ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    )
+    .slice(0, proxyFinalists);
+
+  const screenedFinalists = [];
+  for (const state of proxyStates) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      state.team,
+      story,
+      commonLevel,
+      screenRuns,
+      moveAccess,
+    );
+    screenedFinalists.push({ ...state, evaluation });
+  }
+  screenedFinalists.sort((a, b) =>
+    equalLevelEvaluationCompare(a.evaluation, b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const finalStates = [];
+  for (const state of screenedFinalists.slice(0, finalCap)) {
+    const evaluation = finalRuns === screenRuns
+      ? state.evaluation
+      : await evaluateEqualLevelStoryTeam(
+          state.team,
+          story,
+          commonLevel,
+          finalRuns,
+          moveAccess,
+        );
+    finalStates.push({ ...state, evaluation });
+  }
+  finalStates.sort((a, b) =>
+    equalLevelEvaluationCompare(a.evaluation, b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const screenRows = screenedFinalists.map(state =>
+    equalLevelSearchRow(state.team, state.evaluation, state.proxy)
+  );
+  const finalRows = finalStates.map(state =>
+    equalLevelSearchRow(state.team, state.evaluation, state.proxy)
+  );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'HG+Cyndaquil equal-level story team search without EXP scheduling',
+    version,
+    starter: starterName,
+    commonLevel,
+    resourceProfile: 'all',
+    spendPolicy: 'unbounded',
+    search: {
+      candidatePool: pool.candidates.length,
+      candidateCap,
+      screenedCandidates: screenedRows.map(row => ({
+        species: row.candidate.species,
+        proxy: row.proxy,
+        grindExp: row.grindExp,
+      })),
+      beamWidth,
+      proxyFinalists,
+      screenRuns,
+      finalCap,
+      finalRuns,
+    },
+    preliminaryPareto: equalLevelParetoRows(screenRows),
+    finalPareto: equalLevelParetoRows(finalRows),
+    final: finalRows,
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -6027,6 +6361,7 @@ const commands = {
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'equal-level-story-search': cmdEqualLevelStorySearch,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -6038,7 +6373,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, equal-level-story-search, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
