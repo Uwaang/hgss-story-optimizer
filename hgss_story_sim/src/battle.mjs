@@ -773,6 +773,8 @@ const RED_BUILD_ITEMS = [
   'Wise Glasses', 'Lum Berry',
 ];
 
+const playerBuildOptimizationCache = new Map();
+
 function playerBuildScore(mon, foeTeam) {
   const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
   if (!foes.length) return 0;
@@ -793,6 +795,33 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
   const spreads = options.evSpreads || RED_BUILD_EV_SPREADS;
   const natures = options.natures || RED_BUILD_NATURES;
   const items = options.items || RED_BUILD_ITEMS;
+  const cacheable =
+    spreads === RED_BUILD_EV_SPREADS &&
+    natures === RED_BUILD_NATURES &&
+    items === RED_BUILD_ITEMS;
+  const foeSignature = (foeTeam || []).map(foe =>
+    [foe.species, foe.level, foe.item || '', foe.nature || '', ...(foe.moves || [])].join(':')
+  ).join('|');
+  const cacheKey = cacheable
+    ? [
+        mon.species,
+        mon.level,
+        mon.ability || '',
+        (mon.moves || []).join(','),
+        iv,
+        foeSignature,
+      ].join('||')
+    : null;
+  if (cacheKey && playerBuildOptimizationCache.has(cacheKey)) {
+    const cached = playerBuildOptimizationCache.get(cacheKey);
+    return {
+      ...mon,
+      ...cached,
+      ivs: { ...cached.ivs },
+      evs: { ...cached.evs },
+      _buildOptimization: { ...cached._buildOptimization },
+    };
+  }
   let best = null;
 
   for (const spread of spreads) {
@@ -824,7 +853,7 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
     }
   }
 
-  return {
+  const result = {
     ...(best?.mon || { ...mon, ivs }),
     _buildOptimization: {
       iv,
@@ -834,6 +863,16 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
       proxyScore: Number(best?.score || 0),
     },
   };
+  if (cacheKey) {
+    playerBuildOptimizationCache.set(cacheKey, {
+      ivs: { ...result.ivs },
+      evs: { ...result.evs },
+      nature: result.nature,
+      item: result.item,
+      _buildOptimization: { ...result._buildOptimization },
+    });
+  }
+  return result;
 }
 
 export function orderPlayerTeamForLead(team, foeTeam) {
