@@ -81,6 +81,30 @@ function speciesForLandTime(value, version, time) {
   return [...new Set(speciesValues(resolved, version))];
 }
 
+function mergeLevelRanges(ranges) {
+  const normalized = (ranges || [])
+    .map(range => ({
+      min: Number(range?.min),
+      max: Number(range?.max),
+    }))
+    .filter(range => Number.isFinite(range.min) && Number.isFinite(range.max))
+    .map(range => ({
+      min: Math.min(range.min, range.max),
+      max: Math.max(range.min, range.max),
+    }))
+    .sort((a, b) => a.min - b.min || a.max - b.max);
+  const merged = [];
+  for (const range of normalized) {
+    const last = merged[merged.length - 1];
+    if (!last || range.min > last.max + 1) {
+      merged.push({ ...range });
+      continue;
+    }
+    last.max = Math.max(last.max, range.max);
+  }
+  return merged;
+}
+
 function methodEntries(encounter, method, version) {
   const mons = methodMons(encounter, method);
   const weights = ENCOUNTER_SLOT_WEIGHTS[method] || [];
@@ -95,12 +119,16 @@ function methodEntries(encounter, method, version) {
       probabilityByTime: {},
       encounterProbability: 0,
       bestTime: null,
+      levelRanges: [],
     };
     if (Number.isFinite(range.min)) {
       row.minLevel = Number.isFinite(row.minLevel) ? Math.min(row.minLevel, range.min) : range.min;
     }
     if (Number.isFinite(range.max)) {
       row.maxLevel = Number.isFinite(row.maxLevel) ? Math.max(row.maxLevel, range.max) : range.max;
+    }
+    if (Number.isFinite(range.min) && Number.isFinite(range.max)) {
+      row.levelRanges.push({ min: Number(range.min), max: Number(range.max) });
     }
     if (time) {
       row.probabilityByTime[time] = (row.probabilityByTime[time] || 0) + probability;
@@ -139,6 +167,7 @@ function methodEntries(encounter, method, version) {
       speciesConst: row.speciesConst,
       minLevel: row.minLevel,
       maxLevel: row.maxLevel,
+      levelRanges: mergeLevelRanges(row.levelRanges),
       encounterProbability: row.encounterProbability,
       expectedEncounters: row.encounterProbability > 0 ? 100 / row.encounterProbability : null,
       encounterRate,
@@ -148,7 +177,7 @@ function methodEntries(encounter, method, version) {
 }
 
 function headbuttEntries(table, version) {
-  const bySpecies = new Map();
+  const rows = [];
   const groups = [
     ['common', table?.CommonMons || []],
     ['rare', table?.RareMons || []],
@@ -156,41 +185,44 @@ function headbuttEntries(table, version) {
   ];
 
   for (const [group, slots] of groups) {
-    const groupProbability = new Map();
-    const levels = new Map();
+    const bySpecies = new Map();
     for (let index = 0; index < slots.length; index += 1) {
       const slot = slots[index];
       const probability = Number(HEADBUTT_SLOT_WEIGHTS[index] || 0);
       const species = [...new Set(speciesValues(slot.species, version))];
       for (const speciesConst of species) {
-        groupProbability.set(speciesConst, (groupProbability.get(speciesConst) || 0) + probability);
-        const range = levels.get(speciesConst) || { min: null, max: null };
+        const entry = bySpecies.get(speciesConst) || {
+          speciesConst,
+          probability: 0,
+          levelRanges: [],
+        };
+        entry.probability += probability;
         const min = Number(slot.minLevel);
         const max = Number(slot.maxLevel);
-        if (Number.isFinite(min)) range.min = Number.isFinite(range.min) ? Math.min(range.min, min) : min;
-        if (Number.isFinite(max)) range.max = Number.isFinite(range.max) ? Math.max(range.max, max) : max;
-        levels.set(speciesConst, range);
+        if (Number.isFinite(min) && Number.isFinite(max)) {
+          entry.levelRanges.push({ min, max });
+        }
+        bySpecies.set(speciesConst, entry);
       }
     }
 
-    for (const [speciesConst, probability] of groupProbability) {
-      const range = levels.get(speciesConst) || { min: null, max: null };
-      const existing = bySpecies.get(speciesConst);
-      if (!existing || probability > existing.encounterProbability) {
-        bySpecies.set(speciesConst, {
-          speciesConst,
-          minLevel: range.min,
-          maxLevel: range.max,
-          encounterProbability: probability,
-          expectedEncounters: probability > 0 ? 100 / probability : null,
-          headbuttTreeGroup: group,
-          conditionalTreeGroup: true,
-        });
-      }
+    for (const entry of bySpecies.values()) {
+      const ranges = mergeLevelRanges(entry.levelRanges);
+      if (!ranges.length) continue;
+      rows.push({
+        speciesConst: entry.speciesConst,
+        minLevel: Math.min(...ranges.map(range => range.min)),
+        maxLevel: Math.max(...ranges.map(range => range.max)),
+        levelRanges: ranges,
+        encounterProbability: entry.probability,
+        expectedEncounters: entry.probability > 0 ? 100 / entry.probability : null,
+        headbuttTreeGroup: group,
+        conditionalTreeGroup: true,
+      });
     }
   }
 
-  return [...bySpecies.values()];
+  return rows;
 }
 
 function bestCaptureSource(sources) {
@@ -361,6 +393,7 @@ export async function buildCanonicalCandidatePool({
               method,
               minLevel: entry.minLevel,
               maxLevel: entry.maxLevel,
+              levelRanges: entry.levelRanges || [{ min: entry.minLevel, max: entry.maxLevel }],
               encounterProbability: entry.encounterProbability,
               expectedEncounters: entry.expectedEncounters,
               encounterRate: entry.encounterRate,
@@ -599,6 +632,7 @@ export async function buildRedOnlyCandidateForms({
       option.stage ?? '',
       option.minLevel ?? '',
       option.maxLevel ?? '',
+      option.headbuttTreeGroup || '',
       option.exclusiveGroup || '',
     ].join('|');
     if (!bucket.some(row => row._key === key)) bucket.push({ ...option, _key: key });
@@ -643,8 +677,11 @@ export async function buildRedOnlyCandidateForms({
             stage,
             minLevel: entry.minLevel,
             maxLevel: entry.maxLevel,
+            levelRanges: entry.levelRanges || [{ min: entry.minLevel, max: entry.maxLevel }],
             encounterProbability: entry.encounterProbability,
             expectedEncounters: entry.expectedEncounters,
+            headbuttTreeGroup: entry.headbuttTreeGroup || null,
+            conditionalTreeGroup: Boolean(entry.conditionalTreeGroup),
           });
         }
       }
@@ -662,6 +699,7 @@ export async function buildRedOnlyCandidateForms({
       stage: Number(manual.availableFrom || 0),
       minLevel: level,
       maxLevel: level,
+      levelRanges: [{ min: level, max: level }],
       exclusiveGroup: manual.exclusiveGroup || null,
       note: manual.note || null,
     });
@@ -713,6 +751,14 @@ export async function buildRedOnlyCandidateForms({
       stage: captureOption.stage,
       minLevel: captureOption.minLevel,
       maxLevel: captureOption.maxLevel,
+      levelRanges: mergeLevelRanges(
+        captureOption.levelRanges || [{
+          min: captureOption.minLevel,
+          max: captureOption.maxLevel,
+        }],
+      ),
+      headbuttTreeGroup: captureOption.headbuttTreeGroup || null,
+      conditionalTreeGroup: Boolean(captureOption.conditionalTreeGroup),
       encounterProbability: captureOption.encounterProbability ?? null,
       expectedEncounters: captureOption.expectedEncounters ?? null,
     });
@@ -825,7 +871,7 @@ export async function buildRedOnlyCandidateForms({
     familyCount: new Set(forms.map(row => row.familyId)).size,
     notes: [
       'Capture options include every source-backed wild/headbutt/manual level available by the target boss stage, not only the earliest story source.',
-      'For a requested common level, the search may use the highest capture level that still leaves enough level-ups to complete every level-triggered evolution on the recorded path.',
+      'For a requested common level, the search may use only levels present in the source encounter-slot ranges; disjoint ranges are preserved instead of filling the min..max gap. The chosen capture level must also leave enough level-ups to complete every level-triggered evolution on the recorded path.',
       'Trade/stone/friendship and other HGSS-feasible non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold. DPPt-only field evolutions (magnetic field, Moss/Ice Rock, Beauty) are excluded.',
       'Legendary and mythical species are excluded by a curated Gen 1-4 set when excludeLegendary=true.',
     ],
