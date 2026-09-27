@@ -3794,6 +3794,208 @@ async function cmdTeamUsage() {
   }, null, 2));
 }
 
+
+function bossUsageForCandidate(evaluation, candidateKey, bossLabel) {
+  const usage = evaluation?.memberUsage?.[candidateKey];
+  const row = usage?.bossUsage?.find(item => item.boss === bossLabel);
+  if (!row) {
+    return {
+      runsAvailable: 0,
+      runsUsed: 0,
+      winningRunsUsed: 0,
+      activeTurns: 0,
+      winningActiveTurns: 0,
+      useRate: 0,
+      winningUseRate: 0,
+    };
+  }
+  const available = Number(row.runsAvailable || 0);
+  return {
+    runsAvailable: available,
+    runsUsed: Number(row.runsUsed || 0),
+    winningRunsUsed: Number(row.winningRunsUsed || 0),
+    activeTurns: Number(row.activeTurns || 0),
+    winningActiveTurns: Number(row.winningActiveTurns || 0),
+    useRate: available ? Number(row.runsUsed || 0) / available : 0,
+    winningUseRate: available ? Number(row.winningRunsUsed || 0) / available : 0,
+  };
+}
+
+function candidateAceLevelPotential(candidate, boss) {
+  if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) return null;
+  return Number(candidateBossUtility(candidate, boss, Number(boss.aceLevel || 1)) || 0);
+}
+
+async function cmdBossInteractionMatrix() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+  const topPoolPerBoss = Math.max(1, Math.floor(Number(arg('top-pool-per-boss', '12'))));
+
+  if (teamNames.length !== 6) {
+    throw new Error('boss-interaction-matrix requires exactly six members via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('boss-interaction-matrix requires the selected starter in the team');
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('boss-interaction-matrix team violates team constraints');
+  }
+
+  const full = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+
+  const ablations = new Map();
+  for (const candidate of team) {
+    const key = candidateIdentity(candidate);
+    if (key === candidateIdentity(starter)) continue;
+    const reduced = team.filter(mon => candidateIdentity(mon) !== key);
+    ablations.set(key, await evaluateCandidates(
+      reduced,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    ));
+  }
+
+  const starterKey = candidateIdentity(starter);
+  const legalPool = pool.candidates.filter(candidate =>
+    candidate.exclusiveGroup !== 'starter' || candidateIdentity(candidate) === starterKey
+  );
+
+  const candidatePoolMatrix = legalPool.map(candidate => ({
+    species: candidate.species,
+    key: candidateIdentity(candidate),
+    availableFrom: Number(candidate.availableFrom || 0),
+    exclusiveGroup: candidate.exclusiveGroup || null,
+    captureExpectedEncounters: Number(candidate.captureSearch?.expectedEncounters || 0),
+    bossPotential: Object.fromEntries(story.bosses.map(boss => [
+      boss.label,
+      candidateAceLevelPotential(candidate, boss),
+    ])),
+  }));
+
+  const bosses = full.rows.map((row, battleIndex) => {
+    const boss = story.bosses.find(item => item.label === row.boss);
+    if (!boss) return null;
+    const levelsBefore = full.expSchedule?.battles?.[battleIndex]?.levelsBefore || {};
+    const memberSignals = team.map(candidate => {
+      const key = candidateIdentity(candidate);
+      const level = Number(levelsBefore[key]);
+      const ablated = ablations.get(key);
+      const ablatedRow = ablated?.rows?.find(item => item.boss === row.boss);
+      return {
+        species: candidate.species,
+        key,
+        mandatoryStarter: key === starterKey,
+        available: Number(candidate.availableFrom || 0) <= Number(boss.stage || 0),
+        naturalLevel: Number.isFinite(level) ? level : null,
+        actualLevelCheapUtility: Number.isFinite(level)
+          ? Number(candidateBossUtility(candidate, boss, level) || 0)
+          : null,
+        aceLevelPotential: candidateAceLevelPotential(candidate, boss),
+        usage: bossUsageForCandidate(full, key, row.boss),
+        reoptimizedAblationDelta: ablated
+          ? Number(row.winRate || 0) - Number(ablatedRow?.winRate || 0)
+          : null,
+        withoutMemberWinRate: ablated ? Number(ablatedRow?.winRate || 0) : null,
+      };
+    });
+
+    const availablePool = candidatePoolMatrix
+      .map(candidate => ({
+        species: candidate.species,
+        key: candidate.key,
+        availableFrom: candidate.availableFrom,
+        exclusiveGroup: candidate.exclusiveGroup,
+        captureExpectedEncounters: candidate.captureExpectedEncounters,
+        aceLevelPotential: candidate.bossPotential[row.boss],
+      }))
+      .filter(candidate => candidate.aceLevelPotential !== null)
+      .sort((a, b) =>
+        Number(b.aceLevelPotential || 0) - Number(a.aceLevelPotential || 0) ||
+        a.availableFrom - b.availableFrom ||
+        a.species.localeCompare(b.species)
+      );
+
+    const positiveMarginalMembers = memberSignals.filter(signal =>
+      Number(signal.reoptimizedAblationDelta || 0) > 1e-12
+    );
+    const winningUsedMembers = memberSignals.filter(signal =>
+      Number(signal.usage?.winningRunsUsed || 0) > 0
+    );
+
+    return {
+      boss: row.boss,
+      stage: Number(boss.stage || 0),
+      aceLevel: Number(row.aceLevel || boss.aceLevel || 0),
+      fullWins: Number(row.wins || 0),
+      fullLosses: Number(row.losses || 0),
+      fullWinRate: Number(row.winRate || 0),
+      observedZero: Number(row.wins || 0) === 0,
+      positiveMarginalMemberCount: positiveMarginalMembers.length,
+      winningUsedMemberCount: winningUsedMembers.length,
+      memberSignals,
+      topAvailablePoolByAceLevelPotential: availablePool.slice(0, topPoolPerBoss),
+    };
+  }).filter(Boolean);
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'diagnostic Boss x Pokemon / team interaction matrix; no optimization rule is changed. Ace-level potential is a cheap progression-agnostic proxy; reoptimized ablation includes EXP/resource replanning and is not frozen-state causality.',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    full: compactEvaluationForAblation(full),
+    bosses,
+    candidatePoolMatrix,
+  }, null, 2));
+}
+
 async function cmdTrainerAiCompare() {
   const runs = Number(arg('runs', '20'));
   const story = await loadStory();
@@ -4229,6 +4431,7 @@ const commands = {
   'team-ablation': cmdTeamAblation,
   'team-usage': cmdTeamUsage,
   'team-activation': cmdTeamActivation,
+  'boss-interaction-matrix': cmdBossInteractionMatrix,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -4240,7 +4443,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
