@@ -6325,10 +6325,6 @@ async function cmdRedMinGrindSearch() {
   const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '24'))));
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '50'))));
   const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
-  const refinePopulation = Math.max(populationSize, Math.floor(Number(arg('refine-population', '28'))));
-  const refineGenerations = Math.max(generations, Math.floor(Number(arg('refine-generations', '6'))));
-  const refineRuns = Math.max(searchRuns, Math.floor(Number(arg('refine-runs', '2'))));
-  const refineLevelCap = Math.max(1, Math.floor(Number(arg('refine-level-cap', '5'))));
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
@@ -6595,6 +6591,10 @@ async function cmdRedMinGrindGaSearch() {
   const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '18'))));
   const finalRuns = Math.max(searchRuns, Math.floor(Number(arg('final-runs', '40'))));
   const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+  const refinePopulation = Math.max(populationSize, Math.floor(Number(arg('refine-population', '28'))));
+  const refineGenerations = Math.max(generations, Math.floor(Number(arg('refine-generations', '6'))));
+  const refineRuns = Math.max(searchRuns, Math.floor(Number(arg('refine-runs', '2'))));
+  const refineLevelCap = Math.max(1, Math.floor(Number(arg('refine-level-cap', '5'))));
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
