@@ -30,6 +30,7 @@ on:
           - default
           - red-min-grind-pilot
           - red-model-sanity
+          - red-focused-search
           - red-min-grind-matrix
           - allocator-story-matrix
           - allocator-saturation-matrix
@@ -197,6 +198,79 @@ jobs:
         with:
           name: hgss-red-battle-model-sanity-hg-cyndaquil
           path: hgss_story_sim/results/red-battle-model-sanity-hg-cyndaquil.json
+          if-no-files-found: error
+
+  red_focused_search:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Focused Lv57-65 Red search with 100-run finalists
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-ga-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level-min=57 \
+            --level-max=65 \
+            --level-step=1 \
+            --candidate-cap=72 \
+            --population=24 \
+            --generations=5 \
+            --search-runs=1 \
+            --refine-population=36 \
+            --refine-generations=7 \
+            --refine-runs=2 \
+            --refine-level-cap=5 \
+            --finalist-cap=14 \
+            --final-runs=100 \
+            --target-win-rate=0.5 \
+            > results/red-focused-hg-cyndaquil-lv57-65.json
+      - name: Revalidate previous Lv57 winner at 100 runs
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Ampharos,Rhyperior \
+            --level=57 \
+            --runs=100 \
+            > results/red-known-lv57-validate100.json
+      - name: Revalidate previous Lv65 threshold team at 100 runs
+        run: |
+          node src/cli.mjs red-min-grind-validate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Gengar,Jolteon \
+            --level=65 \
+            --runs=100 \
+            > results/red-known-lv65-validate100.json
+      - name: Upload focused Red search
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-focused-hg-cyndaquil-lv57-65
+          path: hgss_story_sim/results/red-*.json
           if-no-files-found: error
 
   allocator_depth_matrix_6:
