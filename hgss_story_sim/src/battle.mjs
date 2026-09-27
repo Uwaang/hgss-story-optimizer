@@ -571,15 +571,14 @@ function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
   return speciesName;
 }
 
-export function candidateBossUtility(candidate, boss, level) {
+function candidateBossUtilityFromMoveNames(candidate, boss, level, moveNames) {
   const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
   const stage = Number(boss?.stage || 0);
   const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
   const species = dex.species.get(speciesName);
   if (!species.exists) return 0;
 
-  const candidateMoves = levelUpMovePool(species.name, actualLevel);
-  const usableCandidateMoves = candidateMoves.length ? candidateMoves : ['Tackle'];
+  const usableCandidateMoves = (moveNames || []).length ? moveNames : ['Tackle'];
   const foes = boss?.trainer?.party || [];
   if (!foes.length) return actualLevel;
 
@@ -624,6 +623,42 @@ export function candidateBossUtility(candidate, boss, level) {
   const levelRatio = actualLevel / Math.max(1, Number(boss?.aceLevel || actualLevel));
   const levelFactor = Math.max(0.25, Math.min(2.0, levelRatio ** 1.4));
   return (total / foes.length) * levelFactor;
+}
+
+export function candidateBossUtility(candidate, boss, level) {
+  const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const stage = Number(boss?.stage || 0);
+  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return 0;
+  return candidateBossUtilityFromMoveNames(
+    candidate,
+    boss,
+    actualLevel,
+    levelUpMovePool(species.name, actualLevel),
+  );
+}
+
+export function candidateBossUtilityWithMoveAccess(
+  candidate,
+  boss,
+  level,
+  moveAccess = null,
+  extraMachines = [],
+) {
+  const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const stage = Number(boss?.stage || 0);
+  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return 0;
+  const moveNames = candidateMovePool(
+    species.name,
+    actualLevel,
+    stage,
+    moveAccess,
+    extraMachines,
+  );
+  return candidateBossUtilityFromMoveNames(candidate, boss, actualLevel, moveNames);
 }
 
 export function materializeCandidateTeam(candidates, stage, level, options = {}) {
