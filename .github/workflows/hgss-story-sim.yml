@@ -39,7 +39,7 @@ on:
 
 jobs:
   boss_interaction_matrix_6:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'boss-interaction-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
