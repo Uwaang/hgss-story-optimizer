@@ -145,6 +145,7 @@ function moveStrategicMultiplier(move) {
   if (move.self?.volatileStatus === 'mustrecharge') multiplier *= 0.45;
   if (move.flags?.charge) multiplier *= 0.45;
   if (move.selfdestruct) multiplier *= 0.42;
+  if (move.id === 'focuspunch') multiplier *= 0.18;
 
   if (Array.isArray(move.recoil) && Number(move.recoil[1]) > 0) {
     const fraction = Number(move.recoil[0]) / Number(move.recoil[1]);
@@ -1018,7 +1019,11 @@ function estimateBattleDamage(active, target, requestedMove) {
   const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
   const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
   const level = Math.max(1, Number(active.level || 1));
-  const power = Math.max(1, effectiveMovePower(move));
+  let power = Math.max(1, effectiveMovePower(move));
+  if (move.id === 'eruption' || move.id === 'waterspout') {
+    const hpRatio = active.maxhp > 0 ? active.hp / active.maxhp : 0;
+    power = Math.max(1, 150 * hpRatio);
+  }
   const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
   let damage = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
   damage *= stab * effectiveness * 0.925 * accuracy * priority * strategic;
@@ -1049,6 +1054,8 @@ function smartStatusMoveScore(active, target, requestedMove, battle) {
   const hpRatio = active?.maxhp > 0 ? active.hp / active.maxhp : 0;
   const incoming = bestExpectedDamage(target, active);
   const likelyIncomingKo = incoming >= Number(active?.hp || 0);
+  const heldItemId = dex.items.get(active?.item || '').id;
+  if (['choiceband', 'choicespecs', 'choicescarf'].includes(heldItemId)) return 0.25;
 
   const recovery = new Set(['recover', 'roost', 'milkdrink', 'synthesis', 'slackoff', 'softboiled']);
   if (recovery.has(move.id)) {
@@ -1096,7 +1103,11 @@ function smartMoveScore(active, target, requestedMove, battle) {
     return smartStatusMoveScore(active, target, requestedMove, battle);
   }
 
-  const damage = estimateBattleDamage(active, target, requestedMove);
+  let damage = estimateBattleDamage(active, target, requestedMove);
+  if (move.id === 'focuspunch') {
+    const incomingContact = bestExpectedDamage(target, active);
+    if (incomingContact > 0) damage *= 0.08;
+  }
   const targetHp = Math.max(1, Number(target?.hp || target?.maxhp || 1));
   const targetMaxHp = Math.max(1, Number(target?.maxhp || targetHp));
   const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
