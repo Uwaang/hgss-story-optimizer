@@ -3381,16 +3381,26 @@ async function cmdMeaningfulSix() {
   const storySafeRanked = baseline
     ? rescored
         .filter(row => storyNoRegression(row.evaluation, baseline.evaluation))
-        .sort((a, b) =>
-          memberContributionCompare(
-            { evaluation: a.evaluation, memberContribution: a.contribution },
-            { evaluation: b.evaluation, memberContribution: b.contribution },
-            objective,
-          ) ||
-          Number(a.evaluation.captureSearch?.expectedEncounters || 0) -
-            Number(b.evaluation.captureSearch?.expectedEncounters || 0) ||
-          stateTieKey(a).localeCompare(stateTieKey(b))
-        )
+        .sort((a, b) => {
+          const ac = a.contribution || {};
+          const bc = b.contribution || {};
+          if (Number(ac.meaningfulElectiveCount || 0) !== Number(bc.meaningfulElectiveCount || 0)) {
+            return Number(bc.meaningfulElectiveCount || 0) - Number(ac.meaningfulElectiveCount || 0);
+          }
+          if (Number(ac.weakestSupportedBossGain || 0) !== Number(bc.weakestSupportedBossGain || 0)) {
+            return Number(bc.weakestSupportedBossGain || 0) - Number(ac.weakestSupportedBossGain || 0);
+          }
+          const storyOrder = evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
+          if (storyOrder !== 0) return storyOrder;
+          const captureOrder =
+            Number(a.evaluation.captureSearch?.expectedEncounters || 0) -
+            Number(b.evaluation.captureSearch?.expectedEncounters || 0);
+          if (captureOrder !== 0) return captureOrder;
+          if (Number(ac.totalSupportedBossGain || 0) !== Number(bc.totalSupportedBossGain || 0)) {
+            return Number(bc.totalSupportedBossGain || 0) - Number(ac.totalSupportedBossGain || 0);
+          }
+          return stateTieKey(a).localeCompare(stateTieKey(b));
+        })
     : [];
   const recommended = storySafeRanked[0] || baseline || meaningfulRanked[0] || null;
   const pareto = rescored.filter((row, index) =>
