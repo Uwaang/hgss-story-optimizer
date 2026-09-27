@@ -3172,6 +3172,22 @@ function contributionUsageCompare(a, b) {
   return 0;
 }
 
+function storyNoRegression(candidate, baseline) {
+  if (!candidate || !baseline) return false;
+  const epsilon = 1e-12;
+  return (
+    Number(candidate.storyClearGeometricScore || 0) + epsilon >=
+      Number(baseline.storyClearGeometricScore || 0) &&
+    Number(candidate.storyClearCoverageScore || 0) + epsilon >=
+      Number(baseline.storyClearCoverageScore || 0) &&
+    Number(candidate.bottom5BossWinRate || 0) + epsilon >=
+      Number(baseline.bottom5BossWinRate || 0) &&
+    Number(candidate.worstBossWinRate || 0) + epsilon >=
+      Number(baseline.worstBossWinRate || 0) &&
+    Number(candidate.score || 0) + epsilon >= Number(baseline.score || 0)
+  );
+}
+
 function contributionParetoDominates(a, b) {
   const ac = a.contribution || {};
   const bc = b.contribution || {};
@@ -3362,6 +3378,21 @@ async function cmdMeaningfulSix() {
     ) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
+  const storySafeRanked = baseline
+    ? rescored
+        .filter(row => storyNoRegression(row.evaluation, baseline.evaluation))
+        .sort((a, b) =>
+          memberContributionCompare(
+            { evaluation: a.evaluation, memberContribution: a.contribution },
+            { evaluation: b.evaluation, memberContribution: b.contribution },
+            objective,
+          ) ||
+          Number(a.evaluation.captureSearch?.expectedEncounters || 0) -
+            Number(b.evaluation.captureSearch?.expectedEncounters || 0) ||
+          stateTieKey(a).localeCompare(stateTieKey(b))
+        )
+    : [];
+  const recommended = storySafeRanked[0] || baseline || meaningfulRanked[0] || null;
   const pareto = rescored.filter((row, index) =>
     !rescored.some((other, otherIndex) =>
       index !== otherIndex && contributionParetoDominates(other, row)
@@ -3388,7 +3419,7 @@ async function cmdMeaningfulSix() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; a member is meaningful only when removing it hurts at least one boss and that member is actually used in winning runs for a helped boss',
+    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; recommendation is restricted to no-regression story candidates, and a member is meaningful only when removing it hurts at least one boss and that member is actually used in winning runs for a helped boss',
     version,
     starter: starter.species,
     baselineTeam: baselineTeam.map(mon => mon.species),
@@ -3411,6 +3442,9 @@ async function cmdMeaningfulSix() {
     finalistsEvaluated: rescored.length,
     baseline: outputRow(baseline),
     meaningfulTop: outputRow(meaningfulRanked[0]),
+    recommendedTop: outputRow(recommended),
+    storySafeCandidateCount: storySafeRanked.length,
+    storySafeCandidates: storySafeRanked.map(outputRow),
     paretoFront: pareto.map(outputRow),
     finalists: meaningfulRanked.map(outputRow),
   }, null, 2));
