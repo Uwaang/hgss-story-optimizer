@@ -6149,7 +6149,7 @@ async function cmdRedMinGrindSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
   const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
-  const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '95')))));
+  const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '100')))));
   const candidateCap = Math.max(12, Math.floor(Number(arg('candidate-cap', '42'))));
   const beamWidth = Math.max(20, Math.floor(Number(arg('beam-width', '120'))));
   const screenCap = Math.max(20, Math.floor(Number(arg('screen-cap', '120'))));
