@@ -4,6 +4,10 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   HGSS_SOURCE_CACHE_DIR: ${{ github.workspace }}/hgss_story_sim/.cache/source
 
+concurrency:
+  group: hgss-story-sim-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
