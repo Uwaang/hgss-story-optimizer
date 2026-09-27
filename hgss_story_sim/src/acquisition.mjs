@@ -771,7 +771,7 @@ export async function buildRedOnlyCandidateForms({
     forms,
     familyCount: new Set(forms.map(row => row.familyId)).size,
     notes: [
-      'Capture options include every source-backed wild/headbutt/manual level available by Red, not only the earliest story source.',
+      'Capture options include every source-backed wild/headbutt/manual level available by the target boss stage, not only the earliest story source.',
       'For a requested common level, the search may use the highest legal capture level at or below that common level.',
       'Trade/stone/friendship and other HGSS-feasible non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold. DPPt-only field evolutions (magnetic field, Moss/Ice Rock, Beauty) are excluded.',
       'Legendary and mythical species are excluded by a curated Gen 1-4 set when excludeLegendary=true.',
