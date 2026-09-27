@@ -256,6 +256,262 @@ export function selectCandidateMoves(speciesName, level, stage, moveAccess = nul
 }
 
 
+const redMoveBuildOptimizationCache = new Map();
+
+function redMoveStatusUtility(species, moveName) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists || move.category !== 'Status') return 0;
+  return Math.max(0, candidateMoveScore(species, moveName)) / 100;
+}
+
+function redMoveOffenseScore(mon, moveName, foeTeam) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists || move.category === 'Status') return 0;
+  const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
+  if (!foes.length) return 0;
+  const fractions = foes.map(foe => {
+    const damage = previewMoveDamage(mon, foe, moveName);
+    const hp = Math.max(1, previewStat(foe, 'hp'));
+    return damage / hp;
+  });
+  const mean = fractions.reduce((sum, value) => sum + value, 0) / fractions.length;
+  const best = Math.max(...fractions);
+  const coverage = fractions.filter(value => value >= 0.45).length / fractions.length;
+  return 0.55 * mean + 0.3 * best + 0.15 * coverage;
+}
+
+function redMovesetProxyScore(mon, moves, foeTeam) {
+  const species = dex.species.get(mon.species);
+  const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
+  if (!species.exists || !foes.length) return -Infinity;
+
+  const fractions = foes.map(foe => {
+    let best = 0;
+    for (const moveName of moves) {
+      const move = dex.moves.get(moveName);
+      if (!move.exists || move.category === 'Status') continue;
+      const damage = previewMoveDamage({ ...mon, moves }, foe, moveName);
+      const hp = Math.max(1, previewStat(foe, 'hp'));
+      best = Math.max(best, damage / hp);
+    }
+    return best;
+  });
+  const mean = fractions.reduce((sum, value) => sum + value, 0) / fractions.length;
+  const worst = Math.min(...fractions);
+  const best = Math.max(...fractions);
+  const strongCoverage = fractions.filter(value => value >= 0.45).length / fractions.length;
+
+  const statusValues = moves
+    .map(moveName => redMoveStatusUtility(species, moveName))
+    .filter(value => value > 0)
+    .sort((a, b) => b - a);
+  const statusBonus = (statusValues[0] || 0) * 0.12 + (statusValues[1] || 0) * 0.04;
+
+  const damaging = moves
+    .map(moveName => dex.moves.get(moveName))
+    .filter(move => move.exists && move.category !== 'Status');
+  const distinctTypes = new Set(damaging.map(move => move.type)).size;
+  const typeDiversity = Math.max(0, distinctTypes - 1) * 0.025;
+
+  return (
+    0.5 * mean +
+    0.16 * worst +
+    0.22 * best +
+    0.12 * strongCoverage +
+    statusBonus +
+    typeDiversity
+  );
+}
+
+function combinationsOfFour(values) {
+  const out = [];
+  for (let a = 0; a < values.length - 3; a += 1) {
+    for (let b = a + 1; b < values.length - 2; b += 1) {
+      for (let c = b + 1; c < values.length - 1; c += 1) {
+        for (let d = c + 1; d < values.length; d += 1) {
+          out.push([values[a], values[b], values[c], values[d]]);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function redMoveShortlist(mon, pool, foeTeam, cap = 12) {
+  const species = dex.species.get(mon.species);
+  if (!species.exists) return pool.slice(0, cap);
+
+  const offensive = pool
+    .filter(name => dex.moves.get(name).category !== 'Status')
+    .map(name => ({ name, score: redMoveOffenseScore(mon, name, foeTeam) }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  const status = pool
+    .filter(name => dex.moves.get(name).category === 'Status')
+    .map(name => ({ name, score: redMoveStatusUtility(species, name) }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const selected = new Map();
+  function add(name, score = 0) {
+    if (!name) return;
+    const prior = selected.get(name);
+    if (prior === undefined || score > prior) selected.set(name, score);
+  }
+
+  // Preserve the best counters to each individual Red Pokemon so a move that
+  // only matters for one wall is not lost to a global average.
+  for (const foe of foeTeam || []) {
+    const perFoe = offensive
+      .map(entry => ({
+        ...entry,
+        foeScore: previewMoveDamage(mon, foe, entry.name) / Math.max(1, previewStat(foe, 'hp')),
+      }))
+      .sort((a, b) => b.foeScore - a.foeScore || b.score - a.score);
+    for (const entry of perFoe.slice(0, 2)) add(entry.name, entry.score + entry.foeScore);
+  }
+  for (const entry of offensive.slice(0, 7)) add(entry.name, entry.score);
+  for (const entry of status.slice(0, 4)) add(entry.name, 0.2 + entry.score);
+
+  const ranked = [...selected.entries()]
+    .map(([name, score]) => ({ name, score }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, Math.max(4, cap))
+    .map(entry => entry.name);
+
+  if (ranked.length < 4) {
+    for (const name of pool) {
+      if (!ranked.includes(name)) ranked.push(name);
+      if (ranked.length >= 4) break;
+    }
+  }
+  return ranked;
+}
+
+export function optimizePlayerMovesAndBuildForBoss(
+  mon,
+  foeTeam,
+  {
+    iv = 16,
+    stage = 0,
+    moveAccess = null,
+    extraMachines = [],
+    shortlistCap = 12,
+    movesetFinalists = 8,
+  } = {},
+) {
+  const pool = candidateMovePool(mon.species, mon.level, stage, moveAccess, extraMachines);
+  if (!pool.length) {
+    return optimizePlayerBuildForBoss({ ...mon, moves: ['Tackle'] }, foeTeam, { iv });
+  }
+
+  const foeSignature = (foeTeam || []).map(foe =>
+    [foe.species, foe.level, foe.item || '', foe.nature || '', ...(foe.moves || [])].join(':')
+  ).join('|');
+  const cacheKey = [
+    mon.species,
+    mon.level,
+    mon.ability || '',
+    iv,
+    stage,
+    [...pool].sort().join(','),
+    foeSignature,
+    shortlistCap,
+    movesetFinalists,
+    'red-moves-build-v1',
+  ].join('||');
+  if (redMoveBuildOptimizationCache.has(cacheKey)) {
+    const cached = redMoveBuildOptimizationCache.get(cacheKey);
+    return {
+      ...mon,
+      ...cached,
+      moves: [...cached.moves],
+      ivs: { ...cached.ivs },
+      evs: { ...cached.evs },
+      _buildOptimization: { ...cached._buildOptimization },
+      _movesetOptimization: { ...cached._movesetOptimization },
+    };
+  }
+
+  // For moveset screening only, allow both attacking stats to express their
+  // ceiling. The final legal EV spread/nature/item is selected afterwards.
+  const proxyMon = {
+    ...mon,
+    nature: 'Serious',
+    item: '',
+    ivs: uniformIvs(iv),
+    evs: { hp: 4, atk: 252, def: 0, spa: 252, spd: 0, spe: 0 },
+  };
+  const shortlist = redMoveShortlist(proxyMon, pool, foeTeam, shortlistCap);
+  let moveSets = shortlist.length <= 4
+    ? [[...shortlist]]
+    : combinationsOfFour(shortlist);
+
+  moveSets = moveSets
+    .map(moves => ({
+      moves,
+      proxyScore: redMovesetProxyScore(proxyMon, moves, foeTeam),
+    }))
+    .sort((a, b) =>
+      b.proxyScore - a.proxyScore ||
+      a.moves.join('/').localeCompare(b.moves.join('/'))
+    )
+    .slice(0, Math.max(1, movesetFinalists));
+
+  let best = null;
+  for (const candidate of moveSets) {
+    const built = optimizePlayerBuildForBoss(
+      { ...mon, moves: candidate.moves },
+      foeTeam,
+      { iv },
+    );
+    const buildScore = playerBuildScore(built, foeTeam);
+    const species = dex.species.get(mon.species);
+    const statusBonus = candidate.moves
+      .map(moveName => redMoveStatusUtility(species, moveName))
+      .sort((a, b) => b - a)
+      .slice(0, 2)
+      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.06 : 0.02), 0);
+    const score = buildScore + statusBonus + candidate.proxyScore * 0.08;
+    if (
+      !best ||
+      score > best.score + 1e-12 ||
+      (Math.abs(score - best.score) <= 1e-12 &&
+        candidate.moves.join('/').localeCompare(best.mon.moves.join('/')) < 0)
+    ) {
+      best = {
+        mon: built,
+        score,
+        proxyScore: candidate.proxyScore,
+        shortlist,
+      };
+    }
+  }
+
+  const result = {
+    ...(best?.mon || optimizePlayerBuildForBoss({ ...mon, moves: selectCandidateMoves(
+      mon.species, mon.level, stage, moveAccess, extraMachines,
+    ) }, foeTeam, { iv })),
+    _movesetOptimization: {
+      mode: 'red-specific-shortlist-enumeration',
+      legalMoveCount: pool.length,
+      shortlist: best?.shortlist || shortlist,
+      evaluatedMovesets: moveSets.length,
+      movesetProxyScore: Number(best?.proxyScore || 0),
+      jointScore: Number(best?.score || 0),
+    },
+  };
+  redMoveBuildOptimizationCache.set(cacheKey, {
+    moves: [...result.moves],
+    item: result.item || '',
+    nature: result.nature,
+    ivs: { ...(result.ivs || {}) },
+    evs: { ...(result.evs || {}) },
+    _buildOptimization: { ...(result._buildOptimization || {}) },
+    _movesetOptimization: { ...(result._movesetOptimization || {}) },
+  });
+  return result;
+}
+
+
 function moveSetScore(speciesName, moves) {
   const species = dex.species.get(speciesName);
   return moves.reduce((sum, moveName) => sum + candidateMoveScore(species, moveName), 0);
