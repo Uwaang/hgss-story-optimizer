@@ -5963,6 +5963,50 @@ function redSearchCandidatePool(levelRows, starterFamily, candidateCap = 42) {
     .slice(0, Math.max(candidateCap, Math.floor(candidateCap * 1.75)));
 }
 
+const redPlayerBuildCache = new Map();
+
+function redOptimizedPlayerBuild(mon, enemyTeam) {
+  const foeSignature = (enemyTeam || []).map(foe => [
+    foe.species,
+    foe.level,
+    foe.item || '',
+    foe.nature || '',
+    (foe.moves || []).join('/'),
+    JSON.stringify(foe.ivs || {}),
+    JSON.stringify(foe.evs || {}),
+  ].join(':')).join('|');
+  const key = [
+    mon.species,
+    mon.level,
+    mon.ability || '',
+    (mon.moves || []).join('/'),
+    foeSignature,
+    'iv16-maxev-v1',
+  ].join('|');
+
+  let build = redPlayerBuildCache.get(key);
+  if (!build) {
+    const optimized = optimizePlayerBuildForBoss(mon, enemyTeam, { iv: 16 });
+    build = {
+      item: optimized.item || '',
+      nature: optimized.nature,
+      ivs: { ...(optimized.ivs || {}) },
+      evs: { ...(optimized.evs || {}) },
+      buildOptimization: { ...(optimized._buildOptimization || {}) },
+    };
+    redPlayerBuildCache.set(key, build);
+  }
+
+  return {
+    ...mon,
+    item: build.item,
+    nature: build.nature,
+    ivs: { ...build.ivs },
+    evs: { ...build.evs },
+    _buildOptimization: { ...build.buildOptimization, cache: 'in-process' },
+  };
+}
+
 async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase) {
   const commonLevel = Number(state.members[0]?.commonLevel || 1);
   const forms = state.members.map(row => row.form);
@@ -5993,11 +6037,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
       extraMachines,
     ),
   }));
-  playerTeam = playerTeam.map(mon => optimizePlayerBuildForBoss(
-    mon,
-    enemyTeam,
-    { iv: 16 },
-  ));
+  playerTeam = playerTeam.map(mon => redOptimizedPlayerBuild(mon, enemyTeam));
 
   const battle = await simulateMatchup(
     playerTeam,
