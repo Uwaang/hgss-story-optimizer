@@ -496,6 +496,26 @@ function levelRequirementForEvolution(evo) {
   return 1;
 }
 
+function evolutionRequiresLevelUp(evo) {
+  const method = String(evo?.method || '');
+  if (method.startsWith('EVO_LEVEL')) return true;
+  return new Set([
+    'EVO_FRIENDSHIP',
+    'EVO_FRIENDSHIP_DAY',
+    'EVO_FRIENDSHIP_NIGHT',
+    'EVO_HAS_MOVE',
+    'EVO_ITEM_DAY',
+    'EVO_ITEM_NIGHT',
+    'EVO_OTHER_PARTY_MON',
+    // These are excluded from HGSS-feasible candidates below, but remain
+    // classified correctly if that policy changes later.
+    'EVO_BEAUTY',
+    'EVO_CORONET',
+    'EVO_ETERNA',
+    'EVO_ROUTE217',
+  ]).has(method);
+}
+
 function evolutionAllowedInHgssRedExperiment(evo) {
   const method = String(evo?.method || '');
   // These methods name Diamond/Pearl/Platinum-only field mechanics in the
@@ -685,6 +705,7 @@ export async function buildRedOnlyCandidateForms({
         targetSpecies: constantToName(step.targetSpecies, 'SPECIES_'),
         method: step.method,
         param: step.param ?? null,
+        requiresLevelUp: Boolean(step.requiresLevelUp),
       })),
       type: captureOption.type,
       map: captureOption.map,
@@ -705,6 +726,7 @@ export async function buildRedOnlyCandidateForms({
         targetSpecies: constantToName(step.targetSpecies, 'SPECIES_'),
         method: step.method,
         param: step.param ?? null,
+        requiresLevelUp: Boolean(step.requiresLevelUp),
       })),
     });
     formMap.set(key, row);
@@ -750,6 +772,7 @@ export async function buildRedOnlyCandidateForms({
                 targetSpecies: evo.target,
                 method: String(evo.method || ''),
                 param: evo.param ?? null,
+                requiresLevelUp: evolutionRequiresLevelUp(evo),
               },
             ],
           });
