@@ -531,14 +531,20 @@ export async function buildRedOnlyCandidateForms({
   access,
   version = 'HEARTGOLD',
   targetBossLabel = 'Red',
+  targetStage = null,
   excludeLegendary = true,
 }) {
   if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
     throw new Error('version must be HEARTGOLD or SOULSILVER');
   }
-  const targetBoss = (bosses || []).find(boss => boss.label === targetBossLabel);
-  if (!targetBoss) throw new Error('Target boss not found: ' + targetBossLabel);
-  const maxStage = Number(targetBoss.stage);
+  const targetBoss = (bosses || []).find(boss => boss.label === targetBossLabel) || null;
+  const explicitStage = Number(targetStage);
+  if (!targetBoss && !Number.isFinite(explicitStage)) {
+    throw new Error('Target boss not found and targetStage not provided: ' + targetBossLabel);
+  }
+  const maxStage = Number.isFinite(explicitStage)
+    ? explicitStage
+    : Number(targetBoss.stage);
 
   const [encounterJson, headbuttJson, evoJson, personalJson] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
@@ -759,7 +765,7 @@ export async function buildRedOnlyCandidateForms({
 
   return {
     version,
-    targetBoss: targetBoss.label,
+    targetBoss: targetBoss?.label || targetBossLabel,
     targetStage: maxStage,
     excludeLegendary,
     forms,
