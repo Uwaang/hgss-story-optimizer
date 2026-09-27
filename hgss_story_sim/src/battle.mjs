@@ -1053,6 +1053,14 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
   const useHgssNpcAi = sideId === 'p2' && aiOptions?.mode === 'hgss';
 
   if (request.forceSwitch) {
+    if (sideId === 'p1' && aiOptions?.mode === 'smart' && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
+      const foeActive = foe?.active?.find(Boolean);
+      const slot = bestSmartForcedSwitch(request, side, foeActive);
+      if (slot !== null && slot !== undefined) {
+        if (stats) stats.forcedSwitches = Number(stats.forcedSwitches || 0) + 1;
+        return `switch ${slot + 1}`;
+      }
+    }
     if (useHgssNpcAi && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
       const foeActive = foe?.active?.find(Boolean);
       const slot = chooseHgssPostKoSwitch(request, side, foeActive);
