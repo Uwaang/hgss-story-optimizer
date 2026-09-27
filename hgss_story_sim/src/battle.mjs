@@ -107,6 +107,43 @@ export function levelUpMovePool(speciesName, level) {
   return levelUpMoveEntries(speciesName, level).map(x => x.name);
 }
 
+function evolutionMoveLineage(speciesName, originSpeciesName = null, level = 100) {
+  const finalSpecies = dex.species.get(speciesName);
+  if (!finalSpecies.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const origin = originSpeciesName ? dex.species.get(originSpeciesName) : null;
+  if (!originSpeciesName || !origin?.exists || origin.id === finalSpecies.id) {
+    return [{ species: finalSpecies, maxLevel: targetLevel }];
+  }
+  const reversed = [finalSpecies];
+  let cursor = finalSpecies;
+  let foundOrigin = false;
+  for (let guard = 0; guard < 8 && cursor.prevo; guard += 1) {
+    const prevo = dex.species.get(cursor.prevo);
+    if (!prevo.exists) break;
+    reversed.push(prevo);
+    cursor = prevo;
+    if (prevo.id === origin.id) {
+      foundOrigin = true;
+      break;
+    }
+  }
+  if (!foundOrigin) return [{ species: finalSpecies, maxLevel: targetLevel }];
+  const lineage = reversed.reverse();
+  return lineage.map((species, index) => {
+    let remainingLevelUpEvolutions = 0;
+    for (let nextIndex = index + 1; nextIndex < lineage.length; nextIndex += 1) {
+      const evolved = lineage[nextIndex];
+      const evoType = String(evolved.evoType || '').toLowerCase();
+      if (evoType.startsWith('level') || Number.isFinite(Number(evolved.evoLevel))) {
+        remainingLevelUpEvolutions += 1;
+      }
+    }
+    const reservedLevels = Math.max(0, remainingLevelUpEvolutions - 1);
+    return { species, maxLevel: Math.max(1, targetLevel - reservedLevels) };
+  });
+}
+
 function canLearnGen4Machine(species, moveName) {
   const move = dex.moves.get(moveName);
   if (!move.exists) return false;
@@ -203,37 +240,60 @@ export function candidateMoveUtility(speciesName, moveName) {
   return candidateMoveScore(species, moveName);
 }
 
-export function candidateMovePool(speciesName, level, stage, moveAccess = null, extraMachines = []) {
+export function candidateMovePool(
+  speciesName,
+  level,
+  stage,
+  moveAccess = null,
+  extraMachines = [],
+  originSpeciesName = null,
+) {
   const species = dex.species.get(speciesName);
   if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
-
-  const moves = new Set(levelUpMovePool(species.name, level));
+  const lineage = evolutionMoveLineage(species.name, originSpeciesName, level);
+  const moves = new Set();
+  for (const entry of lineage) {
+    for (const moveName of levelUpMovePool(entry.species.name, entry.maxLevel)) moves.add(moveName);
+  }
   for (const machine of moveAccess?.reusableMachines || []) {
     if (Number(machine.availableFrom) > stage) continue;
-    if (canLearnGen4Machine(species, machine.move)) moves.add(machine.move);
+    if (lineage.some(entry => canLearnGen4Machine(entry.species, machine.move))) moves.add(machine.move);
   }
   for (const tutor of moveAccess?.reusableTutors || []) {
     if (Number(tutor.availableFrom) > stage) continue;
-    if (canLearnGen4Tutor(species, tutor.move)) moves.add(tutor.move);
+    if (lineage.some(entry => canLearnGen4Tutor(entry.species, tutor.move))) moves.add(tutor.move);
   }
   for (const machine of extraMachines || []) {
     const descriptor = typeof machine === 'string' ? { move: machine, availableFrom: 0 } : machine;
     if (!descriptor?.move || Number(descriptor.availableFrom || 0) > stage) continue;
-    if (canLearnGen4Machine(species, descriptor.move)) moves.add(descriptor.move);
+    if (lineage.some(entry => canLearnGen4Machine(entry.species, descriptor.move))) moves.add(descriptor.move);
   }
   return [...moves];
 }
 
-export function selectCandidateMoves(speciesName, level, stage, moveAccess = null, extraMachines = []) {
+export function selectCandidateMoves(
+  speciesName,
+  level,
+  stage,
+  moveAccess = null,
+  extraMachines = [],
+  originSpeciesName = null,
+) {
   const species = dex.species.get(speciesName);
-  const pool = candidateMovePool(speciesName, level, stage, moveAccess, extraMachines);
+  const pool = candidateMovePool(
+    speciesName,
+    level,
+    stage,
+    moveAccess,
+    extraMachines,
+    originSpeciesName,
+  );
   const scored = pool.map(name => ({
     name,
     move: dex.moves.get(name),
     score: candidateMoveScore(species, name),
   }));
   scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-
   const selected = [];
   const damagingTypes = new Map();
   for (const entry of scored) {
@@ -253,7 +313,6 @@ export function selectCandidateMoves(speciesName, level, stage, moveAccess = nul
   }
   return selected;
 }
-
 
 function moveSetScore(speciesName, moves) {
   const species = dex.species.get(speciesName);
@@ -577,7 +636,7 @@ export function candidateBossUtility(candidate, boss, level) {
   const species = dex.species.get(speciesName);
   if (!species.exists) return 0;
 
-  const candidateMoves = levelUpMovePool(species.name, actualLevel);
+  const candidateMoves = candidateMovePool(species.name, actualLevel, stage, null, [], candidate.species);
   const usableCandidateMoves = candidateMoves.length ? candidateMoves : ['Tackle'];
   const foes = boss?.trainer?.party || [];
   if (!foes.length) return actualLevel;
@@ -647,7 +706,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       ];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines);
+        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines, mon.species);
       return {
         _candidateKey: key,
         name: species.name,
