@@ -27,6 +27,7 @@ on:
           - team-ablation
           - team-usage
           - meaningful-six-refinement
+          - boss-interaction-pilot
           - activation-pilot
           - activation-soft-sweep
           - member-contribution-pilot
@@ -36,6 +37,30 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  boss_interaction_pilot:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Build HG Cyndaquil boss interaction matrix
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-interaction-matrix --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Pidgey,Qwilfish,Caterpie --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --top-pool-per-boss=16 > results/boss-interaction-hg-cyndaquil.json
+      - name: Upload boss interaction matrix
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-boss-interaction-hg-cyndaquil
+          path: hgss_story_sim/results/boss-interaction-hg-cyndaquil.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
