@@ -239,12 +239,12 @@ jobs:
             --candidate-cap=72 \
             --population=24 \
             --generations=5 \
-            --search-runs=1 \
+            --search-runs=2 \
             --refine-population=36 \
             --refine-generations=7 \
             --refine-runs=2 \
             --refine-level-cap=5 \
-            --finalist-cap=14 \
+            --finalist-cap=18 \
             --final-runs=100 \
             --target-win-rate=0.5 \
             > results/red-focused-hg-cyndaquil-lv57-65.json
