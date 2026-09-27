@@ -5930,9 +5930,26 @@ function minimumFinalLevelForEvolutionPath(option, captureLevel) {
   let requiredLevelUps = 0;
   for (const step of option?.evolutionSteps || []) {
     const method = String(step?.method || '');
-    if (!method.startsWith('EVO_LEVEL')) continue;
+    const legacyRequiresLevelUp =
+      method.startsWith('EVO_LEVEL') ||
+      new Set([
+        'EVO_FRIENDSHIP',
+        'EVO_FRIENDSHIP_DAY',
+        'EVO_FRIENDSHIP_NIGHT',
+        'EVO_HAS_MOVE',
+        'EVO_ITEM_DAY',
+        'EVO_ITEM_NIGHT',
+        'EVO_OTHER_PARTY_MON',
+        'EVO_BEAUTY',
+        'EVO_CORONET',
+        'EVO_ETERNA',
+        'EVO_ROUTE217',
+      ]).has(method);
+    if (!(step?.requiresLevelUp ?? legacyRequiresLevelUp)) continue;
     const rawThreshold = Number(step?.param);
-    const threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : 1;
+    const threshold = method.startsWith('EVO_LEVEL') && Number.isFinite(rawThreshold) && rawThreshold > 0
+      ? rawThreshold
+      : 1;
     level = Math.max(level + 1, threshold);
     requiredLevelUps += 1;
   }
