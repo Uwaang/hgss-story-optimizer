@@ -414,6 +414,10 @@ jobs:
             --target-boss="Lance Rematch" \
             --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
             --target-stage=20 \
+            --build-boss="Lance Rematch" \
+            --build-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --build-stage=21 \
+            --availability-boss=Red \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
             --team=Typhlosion,Quagsire,Tyranitar,Magneton,Ampharos,Rhyperior \
