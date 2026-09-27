@@ -6382,6 +6382,76 @@ function equalLevelParetoRows(rows) {
   }));
 }
 
+
+const KNOWN_RED_WINNER_FAMILY_SPECIES = [
+  'Cyndaquil', 'Wooper', 'Larvitar', 'Magnemite', 'Mareep', 'Rhyhorn',
+];
+
+function knownRedWinnerFamilies(poolCandidates) {
+  const rows = [];
+  for (const species of KNOWN_RED_WINNER_FAMILY_SPECIES) {
+    const candidate = poolCandidates.find(row => row.species === species);
+    if (!candidate) continue;
+    rows.push({
+      requestedSpecies: species,
+      familyId: candidateIdentity(candidate),
+    });
+  }
+  return rows;
+}
+
+function familySetKey(team) {
+  return team.map(candidateIdentity).sort().join('|');
+}
+
+function traceKnownTargetStates(states, targetFamilyIds, redBoss, commonLevel) {
+  const targetSet = new Set(targetFamilyIds);
+  const targetOnly = (states || []).filter(state =>
+    state.team.every(candidate => targetSet.has(candidateIdentity(candidate)))
+  );
+  const exactKey = [...targetFamilyIds].sort().join('|');
+  const exact = (states || []).find(state => familySetKey(state.team) === exactKey) || null;
+  let compositeRank = null;
+  let redProxyRank = null;
+  if (exact) {
+    const byComposite = [...states].sort((a, b) =>
+      b.proxy.composite - a.proxy.composite ||
+      b.proxy.bottom5 - a.proxy.bottom5 ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    );
+    compositeRank = byComposite.findIndex(state => state === exact) + 1;
+    if (redBoss) {
+      const byRed = [...states].sort((a, b) =>
+        equalLevelBossTeamProxy(b.team, redBoss, commonLevel) -
+          equalLevelBossTeamProxy(a.team, redBoss, commonLevel) ||
+        b.proxy.composite - a.proxy.composite ||
+        a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
+      redProxyRank = byRed.findIndex(state => state === exact) + 1;
+    }
+  }
+  return {
+    totalStates: Number(states?.length || 0),
+    targetOnlyStates: targetOnly.length,
+    maxTargetMembers: Math.max(
+      0,
+      ...(states || []).map(state =>
+        state.team.filter(candidate => targetSet.has(candidateIdentity(candidate))).length
+      )
+    ),
+    exactTargetPresent: Boolean(exact),
+    exactCompositeRank: compositeRank,
+    exactRedProxyRank: redProxyRank,
+    exactProxy: exact?.proxy || null,
+    exactRedProxy: exact && redBoss
+      ? equalLevelBossTeamProxy(exact.team, redBoss, commonLevel)
+      : null,
+    exactExp: exact?.expCost?.totalGrindExp ?? null,
+  };
+}
+
 async function cmdEqualLevelStorySearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -6414,6 +6484,22 @@ async function cmdEqualLevelStorySearch() {
   const screenedRows = screening.rows;
   const screened = screenedRows.map(row => row.candidate);
   const hardBosses = equalLevelHardBosses(routeBosses);
+  const redBoss = routeBosses.find(boss => String(boss.label) === 'Red') || null;
+  const knownFamilies = knownRedWinnerFamilies(pool.candidates);
+  const knownFamilyIds = knownFamilies.map(row => row.familyId);
+  const knownScreenedByFamily = new Map(
+    screenedRows.map(row => [candidateIdentity(row.candidate), row.candidate])
+  );
+  const knownScreenedTeam = knownFamilyIds.map(familyId => knownScreenedByFamily.get(familyId)).filter(Boolean);
+  const knownTrace = {
+    requestedFamilies: knownFamilies,
+    screened: knownFamilies.map(row => ({
+      ...row,
+      candidateSpecies: knownScreenedByFamily.get(row.familyId)?.species || null,
+      present: knownScreenedByFamily.has(row.familyId),
+    })),
+    stages: [],
+  };
   const starterKey = candidateIdentity(starter);
   if (!screened.some(candidate => candidateIdentity(candidate) === starterKey)) {
     throw new Error('starter was lost during equal-level candidate screening');
@@ -6447,7 +6533,24 @@ async function cmdEqualLevelStorySearch() {
         });
       }
     }
+    const beforeSelection = traceKnownTargetStates(
+      expanded,
+      knownFamilyIds,
+      redBoss,
+      commonLevel,
+    );
     beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
+    const afterSelection = traceKnownTargetStates(
+      beam,
+      knownFamilyIds,
+      redBoss,
+      commonLevel,
+    );
+    knownTrace.stages.push({
+      size,
+      beforeSelection,
+      afterSelection,
+    });
     if (!beam.length) break;
   }
 
@@ -6459,6 +6562,13 @@ async function cmdEqualLevelStorySearch() {
       stateTieKey(a).localeCompare(stateTieKey(b))
     )
     .slice(0, proxyFinalists);
+
+  knownTrace.proxyFinalists = traceKnownTargetStates(
+    proxyStates,
+    knownFamilyIds,
+    redBoss,
+    commonLevel,
+  );
 
   const screenedFinalists = [];
   for (const state of proxyStates) {
@@ -6494,6 +6604,38 @@ async function cmdEqualLevelStorySearch() {
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
 
+  knownTrace.screenedFinalists = {
+    total: screenedFinalists.length,
+    exactTargetPresent: screenedFinalists.some(state =>
+      familySetKey(state.team) === [...knownFamilyIds].sort().join('|')
+    ),
+  };
+  knownTrace.finalStates = {
+    total: finalStates.length,
+    exactTargetPresent: finalStates.some(state =>
+      familySetKey(state.team) === [...knownFamilyIds].sort().join('|')
+    ),
+  };
+
+  let knownRedWinnerEvaluation = null;
+  if (
+    knownFamilyIds.length === KNOWN_RED_WINNER_FAMILY_SPECIES.length &&
+    knownScreenedTeam.length === KNOWN_RED_WINNER_FAMILY_SPECIES.length
+  ) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      knownScreenedTeam,
+      story,
+      commonLevel,
+      finalRuns,
+      moveAccess,
+    );
+    knownRedWinnerEvaluation = equalLevelSearchRow(
+      knownScreenedTeam,
+      evaluation,
+      equalLevelTeamProxy(knownScreenedTeam, routeBosses, commonLevel),
+    );
+  }
+
   const screenRows = screenedFinalists.map(state =>
     equalLevelSearchRow(state.team, state.evaluation, state.proxy)
   );
@@ -6523,6 +6665,10 @@ async function cmdEqualLevelStorySearch() {
       screenRuns,
       finalCap,
       finalRuns,
+    },
+    knownRedWinnerDiagnostic: {
+      trace: knownTrace,
+      directEvaluation: knownRedWinnerEvaluation,
     },
     preliminaryPareto: equalLevelParetoRows(screenRows),
     finalPareto: equalLevelParetoRows(finalRows),
