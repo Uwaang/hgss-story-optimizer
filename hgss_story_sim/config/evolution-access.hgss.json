@@ -50,12 +50,15 @@
       "note": "Available during early Kanto before the modeled Sabrina checkpoint."
     },
     "ITEM_MAGMARIZER": {
-      "availableFrom": 19,
+      "availableFrom": 20,
       "repeatable": false,
       "source": {
         "type": "field",
         "location": "Cinnabar Island"
-      }
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Cinnabar Island Rock Climb source; legal only after all 16 badges/Blue in the modeled route."
     },
     "ITEM_DEEPSEATOOTH": {
       "availableFrom": 19,
@@ -74,39 +77,51 @@
       }
     },
     "ITEM_PROTECTOR": {
-      "availableFrom": 21,
+      "availableFrom": 20,
       "repeatable": false,
       "source": {
         "type": "field",
         "location": "Mt. Mortar",
         "condition": "Rock Climb after all 16 badges"
-      }
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Mt. Mortar Rock Climb source; legal after Blue and before the rematch Elite Four."
     },
     "ITEM_DUBIOUS_DISC": {
-      "availableFrom": 21,
+      "availableFrom": 20,
       "repeatable": false,
       "source": {
         "type": "field",
         "location": "Route 42",
         "condition": "Rock Climb after all 16 badges"
-      }
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Route 42/Mt. Mortar Rock Climb source; legal after Blue and before the rematch Elite Four."
     },
     "ITEM_ELECTIRIZER": {
-      "availableFrom": 21,
+      "availableFrom": 20,
       "repeatable": false,
       "source": {
         "type": "field",
         "location": "Cerulean Cave",
         "condition": "post-16-badge access"
-      }
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Cerulean Cave source; modeled after all 16 badges/Blue and before the rematch Elite Four."
     },
     "ITEM_REAPER_CLOTH": {
-      "availableFrom": 21,
+      "availableFrom": 20,
       "repeatable": false,
       "source": {
         "type": "field",
         "location": "Mt. Silver"
-      }
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Mt. Silver source; modeled after all 16 badges/Blue and before the rematch Elite Four."
     }
   }
 }

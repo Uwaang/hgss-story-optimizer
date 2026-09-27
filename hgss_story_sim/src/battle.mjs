@@ -441,7 +441,7 @@ export function planSingleUseMachines(candidates, bosses, moveAccess = null, opt
         const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
           ? Number(levelsByBattle[bossIndex][key])
           : Number(boss.aceLevel);
-        const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
+        const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel, boss?._routeIndex);
         const species = dex.species.get(speciesName);
         if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
         legalSomewhere = true;
@@ -523,7 +523,7 @@ function planPurchasableMachinesBudgeted(
           const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[state.key]))
             ? Number(levelsByBattle[bossIndex][state.key])
             : Number(boss.aceLevel);
-          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage, actualLevel);
+          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage, actualLevel, boss?._routeIndex);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
@@ -638,7 +638,7 @@ export function planPurchasableMachines(
           const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
             ? Number(levelsByBattle[bossIndex][key])
             : Number(boss.aceLevel);
-          const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
+          const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel, boss?._routeIndex);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
@@ -704,7 +704,7 @@ export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
   });
 }
 
-function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
+function candidateSpeciesAtStage(mon, stage, actualLevel = null, checkpointIndex = null) {
   let speciesName = mon.species;
   const transitions = Array.isArray(mon.speciesByStage) ? [...mon.speciesByStage] : [];
   transitions.sort((a, b) => {
@@ -725,15 +725,23 @@ function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
       if (Number(actualLevel) >= Number(transition.level)) speciesName = transition.species;
       continue;
     }
+    if (
+      Number.isFinite(Number(transition.checkpointIndex)) &&
+      Number.isFinite(Number(checkpointIndex))
+    ) {
+      if (Number(checkpointIndex) >= Number(transition.checkpointIndex)) {
+        speciesName = transition.species;
+      }
+      continue;
+    }
     if (Number(transition.stage) <= stage) speciesName = transition.species;
   }
   return speciesName;
 }
-
 export function candidateBossUtility(candidate, boss, level) {
   const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
   const stage = Number(boss?.stage || 0);
-  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
+  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel, boss?._routeIndex);
   const species = dex.species.get(speciesName);
   if (!species.exists) return 0;
 
@@ -790,6 +798,9 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
   const singleUsePlan = options.singleUsePlan || {};
   const purchasablePlan = options.purchasablePlan || {};
   const levelsByCandidate = options.levelsByCandidate || null;
+  const checkpointIndex = Number.isFinite(Number(options.routeIndex))
+    ? Number(options.routeIndex)
+    : Number(options.boss?._routeIndex);
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
@@ -798,7 +809,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       const candidateLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[key]))
         ? Math.max(1, Math.min(100, Math.floor(Number(levelsByCandidate[key]))))
         : level;
-      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel);
+      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel, checkpointIndex);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
       const assignedMachines = [

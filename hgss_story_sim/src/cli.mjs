@@ -474,9 +474,11 @@ function storyStarterFromCandidates(candidates) {
 
 function storyBattlesForCandidates(bosses, candidates) {
   const starter = storyStarterFromCandidates(candidates);
-  return bosses.filter(boss =>
-    !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
-  );
+  return bosses
+    .filter(boss =>
+      !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
+    )
+    .map((boss, index) => ({ ...boss, _routeIndex: index }));
 }
 
 function summarizeCaptureSearch(candidates) {
@@ -5944,7 +5946,7 @@ function buildEqualLevelRouteBuildPlan(
         [candidate],
         boss.stage,
         commonLevel,
-        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
       )[0];
       if (!mon) continue;
       samples.push({ boss, mon, foeTeam: hgssTrainerToShowdownTeam(boss.trainer, boss) });
@@ -6095,7 +6097,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       ordered,
       boss.stage,
       commonLevel,
-      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
     );
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
 
@@ -6184,7 +6186,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
         orderCandidatesForBoss(candidates, finalBoss, levels),
         finalBoss.stage,
         commonLevel,
-        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss: finalBoss },
       ).map(mon => mon.species)
     : [];
 

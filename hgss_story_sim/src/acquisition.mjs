@@ -289,13 +289,31 @@ function normalizeEvolutionPolicy(value) {
   return policy;
 }
 
-function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows) {
+function evolutionCheckpointIndex(bosses, source = {}) {
+  if (source.beforeBoss) {
+    const index = (bosses || []).findIndex(boss => String(boss.label) === String(source.beforeBoss));
+    if (index >= 0) return index;
+  }
+  if (source.afterBoss) {
+    const index = (bosses || []).findIndex(boss => String(boss.label) === String(source.afterBoss));
+    if (index >= 0) return index + 1;
+  }
+  const stage = Number(source.availableFrom ?? 0);
+  const index = (bosses || []).findIndex(boss => Number(boss.stage) >= stage);
+  return index >= 0 ? index : (bosses || []).length;
+}
+
+function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows, bosses) {
   const result = new Map();
   for (const [item, row] of Object.entries(baseAccess?.items || {})) {
     result.set(item, {
       item,
       availableFrom: Number(row.availableFrom),
+      checkpointIndex: evolutionCheckpointIndex(bosses, row),
+      beforeBoss: row.beforeBoss || null,
+      afterBoss: row.afterBoss || null,
       repeatable: Boolean(row.repeatable),
+      count: Math.max(1, Number(row.count || 1)),
       source: row.source || null,
       note: row.note || '',
     });
@@ -311,7 +329,9 @@ function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows) {
       const candidate = {
         item,
         availableFrom: Number(wild.availableFrom),
+        checkpointIndex: evolutionCheckpointIndex(bosses, { availableFrom: wild.availableFrom }),
         repeatable: true,
+        count: null,
         source: {
           type: 'wild-held',
           species: constantToName(wild.speciesConst, 'SPECIES_'),
@@ -320,9 +340,14 @@ function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows) {
         note: 'Rare held-item probability is intentionally not penalized; legality only.',
       };
       const existing = result.get(item);
-      if (!existing || candidate.availableFrom < Number(existing.availableFrom)) {
-        result.set(item, candidate);
-      } else if (candidate.availableFrom === Number(existing.availableFrom) && !existing.repeatable) {
+      if (
+        !existing ||
+        candidate.checkpointIndex < Number(existing.checkpointIndex) ||
+        (
+          candidate.checkpointIndex === Number(existing.checkpointIndex) &&
+          candidate.repeatable && !existing.repeatable
+        )
+      ) {
         result.set(item, candidate);
       }
     }
@@ -352,6 +377,9 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
     return {
       order,
       stage: Math.max(Number(availableFrom || 0), Number(tradeUnlockStage || 0)),
+      checkpointIndex: evolutionCheckpointIndex(bosses, {
+        availableFrom: Math.max(Number(availableFrom || 0), Number(tradeUnlockStage || 0)),
+      }),
       fromSpecies,
       species: targetSpecies,
       derived: 'trade-evolution',
@@ -370,6 +398,7 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
         Number(tradeUnlockStage || 0),
         Number(access.availableFrom),
       ),
+      checkpointIndex: Number(access.checkpointIndex),
       fromSpecies,
       species: targetSpecies,
       derived: 'trade-item-evolution',
@@ -424,7 +453,12 @@ function buildTradeAwareEvolutionPaths(
 
     if (!usable.length) return [transitions];
 
-    const output = [];
+    // If this species also has an unsupported branch (stone/friendship/etc.),
+    // retain the prior conservative form as a distinct search variant instead
+    // of forcing the trade branch.
+    const supportedTargets = new Set(usable.map(row => String(row.evo.target)));
+    const hasUnsupportedAlternative = all.some(evo => !supportedTargets.has(String(evo.target)));
+    const output = hasUnsupportedAlternative ? [transitions] : [];
     for (const row of usable) {
       output.push(...walk(
         row.evo.target,
@@ -584,6 +618,7 @@ export async function buildCanonicalCandidatePool({
     evolutionAccess,
     earliest,
     personalJson.baseStats || [],
+    bosses,
   );
 
   const candidates = [];
