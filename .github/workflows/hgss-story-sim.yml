@@ -26,6 +26,7 @@ on:
           - allocator-story-matrix
           - team-ablation
           - team-usage
+          - meaningful-six-pilot
 
 jobs:
   smoke:
@@ -340,6 +341,30 @@ jobs:
           path: hgss_story_sim/results/story-resources-${{ matrix.expAllocator }}.json
           if-no-files-found: error
 
+
+  meaningful_six_pilot:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil with contribution-aware final rerank
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --member-contribution-rerank=true --contribution-runs=5 --output=results/meaningful-six-pilot-hg-cyndaquil.json
+      - name: Upload meaningful-six pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-meaningful-six-pilot-hg-cyndaquil
+          path: hgss_story_sim/results/meaningful-six-pilot-hg-cyndaquil.json
+          if-no-files-found: error
 
   member_usage_matrix:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-usage'
