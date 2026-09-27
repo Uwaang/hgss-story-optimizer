@@ -126,7 +126,7 @@ jobs:
           if-no-files-found: error
 
   red_min_grind_pilot:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-pilot') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-pilot'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -164,7 +164,7 @@ jobs:
           if-no-files-found: error
 
   red_model_sanity:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-model-sanity') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-model-sanity'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -302,7 +302,7 @@ jobs:
           if-no-files-found: error
 
   red_local_swap_search:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-local-swap-search') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-local-swap-search'
     runs-on: ubuntu-latest
     defaults:
       run:
