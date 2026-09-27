@@ -442,6 +442,11 @@ jobs:
             --move-shortlist-cap=16 \
             --moveset-finalists=20 \
             > results/red57-party-vs-lance-redbuild500.json
+      - name: Exact previously reported Red Lv57 build vs Lance
+        run: |
+          node src/cli.mjs red57-exact-vs-lance \
+            --runs=500 \
+            > results/red57-party-vs-lance-exact500.json
       - name: Upload cross-check results
         uses: actions/upload-artifact@v4
         with:
