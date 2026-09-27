@@ -29,6 +29,7 @@ on:
         options:
           - default
           - red-min-grind-pilot
+          - red-model-sanity
           - red-min-grind-matrix
           - allocator-story-matrix
           - allocator-saturation-matrix
@@ -153,16 +154,49 @@ jobs:
         run: |
           mkdir -p results
           node src/cli.mjs red-min-grind-ga-search --version=HEARTGOLD --starter=Cyndaquil --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-hg-cyndaquil.json
-      - name: Low-level Red player-model sanity
-        run: |
-          node src/cli.mjs red-battle-model-sanity --version=HEARTGOLD --starter=Cyndaquil --levels=50,55,60,65,70 --runs=5 > results/red-battle-model-sanity-hg-cyndaquil.json
       - name: Upload Red minimum-grind pilot
         uses: actions/upload-artifact@v4
         with:
           name: hgss-red-min-grind-hg-cyndaquil
-          path: |
-            hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
-            hgss_story_sim/results/red-battle-model-sanity-hg-cyndaquil.json
+          path: hgss_story_sim/results/red-min-grind-hg-cyndaquil.json
+          if-no-files-found: error
+
+  red_model_sanity:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-model-sanity') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Calibrate Red player model at low levels
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-battle-model-sanity --version=HEARTGOLD --starter=Cyndaquil --levels=50,55,60,65,70 --runs=5 > results/red-battle-model-sanity-hg-cyndaquil.json
+      - name: Upload Red player-model sanity
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-battle-model-sanity-hg-cyndaquil
+          path: hgss_story_sim/results/red-battle-model-sanity-hg-cyndaquil.json
           if-no-files-found: error
 
   allocator_depth_matrix_6:
