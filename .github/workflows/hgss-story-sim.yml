@@ -288,7 +288,7 @@ jobs:
             pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
         run: npm install --prefer-offline --no-audit --no-fund
-      - name: Deep Lv45 one-slot neighborhood search
+      - name: Deep Lv44 one-slot neighborhood search
         run: |
           mkdir -p results
           node src/cli.mjs boss-min-grind-local-swap-search \
@@ -297,17 +297,17 @@ jobs:
             --target-stage=20 \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --level=45 \
-            --team=Typhlosion,Jynx,Lapras,Lanturn,Electrode,Golem \
+            --level=44 \
+            --team=Typhlosion,Jynx,Lapras,Lanturn,Politoed,Golem \
             --candidate-cap=96 \
             --screen-runs=8 \
             --finalist-cap=30 \
-            --final-runs=200 \
+            --final-runs=250 \
             --target-win-rate=0.5 \
             --move-shortlist-cap=16 \
             --moveset-finalists=20 \
-            > results/lance2-local-lv45.json
-      - name: Deep Lv46 one-slot neighborhood search
+            > results/lance2-local-lv44.json
+      - name: Deep Lv43 one-slot neighborhood search
         run: |
           node src/cli.mjs boss-min-grind-local-swap-search \
             --target-boss="Lance Rematch" \
@@ -315,20 +315,20 @@ jobs:
             --target-stage=20 \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --level=46 \
-            --team=Typhlosion,Jynx,Lapras,Lanturn,Electrode,Golem \
+            --level=43 \
+            --team=Typhlosion,Jynx,Lapras,Lanturn,Politoed,Golem \
             --candidate-cap=96 \
             --screen-runs=8 \
             --finalist-cap=30 \
-            --final-runs=200 \
+            --final-runs=250 \
             --target-win-rate=0.5 \
             --move-shortlist-cap=16 \
             --moveset-finalists=20 \
-            > results/lance2-local-lv46.json
-      - name: Revalidate best Lv45 local candidate at 500 runs
+            > results/lance2-local-lv43.json
+      - name: Revalidate best Lv44 candidate at 500 runs
         shell: bash
         run: |
-          FILE=results/lance2-local-lv45.json
+          FILE=results/lance2-local-lv44.json
           TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestAtTarget || d.finalResults?.[0]; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
           if [ -n "$TEAM" ]; then
             node src/cli.mjs boss-min-grind-validate \
@@ -338,18 +338,18 @@ jobs:
               --version=HEARTGOLD \
               --starter=Cyndaquil \
               --team="$TEAM" \
-              --level=45 \
+              --level=44 \
               --runs=500 \
               --move-shortlist-cap=16 \
               --moveset-finalists=20 \
-              > results/lance2-local-lv45-best-validate500.json
+              > results/lance2-local-lv44-best-validate500.json
           else
-            echo '{"status":"no-lv45-finalist"}' > results/lance2-local-lv45-best-validate500.json
+            echo '{"status":"no-lv44-finalist"}' > results/lance2-local-lv44-best-validate500.json
           fi
-      - name: Revalidate best Lv46 local candidate at 300 runs
+      - name: Revalidate best Lv43 candidate at 500 runs
         shell: bash
         run: |
-          FILE=results/lance2-local-lv46.json
+          FILE=results/lance2-local-lv43.json
           TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestAtTarget || d.finalResults?.[0]; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
           if [ -n "$TEAM" ]; then
             node src/cli.mjs boss-min-grind-validate \
@@ -359,19 +359,19 @@ jobs:
               --version=HEARTGOLD \
               --starter=Cyndaquil \
               --team="$TEAM" \
-              --level=46 \
-              --runs=300 \
+              --level=43 \
+              --runs=500 \
               --move-shortlist-cap=16 \
               --moveset-finalists=20 \
-              > results/lance2-local-lv46-best-validate300.json
+              > results/lance2-local-lv43-best-validate500.json
           else
-            echo '{"status":"no-lv46-finalist"}' > results/lance2-local-lv46-best-validate300.json
+            echo '{"status":"no-lv43-finalist"}' > results/lance2-local-lv43-best-validate500.json
           fi
-      - name: Upload Lance local-boundary results
+      - name: Upload Lance lower-boundary results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hgss-lance2-local-boundary-hg-cyndaquil
+          name: hgss-lance2-local-lower-boundary-hg-cyndaquil
           path: hgss_story_sim/results/lance2-local-*.json
           if-no-files-found: error
 
