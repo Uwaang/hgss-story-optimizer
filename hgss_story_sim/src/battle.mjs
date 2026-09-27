@@ -445,16 +445,38 @@ export function optimizePlayerMovesAndBuildForBoss(
     ? [[...shortlist]]
     : combinationsOfFour(shortlist);
 
-  moveSets = moveSets
+  const scoredMoveSets = moveSets
     .map(moves => ({
       moves,
       proxyScore: redMovesetProxyScore(proxyMon, moves, foeTeam),
+      statusCount: moves.filter(moveName => dex.moves.get(moveName).category === 'Status').length,
     }))
     .sort((a, b) =>
       b.proxyScore - a.proxyScore ||
       a.moves.join('/').localeCompare(b.moves.join('/'))
-    )
-    .slice(0, Math.max(1, movesetFinalists));
+    );
+
+  const finalistMap = new Map();
+  function addMoveset(entry) {
+    if (!entry || finalistMap.size >= Math.max(1, movesetFinalists)) return;
+    finalistMap.set(entry.moves.join('|'), entry);
+  }
+
+  const broadQuota = Math.max(1, Math.ceil(movesetFinalists / 2));
+  for (const entry of scoredMoveSets.slice(0, broadQuota)) addMoveset(entry);
+  for (const entry of scoredMoveSets.filter(entry => entry.statusCount === 0)) {
+    addMoveset(entry);
+    if (finalistMap.size >= movesetFinalists) break;
+  }
+  for (const entry of scoredMoveSets.filter(entry => entry.statusCount <= 1)) {
+    addMoveset(entry);
+    if (finalistMap.size >= movesetFinalists) break;
+  }
+  for (const entry of scoredMoveSets) {
+    addMoveset(entry);
+    if (finalistMap.size >= movesetFinalists) break;
+  }
+  moveSets = [...finalistMap.values()];
 
   let best = null;
   for (const candidate of moveSets) {
@@ -469,7 +491,7 @@ export function optimizePlayerMovesAndBuildForBoss(
       .map(moveName => redMoveStatusUtility(species, moveName))
       .sort((a, b) => b - a)
       .slice(0, 2)
-      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.06 : 0.02), 0);
+      .reduce((sum, value, index) => sum + value * (index === 0 ? 0.035 : 0.01), 0);
     const score = buildScore + statusBonus + candidate.proxyScore * 0.08;
     if (
       !best ||
@@ -1147,7 +1169,17 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
   for (const base of finalistBases) {
     for (const item of items) {
       const candidate = { ...base.mon, item };
-      const score = playerBuildScore(candidate, foeTeam);
+      let score = playerBuildScore(candidate, foeTeam);
+      const itemId = dex.items.get(item || '').id;
+      if (['choiceband', 'choicespecs', 'choicescarf'].includes(itemId)) {
+        const statusCount = (candidate.moves || [])
+          .filter(moveName => dex.moves.get(moveName).category === 'Status')
+          .length;
+        // Locking into setup/recovery/status is strategically toxic. Keep
+        // Choice items available for pure attacking sets, but strongly prefer
+        // non-Choice items when the moveset contains utility moves.
+        score *= 0.42 ** statusCount;
+      }
       if (
         !best ||
         score > best.score + 1e-12 ||
