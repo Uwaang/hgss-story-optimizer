@@ -3894,6 +3894,8 @@ async function cmdBossInteractionMatrix() {
   }
 
   const starterKey = candidateIdentity(starter);
+  const effectiveMoveAccess = resourceMoveAccessVariants(moveAccess)
+    .find(variant => variant.resourceProfile === full.effectiveResourceProfile) || moveAccess;
   const legalPool = pool.candidates.filter(candidate =>
     candidate.exclusiveGroup !== 'starter' || candidateIdentity(candidate) === starterKey
   );
@@ -3914,13 +3916,30 @@ async function cmdBossInteractionMatrix() {
     const boss = story.bosses.find(item => item.label === row.boss);
     if (!boss) return null;
     const levelsBefore = full.expSchedule?.battles?.[battleIndex]?.levelsBefore || {};
+    const materializedLoadout = materializeCandidateTeam(
+      orderCandidatesForBoss(team, boss, levelsBefore),
+      boss.stage,
+      boss.aceLevel,
+      {
+        moveAccess: effectiveMoveAccess,
+        singleUsePlan: full.singleUsePlan,
+        purchasablePlan: full.purchasablePlan,
+        levelsByCandidate: levelsBefore,
+      },
+    );
+    const loadoutByKey = new Map(materializedLoadout.map(mon => [mon._candidateKey, mon]));
     const memberSignals = team.map(candidate => {
       const key = candidateIdentity(candidate);
       const level = Number(levelsBefore[key]);
       const ablated = ablations.get(key);
       const ablatedRow = ablated?.rows?.find(item => item.boss === row.boss);
+      const loadout = loadoutByKey.get(key) || null;
       return {
         species: candidate.species,
+        materializedSpecies: loadout?.species || null,
+        moves: loadout?.moves || [],
+        ability: loadout?.ability || null,
+        item: loadout?.item || null,
         key,
         mandatoryStarter: key === starterKey,
         available: Number(candidate.availableFrom || 0) <= Number(boss.stage || 0),
@@ -3977,7 +3996,7 @@ async function cmdBossInteractionMatrix() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'diagnostic Boss x Pokemon / team interaction matrix; no optimization rule is changed. Ace-level potential is a cheap progression-agnostic proxy; reoptimized ablation includes EXP/resource replanning and is not frozen-state causality.',
+    purpose: 'diagnostic Boss x Pokemon / team interaction matrix; no optimization rule is changed. Includes the actual materialized species/moves used by the evaluated team at each boss. Ace-level potential is a cheap progression-agnostic proxy; reoptimized ablation includes EXP/resource replanning and is not frozen-state causality.',
     version,
     starter: starter.species,
     team: team.map(mon => mon.species),
