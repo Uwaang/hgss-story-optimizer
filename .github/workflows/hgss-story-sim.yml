@@ -45,7 +45,7 @@ on:
 
 jobs:
   allocator_depth_matrix_6:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-depth-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-depth-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -97,7 +97,7 @@ jobs:
           if-no-files-found: error
 
   allocator_saturation_matrix_6:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-saturation-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-saturation-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -149,7 +149,7 @@ jobs:
           if-no-files-found: error
 
   red_policy_confirm_2:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-policy-confirm') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-policy-confirm'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -181,7 +181,7 @@ jobs:
           if-no-files-found: error
 
   resource_policy_oracle_matrix_6:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'resource-policy-oracle-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'resource-policy-oracle-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
