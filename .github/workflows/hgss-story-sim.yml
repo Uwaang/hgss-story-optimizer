@@ -30,6 +30,7 @@ on:
           - boss-interaction-pilot
           - boss-interaction-matrix
           - counterfactual-specialist-matrix
+          - boss-local-oracle-matrix
           - activation-pilot
           - activation-soft-sweep
           - member-contribution-pilot
@@ -39,6 +40,58 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  boss_local_oracle_matrix_6:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'boss-local-oracle-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Run boss-local fixed-state oracle
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-local-oracle-probe --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=10 --targets=Clair,Lance,Misty,Blue,Red --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --top-per-boss=8 --candidate-cap=10 > results/boss-local-oracle-${{ matrix.label }}.json
+      - name: Upload boss-local oracle probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-boss-local-oracle-${{ matrix.label }}
+          path: hgss_story_sim/results/boss-local-oracle-${{ matrix.label }}.json
+          if-no-files-found: error
+
   counterfactual_specialist_matrix_6:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'counterfactual-specialist-matrix'
     runs-on: ubuntu-latest
@@ -222,6 +275,8 @@ jobs:
         run: npm run route-smoke
       - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Boss-local oracle smoke test
+        run: node src/cli.mjs boss-local-oracle-probe --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --runs=1 --targets=Misty --candidates=Magnemite --candidate-cap=1 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > /tmp/boss-local-oracle-smoke.json
       - name: Player matchup switching smoke test
         run: npm run switch-smoke
       - name: HGSS trainer AI metadata, move, switch, and item smoke test
