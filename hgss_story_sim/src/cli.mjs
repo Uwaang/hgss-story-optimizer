@@ -3096,10 +3096,69 @@ async function cmdSwitchSmoke() {
       `no-switch player policy still switched: ${noSwitchResult.p1VoluntarySwitches}`
     );
   }
+
+  const smartResult = await runBattle(
+    playerTeam,
+    enemyTeam,
+    7331,
+    { p1AiMode: 'smart' },
+  );
+  if (smartResult.p1AiMode !== 'smart') {
+    throw new Error(`Expected smart player policy, got ${smartResult.p1AiMode}`);
+  }
+  if (Number(smartResult.p1Usage?.Mareep?.leadStarts || 0) < 1) {
+    throw new Error(
+      `Expected smart lead selection to prefer Mareep into Totodile: ${JSON.stringify(smartResult.p1Usage)}`
+    );
+  }
+
+  const forcedSwitchTeam = [
+    {
+      species: 'Magikarp',
+      level: 5,
+      ability: 'Swift Swim',
+      nature: 'Serious',
+      moves: ['Splash'],
+    },
+    {
+      species: 'Geodude',
+      level: 20,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Tackle', 'Rock Throw'],
+    },
+    {
+      species: 'Mareep',
+      level: 20,
+      ability: 'Static',
+      nature: 'Serious',
+      moves: ['ThunderShock', 'Tackle'],
+    },
+  ];
+  const forcedSmartResult = await runBattle(
+    forcedSwitchTeam,
+    enemyTeam,
+    7332,
+    { p1AiMode: 'smart', p1SmartLead: false },
+  );
+  if (Number(forcedSmartResult.p1ForcedSwitches || 0) < 1) {
+    throw new Error('Expected at least one smart forced switch after the weak lead faints');
+  }
+  if (Number(forcedSmartResult.p1Usage?.Mareep?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected smart forced switch to find Mareep into Totodile: ${JSON.stringify(forcedSmartResult.p1Usage)}`
+    );
+  }
+
   if (result.p2VoluntarySwitches !== 0) {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
-  console.log(JSON.stringify({ greedy: result, noSwitch: noSwitchResult }, null, 2));
+  console.log(JSON.stringify({
+    greedy: result,
+    noSwitch: noSwitchResult,
+    smart: smartResult,
+    forcedSmart: forcedSmartResult,
+  }, null, 2));
 }
 
 async function cmdAllocatorCrossCompare() {
@@ -5927,7 +5986,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     enemyTeam,
     runs,
     seedBase,
-    { p2Trainer: red, p1AiMode: 'greedy' },
+    { p2Trainer: red, p1AiMode: 'smart' },
   );
   return {
     key: redTeamKey(state.members, commonLevel),
@@ -6377,7 +6436,7 @@ async function cmdRedMinGrindSearch() {
       commonLevel: 'all six battle members have exactly the same level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently for each member; route ownership and money are ignored',
       heldItems: 'no player held-item optimization; existing simulator defaults are used',
-      battlePolicy: 'current greedy player policy versus source-guided Red trainer AI',
+      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) versus source-guided Red trainer AI',
     },
     search: {
       levelMin,
@@ -6596,7 +6655,7 @@ async function cmdRedMinGrindGaSearch() {
       commonLevel: 'all six members exactly equal level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
       heldItems: 'not optimized',
-      battlePolicy: 'current greedy player AI versus source-guided Red AI',
+      battlePolicy: 'smart player AI versus source-guided Red AI',
     },
     search: {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
