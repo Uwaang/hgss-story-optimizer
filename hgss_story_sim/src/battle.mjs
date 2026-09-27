@@ -1274,9 +1274,38 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
     `${a.evSpread}:${a.mon.nature}`.localeCompare(`${b.evSpread}:${b.mon.nature}`)
   );
 
-  // Stage 2: only the strongest few EV/nature bases receive the held-item
-  // sweep. 4 * 12 = 48 item evaluations instead of a 7*9*12 full product.
-  const finalistBases = baseBuilds.slice(0, Math.min(4, baseBuilds.length));
+  // Stage 2: keep the strongest generic bases, but also guarantee the
+  // offensive EV spreads that match this moveset. Otherwise a frail attacker
+  // can have hp/def survive the item-less proxy round and never give hp/atk or
+  // atk/spe a chance to pair with Choice Band (same issue for Specs).
+  const finalistBaseMap = new Map();
+  function addBase(base) {
+    if (!base) return;
+    finalistBaseMap.set(
+      `${base.evSpread}:${base.mon.nature}`,
+      base,
+    );
+  }
+  for (const base of baseBuilds.slice(0, Math.min(4, baseBuilds.length))) addBase(base);
+
+  const damagingCategories = new Set(
+    (mon.moves || [])
+      .map(moveName => dex.moves.get(moveName))
+      .filter(move => move.exists && move.category !== 'Status')
+      .map(move => move.category)
+  );
+  const guaranteedSpreads = [];
+  if (damagingCategories.has('Physical')) guaranteedSpreads.push('atk-spe', 'hp-atk');
+  if (damagingCategories.has('Special')) guaranteedSpreads.push('spa-spe', 'hp-spa');
+  for (const spreadLabel of guaranteedSpreads) {
+    addBase(baseBuilds.find(base => base.evSpread === spreadLabel));
+  }
+
+  const finalistBases = [...finalistBaseMap.values()]
+    .sort((a, b) =>
+      Number(b.score) - Number(a.score) ||
+      `${a.evSpread}:${a.mon.nature}`.localeCompare(`${b.evSpread}:${b.mon.nature}`)
+    );
   let best = null;
   for (const base of finalistBases) {
     for (const item of items) {
