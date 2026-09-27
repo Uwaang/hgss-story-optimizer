@@ -201,7 +201,7 @@ jobs:
           if-no-files-found: error
 
   red_focused_search:
-    if: github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search'
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-focused-search') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
     runs-on: ubuntu-latest
     defaults:
       run:
