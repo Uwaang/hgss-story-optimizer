@@ -24,6 +24,7 @@ on:
         options:
           - default
           - allocator-story-matrix
+          - allocator-saturation-matrix
           - team-ablation
           - team-usage
           - meaningful-six-refinement
@@ -31,6 +32,7 @@ on:
           - boss-interaction-matrix
           - counterfactual-specialist-matrix
           - boss-local-oracle-matrix
+          - resource-policy-oracle-matrix
           - activation-pilot
           - activation-soft-sweep
           - member-contribution-pilot
@@ -40,6 +42,116 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  allocator_saturation_matrix_6:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-saturation-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Compare baseline and saturation allocator
+        run: |
+          mkdir -p results
+          node src/cli.mjs allocator-saturation-compare --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=10 --resources=all --spend-policy=natural --objective=story-clear > results/allocator-saturation-${{ matrix.label }}.json
+      - name: Upload allocator saturation comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-saturation-${{ matrix.label }}
+          path: hgss_story_sim/results/allocator-saturation-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  resource_policy_oracle_matrix_6:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'resource-policy-oracle-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            targets: Lance,Red
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+            targets: Lance,Red
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            targets: Red
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+            targets: Red
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+            targets: Red
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+            targets: Red
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Run resource and player-policy hard-boss oracle
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-local-resource-policy-probe --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --targets=${{ matrix.targets }} --runs=10 --top-per-boss=8 --candidate-cap=10 > results/resource-policy-oracle-${{ matrix.label }}.json
+      - name: Upload resource policy oracle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-resource-policy-oracle-${{ matrix.label }}
+          path: hgss_story_sim/results/resource-policy-oracle-${{ matrix.label }}.json
+          if-no-files-found: error
+
   boss_local_oracle_matrix_6:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'boss-local-oracle-matrix'
     runs-on: ubuntu-latest
