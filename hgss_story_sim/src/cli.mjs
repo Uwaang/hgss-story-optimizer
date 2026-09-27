@@ -6671,6 +6671,7 @@ async function cmdRedMinGrindSearch() {
 
 async function cmdRedMinGrindGaSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
   const starterName = String(arg('starter', 'Cyndaquil'));
   const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
   const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '95')))));
@@ -6696,8 +6697,8 @@ async function cmdRedMinGrindGaSearch() {
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = story.bosses.find(boss => boss.label === targetBossLabel);
+  if (!red) throw new Error('Target boss definition not found: ' + targetBossLabel);
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -6705,7 +6706,7 @@ async function cmdRedMinGrindGaSearch() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7056,24 +7057,24 @@ async function cmdRedMinGrindGaSearch() {
 
   console.log(JSON.stringify({
     schemaVersion: 2,
-    purpose: 'Red-only minimum-grind search using battle-guided genetic/local mutation search. All six members share one level; route progression and all other bosses are ignored.',
+    purpose: targetBossLabel + '-only minimum-grind search using battle-guided genetic/local mutation search. All six members share one level; route progression and all other bosses are ignored.',
     method: {
       name: 'battle-guided genetic search',
-      referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real Red battle outcomes rather than story-wide greedy EXP allocation',
+      referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real target-boss battle outcomes rather than story-wide greedy EXP allocation',
       fitnessOrder: ['winRate', 'average Red fainted', 'max Red fainted', 'fewer player faints', 'lower total grind EXP'],
     },
     version,
     starter: starterName,
-    targetBoss: 'Red',
+    targetBoss: targetBossLabel,
     targetBossAceLevel: Number(red.aceLevel || 0),
     assumptions: {
       legendaryAndMythical: 'excluded',
       captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by Red',
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six members exactly equal level',
-      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
+      tmPolicy: 'all target-boss-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
       heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
-      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and Red-specific moveset optimization versus source-guided Red AI',
+      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and target-boss-specific moveset optimization versus source-guided trainer AI',
     },
     search: {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
@@ -7420,6 +7421,7 @@ async function cmdRedBattleModelSanity() {
 
 async function cmdRedMinGrindValidate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
@@ -7429,8 +7431,8 @@ async function cmdRedMinGrindValidate() {
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = story.bosses.find(boss => boss.label === targetBossLabel);
+  if (!red) throw new Error('Target boss definition not found: ' + targetBossLabel);
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7438,7 +7440,7 @@ async function cmdRedMinGrindValidate() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7489,9 +7491,10 @@ async function cmdRedMinGrindValidate() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'high-run validation of an explicit Red-only equal-level team with capture-level-aware EXP cost',
+    purpose: 'high-run validation of an explicit target-boss-only equal-level team with capture-level-aware EXP cost',
     version,
     starter: starterName,
+    targetBoss: targetBossLabel,
     commonLevel,
     runs,
     evaluation,
@@ -7563,7 +7566,9 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'red-min-grind-search': cmdRedMinGrindSearch,
   'red-min-grind-ga-search': cmdRedMinGrindGaSearch,
+  'boss-min-grind-ga-search': cmdRedMinGrindGaSearch,
   'red-min-grind-validate': cmdRedMinGrindValidate,
+  'boss-min-grind-validate': cmdRedMinGrindValidate,
   'red-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
   'red-battle-model-sanity': cmdRedBattleModelSanity,
   'meaningful-six': cmdMeaningfulSix,
