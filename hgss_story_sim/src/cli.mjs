@@ -7846,7 +7846,11 @@ async function cmdRedMinGrindValidate() {
     trainerKey: targetTrainerKey,
     stage: targetStage,
   });
-  const buildBoss = resolveExperimentBoss(story, {
+  const buildBoss = (
+    buildBossLabel === targetBossLabel &&
+    !buildTrainerKey &&
+    buildStage === null
+  ) ? red : resolveExperimentBoss(story, {
     label: buildBossLabel,
     trainerKey: buildTrainerKey,
     stage: buildStage,
