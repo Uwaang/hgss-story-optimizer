@@ -498,17 +498,17 @@ function levelRequirementForEvolution(evo) {
 
 function evolutionAllowedInHgssRedExperiment(evo) {
   const method = String(evo?.method || '');
-  // These Gen 4 evolutions require overworld mechanics that do not exist in
-  // HGSS itself (Mt. Coronet magnetic field, Moss/Ice Rock, or Beauty).
+  // These methods name Diamond/Pearl/Platinum-only field mechanics in the
+  // pinned HGSS evolution table. They cannot be triggered inside HGSS itself.
   // Trade, trade-item, stone, friendship, move, party-member, gender and
   // time-of-day evolutions remain allowed because this experiment ignores
   // route effort but still requires an HGSS-feasible species.
-  return ![
-    'MAGNETIC_FIELD',
-    'MOSS_ROCK',
-    'ICE_ROCK',
-    'BEAUTY',
-  ].some(token => method.includes(token));
+  return !new Set([
+    'EVO_CORONET',
+    'EVO_ETERNA',
+    'EVO_ROUTE217',
+    'EVO_BEAUTY',
+  ]).has(method);
 }
 
 function manualSpeciesConstant(name) {
