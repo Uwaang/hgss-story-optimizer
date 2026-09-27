@@ -1068,6 +1068,255 @@ export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
   }
   return result;
 }
+
+function abilityForSlot(speciesName, slot = 0) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return '';
+  return species.abilities?.[String(slot)] || species.abilities?.['0'] || '';
+}
+
+function lowerTailMean(values, k = 5) {
+  const finite = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!finite.length) return 0;
+  const slice = finite.slice(0, Math.min(k, finite.length));
+  return slice.reduce((sum, value) => sum + value, 0) / slice.length;
+}
+
+export function applyPlayerRouteBuild(mon, build) {
+  if (!build) return mon;
+  const ability = abilityForSlot(mon.species, Number(build.abilitySlot || 0));
+  return {
+    ...mon,
+    ability: ability || mon.ability || '',
+    nature: build.nature || mon.nature || NEUTRAL_NATURE,
+    ivs: { ...(build.ivs || uniformIvs(16)) },
+    evs: { ...(build.evs || {}) },
+    _routeBuild: {
+      iv: Number(build.iv ?? 16),
+      evSpread: build.evSpread || null,
+      nature: build.nature || NEUTRAL_NATURE,
+      abilitySlot: Number(build.abilitySlot || 0),
+      proxyScore: Number(build.proxyScore || 0),
+    },
+  };
+}
+
+export function optimizePlayerRouteBuild(samples, options = {}) {
+  const usable = (samples || []).filter(sample => sample?.mon && Array.isArray(sample.foeTeam) && sample.foeTeam.length);
+  if (!usable.length) return null;
+  const iv = Math.max(0, Math.min(31, Math.floor(Number(options.iv ?? 16))));
+  const ivs = uniformIvs(iv);
+  const spreads = options.evSpreads || RED_BUILD_EV_SPREADS;
+  const natures = options.natures || RED_BUILD_NATURES;
+  const abilitySlots = options.abilitySlots || [0, 1];
+  let best = null;
+
+  for (const spread of spreads) {
+    for (const nature of natures) {
+      for (const abilitySlot of abilitySlots) {
+        const scores = usable.map(sample => {
+          const mon = {
+            ...sample.mon,
+            item: '',
+            ability: abilityForSlot(sample.mon.species, abilitySlot),
+            nature,
+            ivs,
+            evs: { ...spread.evs },
+          };
+          return playerBuildScore(mon, sample.foeTeam);
+        });
+        const mean = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+        const tail = lowerTailMean(scores, 5);
+        const proxyScore = 0.72 * mean + 0.28 * tail;
+        if (
+          !best ||
+          proxyScore > best.proxyScore + 1e-12 ||
+          (Math.abs(proxyScore - best.proxyScore) <= 1e-12 &&
+            `${spread.label}:${nature}:${abilitySlot}`.localeCompare(
+              `${best.evSpread}:${best.nature}:${best.abilitySlot}`
+            ) < 0)
+        ) {
+          best = {
+            iv,
+            ivs: { ...ivs },
+            evSpread: spread.label,
+            evs: { ...spread.evs },
+            nature,
+            abilitySlot,
+            proxyScore,
+            meanScore: mean,
+            bottom5Score: tail,
+          };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+export function optimizePlayerHeldItemForBoss(mon, foeTeam, options = {}) {
+  const items = Array.isArray(options.items) && options.items.length
+    ? options.items
+    : [''];
+  let best = null;
+  for (const item of items) {
+    const candidate = { ...mon, item };
+    let score = playerBuildScore(candidate, foeTeam);
+    const itemId = dex.items.get(item || '').id;
+    if (['choiceband', 'choicespecs', 'choicescarf'].includes(itemId)) {
+      const statusCount = (candidate.moves || [])
+        .filter(moveName => dex.moves.get(moveName).category === 'Status')
+        .length;
+      score *= 0.42 ** statusCount;
+    }
+    if (
+      !best ||
+      score > best.score + 1e-12 ||
+      (Math.abs(score - best.score) <= 1e-12 && String(item).localeCompare(String(best.item)) < 0)
+    ) {
+      best = { item, score };
+    }
+  }
+  return {
+    ...mon,
+    item: best?.item || '',
+    _heldItemOptimization: {
+      item: best?.item || '',
+      proxyScore: Number(best?.score || 0),
+    },
+  };
+}
+
+function routeMoveCombinations(values, choose = 4, start = 0, prefix = [], output = []) {
+  if (prefix.length === choose) {
+    output.push(prefix.slice());
+    return output;
+  }
+  const remaining = choose - prefix.length;
+  for (let i = start; i <= values.length - remaining; i += 1) {
+    prefix.push(values[i]);
+    routeMoveCombinations(values, choose, i + 1, prefix, output);
+    prefix.pop();
+  }
+  return output;
+}
+
+function routeMovesetScore(mon, moves, foeTeams) {
+  const bossScores = [];
+  for (const foes of foeTeams || []) {
+    const foeScores = [];
+    for (const foe of foes || []) {
+      const foeHp = Math.max(1, previewStat(foe, 'hp'));
+      const bestDamage = Math.max(0, ...moves.map(move => previewMoveDamage(
+        { ...mon, moves },
+        foe,
+        move,
+      )));
+      foeScores.push(bestDamage / foeHp);
+    }
+    if (foeScores.length) {
+      const mean = foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length;
+      const best = Math.max(...foeScores);
+      bossScores.push(0.7 * mean + 0.3 * best);
+    }
+  }
+  if (!bossScores.length) return 0;
+  const meanBoss = bossScores.reduce((sum, value) => sum + value, 0) / bossScores.length;
+  const specialist = [...bossScores].sort((a, b) => b - a)
+    .slice(0, Math.min(5, bossScores.length))
+    .reduce((sum, value, _, arr) => sum + value / arr.length, 0);
+  const damagingTypes = new Set(
+    moves.map(name => dex.moves.get(name))
+      .filter(move => move.exists && move.category !== 'Status')
+      .map(move => move.type)
+  ).size;
+  const statusBonus = moves
+    .map(name => dex.moves.get(name))
+    .filter(move => move.exists && move.category === 'Status')
+    .reduce((sum, move) => sum + Math.min(0.08, moveStrategicMultiplier(move) * 0.02), 0);
+  return meanBoss + 0.25 * specialist + 0.015 * damagingTypes + statusBonus;
+}
+
+export function optimizePlayerRouteMoves(
+  mon,
+  foeTeams,
+  {
+    stage = 21,
+    moveAccess = null,
+    extraMachines = [],
+    originSpeciesName = null,
+    shortlistCap = 12,
+  } = {},
+) {
+  const pool = candidateMovePool(
+    mon.species,
+    mon.level,
+    stage,
+    moveAccess,
+    extraMachines,
+    originSpeciesName || mon.species,
+  );
+  if (!pool.length) return { moves: ['Tackle'], legalMoveCount: 0, proxyScore: 0 };
+
+  const allFoes = (foeTeams || []).flat().filter(Boolean);
+  const individual = pool.map(name => {
+    const move = dex.moves.get(name);
+    if (!move.exists) return { name, score: 0 };
+    if (move.category === 'Status') {
+      return { name, score: candidateMoveScore(dex.species.get(mon.species), name) * 0.02 };
+    }
+    const fractions = allFoes.map(foe =>
+      previewMoveDamage({ ...mon, moves: [name] }, foe, name) /
+      Math.max(1, previewStat(foe, 'hp'))
+    );
+    const mean = fractions.length ? fractions.reduce((sum, value) => sum + value, 0) / fractions.length : 0;
+    const best = fractions.length ? Math.max(...fractions) : 0;
+    return { name, score: mean + 0.35 * best };
+  }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const shortlist = new Map();
+  for (const entry of individual.slice(0, Math.max(4, shortlistCap))) shortlist.set(entry.name, entry.score);
+  for (const foe of allFoes) {
+    let best = null;
+    for (const name of pool) {
+      const move = dex.moves.get(name);
+      if (!move.exists || move.category === 'Status') continue;
+      const fraction = previewMoveDamage({ ...mon, moves: [name] }, foe, name) /
+        Math.max(1, previewStat(foe, 'hp'));
+      if (!best || fraction > best.score) best = { name, score: fraction };
+    }
+    if (best) shortlist.set(best.name, Math.max(shortlist.get(best.name) || 0, best.score));
+  }
+
+  const candidates = [...shortlist.keys()]
+    .sort((a, b) =>
+      Number(shortlist.get(b) || 0) - Number(shortlist.get(a) || 0) ||
+      a.localeCompare(b)
+    )
+    .slice(0, Math.max(4, shortlistCap));
+  const sets = candidates.length <= 4
+    ? [[...candidates]]
+    : routeMoveCombinations(candidates, 4);
+  let best = null;
+  for (const moves of sets) {
+    const score = routeMovesetScore(mon, moves, foeTeams);
+    if (
+      !best ||
+      score > best.score + 1e-12 ||
+      (Math.abs(score - best.score) <= 1e-12 && moves.join('/').localeCompare(best.moves.join('/')) < 0)
+    ) {
+      best = { moves: [...moves], score };
+    }
+  }
+  return {
+    moves: best?.moves || individual.slice(0, 4).map(entry => entry.name),
+    legalMoveCount: pool.length,
+    shortlist: candidates,
+    evaluatedMovesets: sets.length,
+    proxyScore: Number(best?.score || 0),
+  };
+}
+
 export function orderPlayerTeamForLead(team, foeTeam) {
   const lead = Array.isArray(foeTeam) ? foeTeam[0] : null;
   if (!lead) return [...team];
