@@ -7968,6 +7968,67 @@ async function cmdRedMinGrindValidate() {
   }, null, 2));
 }
 
+
+async function cmdRed57ExactLanceCrosscheck() {
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '500'))));
+  const story = await loadStory();
+  const lance = resolveExperimentBoss(story, {
+    label: 'Lance Rematch',
+    trainerKey: 'TRAINER_CHAMPION_LANCE_2',
+    stage: 20,
+  });
+  const enemyTeam = hgssTrainerToShowdownTeam(lance.trainer, lance);
+  const ivs = { hp: 16, atk: 16, def: 16, spa: 16, spd: 16, spe: 16 };
+  const physicalEvs = { hp: 252, atk: 252, def: 4, spa: 0, spd: 0, spe: 0 };
+  const specialEvs = { hp: 252, atk: 0, def: 4, spa: 252, spd: 0, spe: 0 };
+  const playerTeam = [
+    {
+      species: 'Quagsire', level: 57, ability: 'Water Absorb',
+      item: 'Choice Band', nature: 'Adamant', ivs, evs: physicalEvs,
+      moves: ['Earthquake', 'Surf', 'Waterfall', 'Ice Beam'],
+    },
+    {
+      species: 'Tyranitar', level: 57, ability: 'Sand Stream',
+      item: 'Choice Band', nature: 'Adamant', ivs, evs: physicalEvs,
+      moves: ['Crunch', 'Stone Edge', 'Rock Slide', 'Earthquake'],
+    },
+    {
+      species: 'Rhyperior', level: 57, ability: 'Solid Rock',
+      item: 'Choice Band', nature: 'Adamant', ivs, evs: physicalEvs,
+      moves: ['Earthquake', 'Stone Edge', 'Megahorn', 'Hammer Arm'],
+    },
+    {
+      species: 'Magneton', level: 57, ability: 'Magnet Pull',
+      item: 'Choice Specs', nature: 'Modest', ivs, evs: specialEvs,
+      moves: ['Thunderbolt', 'Thunder', 'Mirror Shot', 'Tri Attack'],
+    },
+    {
+      species: 'Typhlosion', level: 57, ability: 'Blaze',
+      item: 'Choice Specs', nature: 'Modest', ivs, evs: specialEvs,
+      moves: ['Eruption', 'Fire Blast', 'Double-Edge', 'Focus Blast'],
+    },
+    {
+      species: 'Ampharos', level: 57, ability: 'Static',
+      item: 'Choice Specs', nature: 'Modest', ivs, evs: specialEvs,
+      moves: ['Thunderbolt', 'Thunder', 'Focus Blast', 'Signal Beam'],
+    },
+  ];
+  const battle = await simulateMatchup(
+    playerTeam,
+    enemyTeam,
+    runs,
+    1777001,
+    { p2Trainer: lance, p1AiMode: 'smart' },
+  );
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'exact previously reported Red Lv57 build cross-tested unchanged against Lance rematch',
+    runs,
+    playerTeam,
+    battle,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -8036,6 +8097,7 @@ const commands = {
   'boss-min-grind-ga-search': cmdRedMinGrindGaSearch,
   'red-min-grind-validate': cmdRedMinGrindValidate,
   'boss-min-grind-validate': cmdRedMinGrindValidate,
+  'red57-exact-vs-lance': cmdRed57ExactLanceCrosscheck,
   'red-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
   'boss-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
   'red-battle-model-sanity': cmdRedBattleModelSanity,
