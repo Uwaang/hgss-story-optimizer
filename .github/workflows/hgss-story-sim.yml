@@ -349,7 +349,7 @@ jobs:
 
 
   abra_activation_pilot:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'activation-pilot'
     runs-on: ubuntu-latest
     defaults:
       run:
