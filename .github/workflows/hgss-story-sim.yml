@@ -29,6 +29,7 @@ on:
           - meaningful-six-refinement
           - member-contribution-pilot
           - contribution-candidate-probe
+          - abra-slot-refinement
           - meaningful-six-pilot
           - meaningful-six-refinement
 
@@ -458,7 +459,7 @@ jobs:
           if-no-files-found: error
 
   abra_slot_refinement_pilot:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'abra-slot-refinement'
     runs-on: ubuntu-latest
     defaults:
       run:
