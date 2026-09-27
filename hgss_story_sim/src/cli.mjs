@@ -3196,6 +3196,7 @@ async function cmdMeaningfulSix() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const replaceOnly = String(arg('replace', '')).trim();
   const runs = Number(arg('runs', '1'));
   const finalRuns = Number(arg('final-runs', '20'));
   const candidateCap = Number(arg('candidate-cap', '24'));
@@ -3272,6 +3273,7 @@ async function cmdMeaningfulSix() {
   await addTeam(baselineTeam, 'baseline');
   for (const removed of baselineTeam) {
     if (candidateIdentity(removed) === candidateIdentity(starter)) continue;
+    if (replaceOnly && removed.species !== replaceOnly) continue;
     const kept = baselineTeam.filter(mon => candidateIdentity(mon) !== candidateIdentity(removed));
     const existing = new Set(kept.map(candidateIdentity));
     for (const replacement of screened) {
@@ -3390,6 +3392,7 @@ async function cmdMeaningfulSix() {
     version,
     starter: starter.species,
     baselineTeam: baselineTeam.map(mon => mon.species),
+    replaceOnly: replaceOnly || null,
     resourceProfile,
     spendPolicy,
     expProfile,
