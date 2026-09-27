@@ -7868,6 +7868,15 @@ async function cmdRedMinGrindValidate() {
     trainerKey: buildTrainerKey,
     stage: buildStage,
   });
+  const availabilityBoss = (
+    availabilityBossLabel === buildBossLabel &&
+    !availabilityTrainerKey &&
+    availabilityStage === null
+  ) ? buildBoss : resolveExperimentBoss(story, {
+    label: availabilityBossLabel,
+    trainerKey: availabilityTrainerKey,
+    stage: availabilityStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
