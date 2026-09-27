@@ -473,6 +473,8 @@ jobs:
         run: npm run route-smoke
       - name: HGSS battle smoke test
         run: npm run smoke
+      - name: Red-only min-grind smoke test
+        run: node src/cli.mjs red-min-grind-search --version=HEARTGOLD --starter=Cyndaquil --level-min=80 --level-max=80 --candidate-cap=12 --beam-width=24 --screen-cap=12 --screen-runs=1 --finalist-cap=4 --final-runs=1 --target-win-rate=0.5 > /tmp/red-min-grind-smoke.json
       - name: Boss-local oracle smoke test
         run: node src/cli.mjs boss-local-oracle-probe --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --runs=1 --targets=Misty --candidates=Magnemite --candidate-cap=1 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > /tmp/boss-local-oracle-smoke.json
       - name: Player matchup switching smoke test
