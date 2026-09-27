@@ -5741,6 +5741,22 @@ async function cmdTutorSmoke() {
   const moveAccess = await loadMoveAccess();
   const before = candidateMovePool('Quilava', 17, 1, moveAccess);
   const after = candidateMovePool('Quilava', 19, 2, moveAccess);
+  const inheritedTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    20,
+    moveAccess,
+    [],
+    'Cyndaquil',
+  );
+  const directTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    20,
+    moveAccess,
+    [],
+    'Typhlosion',
+  );
 
   if (before.includes('Headbutt')) {
     throw new Error('Headbutt tutor became available before Ilex Forest');
@@ -5748,8 +5764,19 @@ async function cmdTutorSmoke() {
   if (!after.includes('Headbutt')) {
     throw new Error('Expected stage-2 Quilava to be compatible with reusable Headbutt tutor');
   }
+  if (!inheritedTyphlosion.includes('Eruption')) {
+    throw new Error('Expected Cyndaquil-origin Typhlosion Lv50 to retain pre-evolution Eruption');
+  }
+  if (directTyphlosion.includes('Eruption')) {
+    throw new Error('Direct-capture Typhlosion Lv50 must not inherit Cyndaquil-only Eruption');
+  }
 
-  console.log(JSON.stringify({ before, after }, null, 2));
+  console.log(JSON.stringify({
+    before,
+    after,
+    inheritedTyphlosion,
+    directTyphlosion,
+  }, null, 2));
 }
 
 async function cmdHmSmoke() {
@@ -5907,8 +5934,15 @@ function redFormLevelRow(form, red, commonLevel, moveAccess = null, extraMachine
   const captureExp = expAtLevel(form.growthRate, capture.captureLevel);
   if (targetExp === null || captureExp === null) return null;
   const proxyUtility = moveAccess
-    ? candidateBossUtilityWithMoveAccess(form, red, commonLevel, moveAccess, extraMachines)
-    : candidateBossUtility(form, red, commonLevel);
+    ? candidateBossUtilityWithMoveAccess(
+        form,
+        red,
+        commonLevel,
+        moveAccess,
+        extraMachines,
+        capture.captureSpecies,
+      )
+    : candidateBossUtility(form, red, commonLevel, capture.captureSpecies);
   return {
     form,
     familyId: form.familyId,
@@ -6120,6 +6154,14 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
       levelsByCandidate: levels,
     },
   );
+
+  const captureSpeciesByFamily = new Map(
+    state.members.map(row => [row.familyId, row.capture?.captureSpecies || row.species]),
+  );
+  playerTeam = playerTeam.map(mon => ({
+    ...mon,
+    _captureSpecies: captureSpeciesByFamily.get(mon._candidateKey) || mon.species,
+  }));
 
   const extraMachines = [
     ...(moveAccess.singleUseMachines || []),
