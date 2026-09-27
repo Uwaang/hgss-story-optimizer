@@ -191,16 +191,18 @@ jobs:
             pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
         run: npm install --prefer-offline --no-audit --no-fund
-      - name: Search HG Cyndaquil minimum-grind Lance team
+      - name: Search HG Cyndaquil minimum-grind Lance rematch team
         run: |
           mkdir -p results
           node src/cli.mjs boss-min-grind-ga-search \
-            --target-boss=Lance \
+            --target-boss="Lance Rematch" \
+            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --target-stage=20 \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --level-min=35 \
-            --level-max=52 \
-            --level-step=3 \
+            --level-min=45 \
+            --level-max=75 \
+            --level-step=5 \
             --candidate-cap=72 \
             --population=18 \
             --generations=4 \
@@ -212,12 +214,12 @@ jobs:
             --finalist-cap=12 \
             --final-runs=30 \
             --target-win-rate=0.5 \
-            > results/lance-min-grind-hg-cyndaquil.json
-      - name: Upload Lance pilot
+            > results/lance2-min-grind-hg-cyndaquil.json
+      - name: Upload Lance rematch pilot
         uses: actions/upload-artifact@v4
         with:
-          name: hgss-lance-min-grind-hg-cyndaquil
-          path: hgss_story_sim/results/lance-min-grind-hg-cyndaquil.json
+          name: hgss-lance2-min-grind-hg-cyndaquil
+          path: hgss_story_sim/results/lance2-min-grind-hg-cyndaquil.json
           if-no-files-found: error
 
   red_model_sanity:
