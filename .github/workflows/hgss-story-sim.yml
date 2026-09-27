@@ -28,6 +28,7 @@ on:
           - team-usage
           - meaningful-six-refinement
           - member-contribution-pilot
+          - contribution-candidate-probe
           - meaningful-six-pilot
           - meaningful-six-refinement
 
@@ -418,7 +419,7 @@ jobs:
           if-no-files-found: error
 
   contribution_candidate_probe:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'contribution-candidate-probe'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
