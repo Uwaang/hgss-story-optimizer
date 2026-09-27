@@ -5707,6 +5707,262 @@ async function cmdTmSmoke() {
   }, null, 2));
 }
 
+
+function equalLevelCapturePlan(candidate, commonLevel) {
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(commonLevel || 1))));
+  const fallbackMin = Number(candidate.entryLevelMin);
+  const fallbackMax = Number(candidate.entryLevelMax);
+  let captureLevel = null;
+  let captureSource = null;
+
+  for (const source of candidate.sources || []) {
+    const minLevel = Number.isFinite(Number(source.minLevel))
+      ? Number(source.minLevel)
+      : fallbackMin;
+    const maxLevel = Number.isFinite(Number(source.maxLevel))
+      ? Number(source.maxLevel)
+      : fallbackMax;
+    if (Number.isFinite(minLevel) && minLevel > targetLevel) continue;
+    let legalLevel = null;
+    if (Number.isFinite(maxLevel)) legalLevel = Math.min(targetLevel, maxLevel);
+    else if (Number.isFinite(minLevel)) legalLevel = Math.max(minLevel, targetLevel);
+    if (!Number.isFinite(legalLevel) || legalLevel > targetLevel) continue;
+    if (captureLevel === null || legalLevel > captureLevel) {
+      captureLevel = legalLevel;
+      captureSource = source;
+    }
+  }
+
+  if (captureLevel === null && Number.isFinite(fallbackMin) && fallbackMin <= targetLevel) {
+    captureLevel = Number.isFinite(fallbackMax)
+      ? Math.min(targetLevel, fallbackMax)
+      : fallbackMin;
+    captureSource = candidate.captureSearch?.source || null;
+  }
+
+  if (captureLevel === null) {
+    return {
+      legal: false,
+      reason: 'no source-backed capture level at or below common level',
+      targetLevel,
+      captureLevel: null,
+      grindExp: null,
+    };
+  }
+
+  const startExp = expAtLevel(candidate.growthRate, captureLevel);
+  const targetExp = expAtLevel(candidate.growthRate, targetLevel);
+  return {
+    legal: startExp !== null && targetExp !== null,
+    reason: startExp === null || targetExp === null ? 'unknown growth rate' : null,
+    targetLevel,
+    captureLevel,
+    grindExp: startExp === null || targetExp === null
+      ? null
+      : Math.max(0, targetExp - startExp),
+    source: captureSource,
+  };
+}
+
+function equalLevelTeamExpCost(candidates, commonLevel) {
+  const members = candidates.map(candidate => ({
+    familyId: candidateIdentity(candidate),
+    species: candidate.species,
+    growthRate: candidate.growthRate || null,
+    availableFrom: Number(candidate.availableFrom || 0),
+    ...equalLevelCapturePlan(candidate, commonLevel),
+  }));
+  const legal = members.every(member => member.legal);
+  const unknown = members.filter(member => member.grindExp === null).length;
+  return {
+    legal,
+    commonLevel: Number(commonLevel),
+    totalGrindExp: legal && !unknown
+      ? members.reduce((sum, member) => sum + Number(member.grindExp || 0), 0)
+      : null,
+    unknown,
+    members,
+  };
+}
+
+async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess) {
+  const expCost = equalLevelTeamExpCost(candidates, commonLevel);
+  if (!expCost.legal) {
+    return {
+      commonLevel: Number(commonLevel),
+      legal: false,
+      reason: 'one or more team members cannot exist at the requested common level',
+      equalLevelExp: expCost,
+    };
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, candidates);
+  const levels = Object.fromEntries(
+    candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
+  );
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(
+    candidates,
+    routeBosses,
+    moveAccess,
+    { levelsByBattle },
+  );
+  const purchasable = planPurchasableMachines(
+    candidates,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const purchasablePlan = purchasable.assignments;
+  const rows = [];
+  let weightedWins = 0;
+  let weightedRuns = 0;
+
+  for (const [battleIndex, boss] of routeBosses.entries()) {
+    const ordered = orderCandidatesForBoss(candidates, boss, levels);
+    const playerTeam = materializeCandidateTeam(
+      ordered,
+      boss.stage,
+      commonLevel,
+      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+    );
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+
+    if (!playerTeam.length) {
+      weightedRuns += runs;
+      rows.push({
+        boss: boss.label,
+        stage: Number(boss.stage),
+        aceLevel: Number(boss.aceLevel),
+        runs,
+        wins: 0,
+        losses: runs,
+        ties: 0,
+        winRate: 0,
+        skipped: true,
+        reason: 'no team member available by this story stage',
+      });
+      continue;
+    }
+
+    const result = await simulateMatchup(
+      playerTeam,
+      enemyTeam,
+      runs,
+      7100001 + Number(commonLevel) * 100000 + Number(boss.stage) * 1000 + battleIndex,
+      { p2Trainer: boss, p1AiMode: 'smart' },
+    );
+    weightedWins += Number(result.wins || 0);
+    weightedRuns += Number(result.runs || runs);
+    rows.push({
+      boss: boss.label,
+      stage: Number(boss.stage),
+      aceLevel: Number(boss.aceLevel),
+      playerLead: playerTeam[0]?.species || null,
+      availableMons: playerTeam.map(mon => mon.species),
+      playerLevels: Object.fromEntries(playerTeam.map(mon => [mon.species, mon.level])),
+      ...result,
+    });
+  }
+
+  const score = weightedRuns ? weightedWins / weightedRuns : 0;
+  const worstBossWinRate = rows.length
+    ? Math.min(...rows.map(row => Number(row.winRate || 0)))
+    : 0;
+  const finalBoss = routeBosses[routeBosses.length - 1] || null;
+  const finalTeam = finalBoss
+    ? materializeCandidateTeam(
+        orderCandidatesForBoss(candidates, finalBoss, levels),
+        finalBoss.stage,
+        commonLevel,
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
+      ).map(mon => mon.species)
+    : [];
+
+  return {
+    commonLevel: Number(commonLevel),
+    legal: true,
+    score,
+    worstBossWinRate,
+    bottom5BossWinRate: lowerTailBossWinRate(rows),
+    storyClearGeometricScore: storyClearGeometricScore(rows),
+    storyClearCoverageScore: storyClearCoverageScore(rows),
+    routeBattleCount: routeBosses.length,
+    equalLevelExp: expCost,
+    finalTeam,
+    singleUsePlan,
+    purchasablePlan,
+    purchaseCosts: purchasable.costs,
+    rows,
+  };
+}
+
+async function cmdEqualLevelStoryEvaluate() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const levels = String(arg('levels', arg('level', '50')))
+    .split(',')
+    .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))))
+    .filter(Number.isFinite);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+
+  if (version !== 'HEARTGOLD') {
+    throw new Error('equal-level-story-evaluate pilot currently supports HEARTGOLD only');
+  }
+  if (starterName !== 'Cyndaquil') {
+    throw new Error('equal-level-story-evaluate pilot currently supports Cyndaquil only');
+  }
+  if (teamNames.length !== 6) {
+    throw new Error('equal-level-story-evaluate requires exactly six base/capture species via --team');
+  }
+  if (!levels.length) throw new Error('equal-level-story-evaluate requires at least one valid level');
+
+  const story = await loadStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const bySpecies = new Map(pool.candidates.map(candidate => [candidate.species, candidate]));
+  const team = teamNames.map(name => {
+    const candidate = bySpecies.get(name);
+    if (!candidate) throw new Error('Canonical candidate not found: ' + name);
+    return candidate;
+  });
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Requested team violates family/exclusive-group constraints');
+  }
+  const starter = findStarterCandidate(pool.candidates, starterName);
+  if (!team.some(candidate => candidateIdentity(candidate) === candidateIdentity(starter))) {
+    throw new Error('Requested team must contain the Cyndaquil starter family');
+  }
+
+  const evaluations = [];
+  for (const commonLevel of levels) {
+    evaluations.push(await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+    ));
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'HG+Cyndaquil fixed-team equal-level story evaluation without EXP scheduling',
+    version,
+    starter: starterName,
+    team: teamNames,
+    levels,
+    runsPerBoss: runs,
+    resourceProfile: 'all',
+    spendPolicy: 'unbounded',
+    evaluations,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -5770,6 +6026,7 @@ const commands = {
   'counterfactual-specialist-probe': cmdCounterfactualSpecialistProbe,
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
+  'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -5781,7 +6038,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
