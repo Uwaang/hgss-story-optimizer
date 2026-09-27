@@ -290,6 +290,49 @@ async function loadStory() {
   return { config, source, bosses: extractBosses(source, config) };
 }
 
+function resolveExperimentBoss(story, {
+  label,
+  trainerKey = '',
+  stage = null,
+}) {
+  const key = String(trainerKey || '').trim();
+  if (!key) {
+    const boss = story.bosses.find(row => row.label === label);
+    if (!boss) throw new Error('Target boss definition not found: ' + label);
+    return boss;
+  }
+
+  const trainerId = story.source.constants.get(key);
+  if (trainerId === undefined) {
+    throw new Error('Target trainer constant not found: ' + key);
+  }
+  const trainer = story.source.trainers[trainerId];
+  if (!trainer) {
+    throw new Error('Target trainer id is outside trainers.json: ' + trainerId);
+  }
+  const trainerClassId = story.source.trainerClasses.get(trainer.class);
+  if (trainerClassId === undefined) {
+    throw new Error('Trainer class constant not found: ' + trainer.class);
+  }
+  const resolvedStage = Number(stage);
+  if (!Number.isFinite(resolvedStage)) {
+    throw new Error('Explicit target-stage is required with target-trainer-key');
+  }
+  return {
+    stage: resolvedStage,
+    key,
+    label,
+    kind: 'experiment-target',
+    sourceRef: null,
+    appliesToStarter: null,
+    trainerId,
+    trainerClassId,
+    trainerGender: story.source.trainerGenders.get(trainer.class) || 'TRAINER_MALE',
+    aceLevel: Math.max(...trainer.party.map(mon => Number(mon.level || 1))),
+    trainer,
+  };
+}
+
 async function loadCanonicalPool(version, story = null) {
   const context = story || await loadStory();
   const access = await readJson('config/story-access.canonical.json');
@@ -5698,6 +5741,22 @@ async function cmdTutorSmoke() {
   const moveAccess = await loadMoveAccess();
   const before = candidateMovePool('Quilava', 17, 1, moveAccess);
   const after = candidateMovePool('Quilava', 19, 2, moveAccess);
+  const inheritedTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    20,
+    moveAccess,
+    [],
+    'Cyndaquil',
+  );
+  const directTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    20,
+    moveAccess,
+    [],
+    'Typhlosion',
+  );
 
   if (before.includes('Headbutt')) {
     throw new Error('Headbutt tutor became available before Ilex Forest');
@@ -5705,8 +5764,41 @@ async function cmdTutorSmoke() {
   if (!after.includes('Headbutt')) {
     throw new Error('Expected stage-2 Quilava to be compatible with reusable Headbutt tutor');
   }
+  if (!inheritedTyphlosion.includes('Eruption')) {
+    throw new Error('Expected Cyndaquil-origin Typhlosion Lv50 to retain pre-evolution Eruption');
+  }
+  if (directTyphlosion.includes('Eruption')) {
+    throw new Error('Direct-capture Typhlosion Lv50 must not inherit Cyndaquil-only Eruption');
+  }
 
-  console.log(JSON.stringify({ before, after }, null, 2));
+  const evolvedCapture = redCaptureChoice({
+    redCaptureOptions: [{
+      captureSpecies: 'Magikarp',
+      targetSpecies: 'Gyarados',
+      evolutionMinLevel: 20,
+      minLevel: 1,
+      maxLevel: 45,
+      evolutionSteps: [{
+        fromSpecies: 'Magikarp',
+        targetSpecies: 'Gyarados',
+        method: 'EVO_LEVEL',
+        param: 20,
+      }],
+    }],
+  }, 45);
+  if (evolvedCapture?.captureLevel !== 44 || evolvedCapture?.minimumFinalLevel !== 45) {
+    throw new Error(
+      `Expected Lv45 Gyarados path to reserve one level-up from Magikarp Lv44, got ${JSON.stringify(evolvedCapture)}`,
+    );
+  }
+
+  console.log(JSON.stringify({
+    before,
+    after,
+    inheritedTyphlosion,
+    directTyphlosion,
+    evolvedCapture,
+  }, null, 2));
 }
 
 async function cmdHmSmoke() {
@@ -5833,6 +5925,37 @@ async function cmdTmSmoke() {
 }
 
 
+function minimumFinalLevelForEvolutionPath(option, captureLevel) {
+  let level = Math.max(1, Math.min(100, Math.floor(Number(captureLevel || 1))));
+  let requiredLevelUps = 0;
+  for (const step of option?.evolutionSteps || []) {
+    const method = String(step?.method || '');
+    const legacyRequiresLevelUp =
+      method.startsWith('EVO_LEVEL') ||
+      new Set([
+        'EVO_FRIENDSHIP',
+        'EVO_FRIENDSHIP_DAY',
+        'EVO_FRIENDSHIP_NIGHT',
+        'EVO_HAS_MOVE',
+        'EVO_ITEM_DAY',
+        'EVO_ITEM_NIGHT',
+        'EVO_OTHER_PARTY_MON',
+        'EVO_BEAUTY',
+        'EVO_CORONET',
+        'EVO_ETERNA',
+        'EVO_ROUTE217',
+      ]).has(method);
+    if (!(step?.requiresLevelUp ?? legacyRequiresLevelUp)) continue;
+    const rawThreshold = Number(step?.param);
+    const threshold = method.startsWith('EVO_LEVEL') && Number.isFinite(rawThreshold) && rawThreshold > 0
+      ? rawThreshold
+      : 1;
+    level = Math.max(level + 1, threshold);
+    requiredLevelUps += 1;
+  }
+  return { minimumFinalLevel: level, requiredLevelUps };
+}
+
 function redCaptureChoice(form, commonLevel) {
   const level = Math.max(1, Math.min(100, Math.floor(Number(commonLevel || 1))));
   const options = (form.redCaptureOptions || [])
@@ -5841,15 +5964,27 @@ function redCaptureChoice(form, commonLevel) {
       level >= Number(option.minLevel || 1)
     )
     .map(option => {
-      const captureLevel = Math.min(level, Number(option.maxLevel || option.minLevel || 1));
-      return {
-        ...option,
-        captureLevel,
-      };
+      const minCapture = Math.max(1, Math.floor(Number(option.minLevel || 1)));
+      const maxCapture = Math.min(
+        level,
+        Math.max(minCapture, Math.floor(Number(option.maxLevel || option.minLevel || 1))),
+      );
+      for (let captureLevel = maxCapture; captureLevel >= minCapture; captureLevel -= 1) {
+        const evolution = minimumFinalLevelForEvolutionPath(option, captureLevel);
+        if (evolution.minimumFinalLevel > level) continue;
+        return {
+          ...option,
+          captureLevel,
+          minimumFinalLevel: evolution.minimumFinalLevel,
+          requiredLevelUps: evolution.requiredLevelUps,
+        };
+      }
+      return null;
     })
-    .filter(option => option.captureLevel >= Number(option.minLevel || 1))
+    .filter(Boolean)
     .sort((a, b) =>
       Number(b.captureLevel) - Number(a.captureLevel) ||
+      Number(a.requiredLevelUps || 0) - Number(b.requiredLevelUps || 0) ||
       Number(a.evolutionMinLevel || 1) - Number(b.evolutionMinLevel || 1) ||
       Number(a.expectedEncounters ?? Infinity) - Number(b.expectedEncounters ?? Infinity) ||
       String(a.captureSpecies).localeCompare(String(b.captureSpecies))
@@ -5864,8 +5999,15 @@ function redFormLevelRow(form, red, commonLevel, moveAccess = null, extraMachine
   const captureExp = expAtLevel(form.growthRate, capture.captureLevel);
   if (targetExp === null || captureExp === null) return null;
   const proxyUtility = moveAccess
-    ? candidateBossUtilityWithMoveAccess(form, red, commonLevel, moveAccess, extraMachines)
-    : candidateBossUtility(form, red, commonLevel);
+    ? candidateBossUtilityWithMoveAccess(
+        form,
+        red,
+        commonLevel,
+        moveAccess,
+        extraMachines,
+        capture.captureSpecies,
+      )
+    : candidateBossUtility(form, red, commonLevel, capture.captureSpecies);
   return {
     form,
     familyId: form.familyId,
@@ -6063,7 +6205,145 @@ function redOptimizedPlayerBuild(mon, enemyTeam) {
   };
 }
 
-async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase) {
+function targetBossHeldItemPolicy(stage) {
+  const targetStage = Number(stage);
+  if (targetStage < 20) {
+    return {
+      mode: 'legacy-unconstrained-before-stage20',
+      unavailable: [],
+      finiteCaps: {},
+      note: 'Stage-specific held-item inventory is currently enforced only for Blue/Lance-rematch-or-later experiments.',
+    };
+  }
+  return {
+    mode: 'hgss-post-kanto-realistic',
+    unavailable: targetStage < 21 ? ['Expert Belt'] : [],
+    finiteCaps: {
+      'Choice Specs': 1,
+      'Life Orb': 1,
+      Leftovers: 1,
+      'Wise Glasses': 1,
+    },
+    repeatableIgnoredCost: [
+      'Choice Band',
+      'Choice Scarf',
+      'Focus Sash',
+      'Muscle Band',
+    ],
+    note: 'Finite field items cannot be duplicated. Repeatable Battle Frontier items may be bought multiple times; BP acquisition effort is not included in the EXP-only objective.',
+  };
+}
+
+function targetBossBuildScore(mon) {
+  return Number(
+    mon?._movesetOptimization?.jointScore ??
+    mon?._buildOptimization?.proxyScore ??
+    0
+  );
+}
+
+function optimizeTargetBossTeamBuilds(
+  baseTeam,
+  enemyTeam,
+  targetBoss,
+  moveAccess,
+  extraMachines,
+  {
+    shortlistCap = 12,
+    movesetFinalists = 8,
+  } = {},
+) {
+  const policy = targetBossHeldItemPolicy(targetBoss?.stage);
+  const bannedBySlot = baseTeam.map(() => new Set(policy.unavailable || []));
+
+  function buildSlot(index, extraExcluded = []) {
+    const excluded = new Set([...bannedBySlot[index], ...extraExcluded]);
+    return optimizePlayerMovesAndBuildForBoss(
+      baseTeam[index],
+      enemyTeam,
+      {
+        iv: 16,
+        stage: targetBoss.stage,
+        moveAccess,
+        extraMachines,
+        shortlistCap,
+        movesetFinalists,
+        excludedItems: [...excluded],
+      },
+    );
+  }
+
+  const built = baseTeam.map((_, index) => buildSlot(index));
+  const capEntries = Object.entries(policy.finiteCaps || {});
+  const maxIterations = Math.max(1, baseTeam.length * Math.max(1, capEntries.length) * 2);
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    let violation = null;
+    for (const [item, capRaw] of capEntries) {
+      const cap = Math.max(0, Number(capRaw || 0));
+      const holders = built
+        .map((mon, index) => ({ mon, index }))
+        .filter(entry => entry.mon?.item === item);
+      if (holders.length > cap) {
+        violation = { item, cap, holders };
+        break;
+      }
+    }
+    if (!violation) break;
+
+    const alternatives = violation.holders.map(({ mon, index }) => {
+      const alternative = buildSlot(index, [violation.item]);
+      return {
+        index,
+        mon,
+        alternative,
+        loss: targetBossBuildScore(mon) - targetBossBuildScore(alternative),
+      };
+    }).sort((a, b) =>
+      Number(b.loss) - Number(a.loss) ||
+      String(a.mon?.species || '').localeCompare(String(b.mon?.species || ''))
+    );
+
+    const keep = new Set(alternatives.slice(0, violation.cap).map(entry => entry.index));
+    for (const entry of alternatives) {
+      if (keep.has(entry.index)) continue;
+      bannedBySlot[entry.index].add(violation.item);
+      built[entry.index] = entry.alternative;
+    }
+  }
+
+  const remainingViolations = [];
+  for (const [item, capRaw] of capEntries) {
+    const cap = Math.max(0, Number(capRaw || 0));
+    const count = built.filter(mon => mon?.item === item).length;
+    if (count > cap) remainingViolations.push({ item, cap, count });
+  }
+  if (remainingViolations.length) {
+    throw new Error(
+      'Held-item cap resolution failed: ' + JSON.stringify(remainingViolations),
+    );
+  }
+
+  return {
+    team: built,
+    policy: {
+      ...policy,
+      bannedBySlot: Object.fromEntries(
+        built.map((mon, index) => [mon.species, [...bannedBySlot[index]].sort()]),
+      ),
+    },
+  };
+}
+
+async function redEvaluateTeam(
+  state,
+  red,
+  enemyTeam,
+  moveAccess,
+  runs,
+  seedBase,
+  buildSearch = {},
+) {
   const commonLevel = Number(state.members[0]?.commonLevel || 1);
   const forms = state.members.map(row => row.form);
   const levels = Object.fromEntries(forms.map(form => [candidateIdentity(form), commonLevel]));
@@ -6078,23 +6358,28 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     },
   );
 
+  const captureSpeciesByFamily = new Map(
+    state.members.map(row => [row.familyId, row.capture?.captureSpecies || row.species]),
+  );
+  playerTeam = playerTeam.map(mon => ({
+    ...mon,
+    _captureSpecies: captureSpeciesByFamily.get(mon._candidateKey) || mon.species,
+  }));
+
   const extraMachines = [
     ...(moveAccess.singleUseMachines || []),
     ...(moveAccess.purchasableMachines || []),
   ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
-  playerTeam = playerTeam.map(mon => optimizePlayerMovesAndBuildForBoss(
-    mon,
+  const optimizedBuilds = optimizeTargetBossTeamBuilds(
+    playerTeam,
     enemyTeam,
-    {
-      iv: 16,
-      stage: red.stage,
-      moveAccess,
-      extraMachines,
-      shortlistCap: 12,
-      movesetFinalists: 8,
-    },
-  ));
+    red,
+    moveAccess,
+    extraMachines,
+    buildSearch,
+  );
+  playerTeam = optimizedBuilds.team;
 
   const battle = await simulateMatchup(
     playerTeam,
@@ -6116,6 +6401,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     averagePlayerFaints: Number(battle.averageP1Faints || 0),
     averageRedFaints: Number(battle.averageP2Faints || 0),
     maxRedFaints: Number(battle.maxP2Faints || 0),
+    heldItemPolicy: optimizedBuilds.policy,
     team: state.members.map(row => ({
       familyId: row.familyId,
       species: row.species,
@@ -6128,6 +6414,10 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
         method: row.capture.method,
       },
       evolutionMinLevel: Number(row.capture.evolutionMinLevel || 1),
+      requiredLevelUps: Number(row.capture.requiredLevelUps || 0),
+      minimumFinalLevel: Number(row.capture.minimumFinalLevel || row.capture.captureLevel || 1),
+      evolutionPath: row.capture.path || [],
+      evolutionSteps: row.capture.evolutionSteps || [],
       grindExp: Number(row.grindExp),
       proxyUtility: Number(row.proxyUtility),
     })),
@@ -6639,7 +6929,7 @@ async function cmdRedMinGrindSearch() {
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six battle members have exactly the same level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently; Red-specific movesets are optimized from the legal pool; route ownership and money are ignored',
-      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      heldItems: 'optimized from a conservative Gen-4 shortlist with stage-20 finite-copy caps and Mt. Silver-only Expert Belt excluded; repeatable Battle Frontier item BP cost is reported as reality burden but ignored by the EXP-only objective',
       battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/legal-ability/item + Red-specific moveset optimization versus source-guided Red trainer AI',
     },
     search: {
@@ -6671,6 +6961,10 @@ async function cmdRedMinGrindSearch() {
 
 async function cmdRedMinGrindGaSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const levelMin = Math.max(1, Math.min(100, Math.floor(Number(arg('level-min', '45')))));
   const levelMax = Math.max(levelMin, Math.min(100, Math.floor(Number(arg('level-max', '95')))));
@@ -6696,8 +6990,11 @@ async function cmdRedMinGrindGaSearch() {
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -6705,7 +7002,8 @@ async function cmdRedMinGrindGaSearch() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7056,24 +7354,26 @@ async function cmdRedMinGrindGaSearch() {
 
   console.log(JSON.stringify({
     schemaVersion: 2,
-    purpose: 'Red-only minimum-grind search using battle-guided genetic/local mutation search. All six members share one level; route progression and all other bosses are ignored.',
+    purpose: targetBossLabel + '-only minimum-grind search using battle-guided genetic/local mutation search. All six members share one level; route progression and all other bosses are ignored.',
     method: {
       name: 'battle-guided genetic search',
-      referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real Red battle outcomes rather than story-wide greedy EXP allocation',
-      fitnessOrder: ['winRate', 'average Red fainted', 'max Red fainted', 'fewer player faints', 'lower total grind EXP'],
+      referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real target-boss battle outcomes rather than story-wide greedy EXP allocation',
+      fitnessOrder: ['winRate', 'average target fainted', 'max target fainted', 'fewer player faints', 'lower total grind EXP'],
     },
     version,
     starter: starterName,
-    targetBoss: 'Red',
+    targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     targetBossAceLevel: Number(red.aceLevel || 0),
     assumptions: {
       legendaryAndMythical: 'excluded',
-      captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by Red',
+      captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by the target boss stage',
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six members exactly equal level',
-      tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
-      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
-      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and Red-specific moveset optimization versus source-guided Red AI',
+      tmPolicy: 'all target-boss-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this target-boss-only EXP objective',
+      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and target-boss-specific moveset optimization versus source-guided trainer AI',
     },
     search: {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
@@ -7125,6 +7425,10 @@ async function cmdRedMinGrindGaSearch() {
 
 async function cmdRedMinGrindLocalSwapSearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '62')))));
   const teamNames = String(
@@ -7135,17 +7439,23 @@ async function cmdRedMinGrindLocalSwapSearch() {
   const finalistCap = Math.max(4, Math.floor(Number(arg('finalist-cap', '20'))));
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '100'))));
   const targetWinRate = Math.max(0.05, Math.min(1, Number(arg('target-win-rate', '0.5'))));
+  const moveShortlistCap = Math.max(8, Math.min(20, Math.floor(Number(arg('move-shortlist-cap', '12')))));
+  const movesetFinalists = Math.max(4, Math.min(32, Math.floor(Number(arg('moveset-finalists', '8')))));
+  const buildSearch = { shortlistCap: moveShortlistCap, movesetFinalists };
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
   }
   if (teamNames.length !== 6) {
-    throw new Error('red-min-grind-local-swap-search requires exactly six anchor species');
+    throw new Error('boss-min-grind-local-swap-search requires exactly six anchor species');
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7153,7 +7463,8 @@ async function cmdRedMinGrindLocalSwapSearch() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7238,6 +7549,7 @@ async function cmdRedMinGrindLocalSwapSearch() {
         moveAccess,
         screenRuns,
         1550001,
+        buildSearch,
       ),
     });
   }
@@ -7280,6 +7592,7 @@ async function cmdRedMinGrindLocalSwapSearch() {
       moveAccess,
       finalRuns,
       1660001,
+      buildSearch,
     ));
   }
   finalResults.sort((a, b) =>
@@ -7296,9 +7609,12 @@ async function cmdRedMinGrindLocalSwapSearch() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'one-slot local neighborhood search around a proven Red team, with independent high-run validation',
+    purpose: 'one-slot local neighborhood search around a proven target-boss team, with deeper build search and independent high-run validation',
     version,
     starter: starterName,
+    targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     commonLevel,
     anchorTeam: orderedAnchor.map(row => row.species),
     search: {
@@ -7309,6 +7625,8 @@ async function cmdRedMinGrindLocalSwapSearch() {
       finalistCap,
       finalRuns,
       targetWinRate,
+      moveShortlistCap,
+      movesetFinalists,
     },
     anchorScreen: screenResults.find(
       row => row.evaluation.key === redTeamKey(anchorState.members, commonLevel)
@@ -7420,17 +7738,27 @@ async function cmdRedBattleModelSanity() {
 
 async function cmdRedMinGrindValidate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const targetBossLabel = String(arg('target-boss', 'Red'));
+  const targetTrainerKey = String(arg('target-trainer-key', '')).trim();
+  const targetStageRaw = arg('target-stage', '');
+  const targetStage = targetStageRaw === '' ? null : Number(targetStageRaw);
   const starterName = String(arg('starter', 'Cyndaquil'));
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '100')))));
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  const moveShortlistCap = Math.max(8, Math.min(20, Math.floor(Number(arg('move-shortlist-cap', '12')))));
+  const movesetFinalists = Math.max(4, Math.min(32, Math.floor(Number(arg('moveset-finalists', '8')))));
+  const buildSearch = { shortlistCap: moveShortlistCap, movesetFinalists };
   if (teamNames.length !== 6) {
     throw new Error('red-min-grind-validate requires exactly six target species via --team=A,B,C,D,E,F');
   }
 
   const story = await loadStory();
-  const red = story.bosses.find(boss => boss.label === 'Red');
-  if (!red) throw new Error('Red boss definition not found');
+  const red = resolveExperimentBoss(story, {
+    label: targetBossLabel,
+    trainerKey: targetTrainerKey,
+    stage: targetStage,
+  });
   const access = await readJson('config/story-access.canonical.json');
   const [redPool, moveAccess] = await Promise.all([
     buildRedOnlyCandidateForms({
@@ -7438,7 +7766,8 @@ async function cmdRedMinGrindValidate() {
       bosses: story.bosses,
       access,
       version,
-      targetBossLabel: 'Red',
+      targetBossLabel,
+      targetStage: red.stage,
       excludeLegendary: true,
     }),
     loadMoveAccess('all', 'unbounded'),
@@ -7485,15 +7814,20 @@ async function cmdRedMinGrindValidate() {
     moveAccess,
     runs,
     1234001,
+    buildSearch,
   );
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'high-run validation of an explicit Red-only equal-level team with capture-level-aware EXP cost',
+    purpose: 'high-run validation of an explicit target-boss-only equal-level team with capture-level-aware EXP cost',
     version,
     starter: starterName,
+    targetBoss: targetBossLabel,
+    targetTrainerKey: red.key,
+    targetBossStage: Number(red.stage),
     commonLevel,
     runs,
+    buildSearch,
     evaluation,
   }, null, 2));
 }
@@ -7563,8 +7897,11 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'red-min-grind-search': cmdRedMinGrindSearch,
   'red-min-grind-ga-search': cmdRedMinGrindGaSearch,
+  'boss-min-grind-ga-search': cmdRedMinGrindGaSearch,
   'red-min-grind-validate': cmdRedMinGrindValidate,
+  'boss-min-grind-validate': cmdRedMinGrindValidate,
   'red-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
+  'boss-min-grind-local-swap-search': cmdRedMinGrindLocalSwapSearch,
   'red-battle-model-sanity': cmdRedBattleModelSanity,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
@@ -7577,7 +7914,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-min-grind-local-swap-search, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-min-grind-local-swap-search, boss-min-grind-local-swap-search, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
