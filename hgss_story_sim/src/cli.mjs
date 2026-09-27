@@ -4025,7 +4025,7 @@ function weakestElectiveMember(team, starter, evaluation, explicitSpecies = '') 
       )
     : null;
   if (explicitSpecies && !explicit) {
-    throw new Error(\`Replacement target not found or is mandatory starter: \${explicitSpecies}\`);
+    throw new Error(`Replacement target not found or is mandatory starter: ${explicitSpecies}`);
   }
 
   const ranked = team
@@ -4188,7 +4188,7 @@ async function cmdCounterfactualSpecialistProbe() {
   const story = await loadStory();
   const targetBosses = targetBossNames.map(name => {
     const boss = story.bosses.find(item => item.label === name);
-    if (!boss) throw new Error(\`Unknown target boss: \${name}\`);
+    if (!boss) throw new Error(`Unknown target boss: ${name}`);
     return boss;
   });
   const [pool, moveAccess, expContext] = await Promise.all([
