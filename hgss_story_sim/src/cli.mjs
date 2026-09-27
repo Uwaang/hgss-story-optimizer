@@ -3112,6 +3112,8 @@ async function cmdSwitchSmoke() {
     );
   }
 
+  // Arena Trap prevents the weak lead from voluntarily escaping, so this
+  // isolates the post-KO forced-switch policy.
   const forcedSwitchTeam = [
     {
       species: 'Magikarp',
@@ -3128,25 +3130,36 @@ async function cmdSwitchSmoke() {
       moves: ['Tackle', 'Rock Throw'],
     },
     {
-      species: 'Mareep',
+      species: 'Chikorita',
       level: 20,
-      ability: 'Static',
+      ability: 'Overgrow',
       nature: 'Serious',
-      moves: ['ThunderShock', 'Tackle'],
+      moves: ['Razor Leaf', 'Tackle'],
+    },
+  ];
+  const forcedSwitchEnemy = [
+    {
+      species: 'Dugtrio',
+      level: 20,
+      ability: 'Arena Trap',
+      nature: 'Serious',
+      moves: ['Magnitude', 'Scratch'],
     },
   ];
   const forcedSmartResult = await runBattle(
     forcedSwitchTeam,
-    enemyTeam,
+    forcedSwitchEnemy,
     7332,
     { p1AiMode: 'smart', p1SmartLead: false },
   );
   if (Number(forcedSmartResult.p1ForcedSwitches || 0) < 1) {
-    throw new Error('Expected at least one smart forced switch after the weak lead faints');
-  }
-  if (Number(forcedSmartResult.p1Usage?.Mareep?.appearances || 0) < 1) {
     throw new Error(
-      `Expected smart forced switch to find Mareep into Totodile: ${JSON.stringify(forcedSmartResult.p1Usage)}`
+      `Expected at least one smart forced switch after the trapped weak lead faints: ${JSON.stringify(forcedSmartResult)}`
+    );
+  }
+  if (Number(forcedSmartResult.p1Usage?.Chikorita?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected smart forced switch to prefer Chikorita into Dugtrio: ${JSON.stringify(forcedSmartResult.p1Usage)}`
     );
   }
 
