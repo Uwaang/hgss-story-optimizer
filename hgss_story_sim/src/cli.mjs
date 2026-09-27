@@ -5856,7 +5856,7 @@ function redBeamTeams(starterRows, candidateRows, level, beamWidth = 120) {
 }
 
 function redSearchCandidatePool(levelRows, starterFamily, candidateCap = 42) {
-  const nonStarter = levelRows.filter(row => row.familyId !== starterFamily);
+  const nonStarter = levelRows.filter(row => row.familyId !== starterFamily && row.form?.exclusiveGroup !== 'starter');
   const selected = new Map();
   function add(rows) {
     for (const row of rows) selected.set(row.familyId + '/' + row.species, row);
