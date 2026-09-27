@@ -346,30 +346,6 @@ jobs:
           if-no-files-found: error
 
 
-  magikarp_slot_refinement_pilot:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: hgss_story_sim
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install dependencies
-        run: npm install
-      - name: Replace only Magikarp in the HG Cyndaquil baseline
-        run: |
-          mkdir -p results
-          node src/cli.mjs meaningful-six --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --replace=Magikarp --runs=1 --final-runs=10 --candidate-cap=24 --shortlist-cap=12 --finalist-cap=4 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/magikarp-slot-refinement-hg-cyndaquil.json
-      - name: Upload Magikarp-slot refinement
-        uses: actions/upload-artifact@v4
-        with:
-          name: hgss-magikarp-slot-refinement-hg-cyndaquil
-          path: hgss_story_sim/results/magikarp-slot-refinement-hg-cyndaquil.json
-          if-no-files-found: error
-
   meaningful_six_refinement_pilot:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'meaningful-six-refinement'
     runs-on: ubuntu-latest
