@@ -199,6 +199,10 @@ jobs:
             --target-boss="Lance Rematch" \
             --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
             --target-stage=20 \
+            --build-boss="Lance Rematch" \
+            --build-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --build-stage=21 \
+            --availability-boss=Red \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
             --level-min=40 \
@@ -373,6 +377,70 @@ jobs:
         with:
           name: hgss-lance2-local-lower-boundary-hg-cyndaquil
           path: hgss_story_sim/results/lance2-local-*.json
+          if-no-files-found: error
+
+
+  red57_vs_lance_crosscheck:
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/red57-vs-lance'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node22-${{ hashFiles('hgss_story_sim/package.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node22-
+      - name: Cache pinned pret source data
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/source
+          key: pret-source-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/config/story-bosses.json') }}
+          restore-keys: |
+            pret-source-v1-${{ runner.os }}-
+      - name: Install dependencies
+        run: npm install --prefer-offline --no-audit --no-fund
+      - name: Red party composition retuned for Lance at Lv57
+        run: |
+          mkdir -p results
+          node src/cli.mjs boss-min-grind-validate \
+            --target-boss="Lance Rematch" \
+            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --target-stage=20 \
+            --build-boss="Lance Rematch" \
+            --build-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --build-stage=21 \
+            --availability-boss=Red \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Ampharos,Rhyperior \
+            --level=57 \
+            --runs=500 \
+            --move-shortlist-cap=16 \
+            --moveset-finalists=20 \
+            > results/red57-party-vs-lance-retuned500.json
+      - name: Exact Red-oriented build cross-tested against Lance at Lv57
+        run: |
+          node src/cli.mjs red57-exact-vs-lance \
+            --runs=1000 \
+            > results/red57-party-vs-lance-redbuild1000.json
+      - name: Exact previously reported Red Lv57 build vs Lance
+        run: |
+          node src/cli.mjs red57-exact-vs-lance \
+            --runs=500 \
+            > results/red57-party-vs-lance-exact500.json
+      - name: Upload cross-check results
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red57-vs-lance-crosscheck
+          path: hgss_story_sim/results/red57-party-vs-lance-*.json
           if-no-files-found: error
 
   red_model_sanity:
@@ -1048,6 +1116,7 @@ jobs:
           if-no-files-found: error
 
   smoke:
+    if: github.event_name != 'pull_request' || github.head_ref != 'experiment/red57-vs-lance'
     runs-on: ubuntu-latest
     defaults:
       run:
