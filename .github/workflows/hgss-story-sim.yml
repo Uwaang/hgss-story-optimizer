@@ -457,6 +457,30 @@ jobs:
             hgss_story_sim/results/probe-usage-${{ matrix.label }}.json
           if-no-files-found: error
 
+  abra_slot_refinement_pilot:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Refine only Abra slot at 20 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs meaningful-six --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --replace=Abra --runs=1 --final-runs=20 --candidate-cap=24 --shortlist-cap=12 --finalist-cap=6 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/abra-slot-refinement-hg-cyndaquil.json
+      - name: Upload Abra-slot refinement
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-abra-slot-refinement-hg-cyndaquil
+          path: hgss_story_sim/results/abra-slot-refinement-hg-cyndaquil.json
+          if-no-files-found: error
+
   member_usage_matrix:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-usage'
     runs-on: ubuntu-latest
