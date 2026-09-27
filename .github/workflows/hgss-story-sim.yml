@@ -428,20 +428,9 @@ jobs:
             > results/red57-party-vs-lance-retuned500.json
       - name: Exact Red-oriented build cross-tested against Lance at Lv57
         run: |
-          node src/cli.mjs boss-min-grind-validate \
-            --target-boss="Lance Rematch" \
-            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
-            --target-stage=20 \
-            --build-boss=Red \
-            --availability-boss=Red \
-            --version=HEARTGOLD \
-            --starter=Cyndaquil \
-            --team=Typhlosion,Quagsire,Tyranitar,Magneton,Ampharos,Rhyperior \
-            --level=57 \
-            --runs=500 \
-            --move-shortlist-cap=16 \
-            --moveset-finalists=20 \
-            > results/red57-party-vs-lance-redbuild500.json
+          node src/cli.mjs red57-exact-vs-lance \
+            --runs=1000 \
+            > results/red57-party-vs-lance-redbuild1000.json
       - name: Exact previously reported Red Lv57 build vs Lance
         run: |
           node src/cli.mjs red57-exact-vs-lance \
