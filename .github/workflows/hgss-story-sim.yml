@@ -41,7 +41,7 @@ on:
 
 jobs:
   boss_local_oracle_matrix_6:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'boss-local-oracle-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'boss-local-oracle-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
