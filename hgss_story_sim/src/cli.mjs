@@ -5985,7 +5985,7 @@ function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel,
   for (const row of byExp.slice(0, Math.max(4, Math.ceil(cap * 0.2)))) add(row);
 
   const hardBosses = bosses.filter(boss =>
-    ['Clair', 'Lance', 'Misty', 'Blue', 'Red'].includes(String(boss.label))
+    ['Clair', 'Lance', 'Misty', 'Blue', 'Lance 2', 'Red'].includes(String(boss.label))
   );
   for (const boss of hardBosses) {
     const specialists = [...rows]
