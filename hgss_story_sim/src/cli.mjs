@@ -335,15 +335,6 @@ function resolveExperimentBoss(story, {
 
 async function loadCanonicalPool(version, story = null) {
   const context = story || await loadStory();
-  const availabilityBoss = (
-    availabilityBossLabel === buildBossLabel &&
-    !availabilityTrainerKey &&
-    availabilityStage === null
-  ) ? buildBoss : resolveExperimentBoss(story, {
-    label: availabilityBossLabel,
-    trainerKey: availabilityTrainerKey,
-    stage: availabilityStage,
-  });
   const access = await readJson('config/story-access.canonical.json');
   return buildCanonicalCandidatePool({
     commit: context.config.sourceCommit,
