@@ -1692,6 +1692,8 @@ async function cmdSearch() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const objective = normalizeSearchObjective(arg('objective', 'mean'));
+  const memberContributionRerank = arg('member-contribution-rerank', 'false') === 'true';
+  const contributionRuns = Number(arg('contribution-runs', String(finalRuns)));
   const story = await loadStory();
 
   let candidates;
@@ -1731,6 +1733,8 @@ async function cmdSearch() {
       expContext,
       grindPolicy,
       objective,
+      memberContributionRerank,
+      contributionRuns,
     });
     console.log(JSON.stringify({
       pool: poolPath,
@@ -1987,6 +1991,8 @@ async function cmdOptimize() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const objective = normalizeSearchObjective(arg('objective', 'mean'));
+  const memberContributionRerank = arg('member-contribution-rerank', 'false') === 'true';
+  const contributionRuns = Number(arg('contribution-runs', String(finalRuns)));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -2009,6 +2015,8 @@ async function cmdOptimize() {
     beamWidth,
     candidateCap,
     teamSize,
+    memberContributionRerank,
+    contributionRunsPerBoss: memberContributionRerank ? contributionRuns : null,
     versions: {},
   };
 
@@ -2057,11 +2065,16 @@ async function cmdOptimize() {
         expContext,
         grindPolicy,
         objective,
+        memberContributionRerank,
+        contributionRuns,
       });
       output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
         screenedCandidates: result.screenedCandidates,
         evaluatedTeams: result.evaluatedTeams,
+        baselineTop: result.baselineTop,
+        memberContributionRerank: result.memberContributionRerank,
+        contributionRunsPerBoss: result.contributionRunsPerBoss,
         paretoFront: result.paretoFront,
         top: result.top,
       };
