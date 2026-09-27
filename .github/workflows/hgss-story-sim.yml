@@ -350,7 +350,7 @@ jobs:
 
 
   abra_activation_soft_sweep:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'activation-soft-sweep'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
