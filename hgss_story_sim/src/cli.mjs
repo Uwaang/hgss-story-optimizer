@@ -6155,17 +6155,106 @@ function equalLevelCandidateProxy(candidate, bosses, commonLevel) {
   };
 }
 
-function equalLevelTeamProxy(team, bosses, commonLevel) {
-  const bossScores = bosses.map(boss => {
-    const values = team
-      .filter(candidate => Number(candidate.availableFrom || 0) <= Number(boss.stage || 0))
+const equalLevelFoeUtilityCache = new Map();
+
+function equalLevelCandidateFoeUtility(candidate, boss, foe, foeIndex, commonLevel) {
+  if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) return 0;
+  const bossKey = String(boss.key || boss.label || boss.stage || 'boss');
+  const foeKey = [
+    String(foe?.species || foeIndex),
+    Number(foe?.level || boss.aceLevel || commonLevel),
+  ].join('@');
+  const key = [
+    candidateIdentity(candidate),
+    bossKey,
+    foeKey,
+    Number(commonLevel),
+  ].join('|');
+  if (equalLevelFoeUtilityCache.has(key)) return equalLevelFoeUtilityCache.get(key);
+
+  const singleFoeBoss = {
+    ...boss,
+    aceLevel: Number(foe?.level || boss.aceLevel || commonLevel),
+    trainer: {
+      ...(boss.trainer || {}),
+      party: [foe],
+    },
+  };
+  const value = Math.log1p(Math.max(
+    0,
+    Number(candidateBossUtility(candidate, singleFoeBoss, commonLevel) || 0),
+  ));
+  equalLevelFoeUtilityCache.set(key, value);
+  return value;
+}
+
+function equalLevelBossTeamCoverage(team, boss, commonLevel) {
+  const available = (team || []).filter(candidate =>
+    Number(candidate.availableFrom || 0) <= Number(boss.stage || 0)
+  );
+  const foes = boss?.trainer?.party || [];
+  if (!available.length) {
+    return {
+      score: 0,
+      mean: 0,
+      bottom: 0,
+      foeScores: [],
+    };
+  }
+  if (!foes.length) {
+    const values = available
       .map(candidate => Math.log1p(Math.max(
         0,
         Number(candidateBossUtility(candidate, boss, commonLevel) || 0),
       )))
       .sort((a, b) => b - a);
-    return Number(values[0] || 0) + 0.35 * Number(values[1] || 0);
+    const score = Number(values[0] || 0) +
+      0.30 * Number(values[1] || 0) +
+      0.10 * Number(values[2] || 0);
+    return {
+      score,
+      mean: score,
+      bottom: score,
+      foeScores: [score],
+    };
+  }
+
+  const foeScores = foes.map((foe, foeIndex) => {
+    const values = available
+      .map(candidate => equalLevelCandidateFoeUtility(
+        candidate,
+        boss,
+        foe,
+        foeIndex,
+        commonLevel,
+      ))
+      .sort((a, b) => b - a);
+    // Primary counter matters most, but second/third answers reward roster
+    // depth and make complementary 5-6 member teams visible to the beam.
+    return Number(values[0] || 0) +
+      0.30 * Number(values[1] || 0) +
+      0.10 * Number(values[2] || 0);
   });
+  const mean = foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length;
+  const ordered = [...foeScores].sort((a, b) => a - b);
+  const bottomCount = Math.min(2, ordered.length);
+  const bottom = ordered.slice(0, bottomCount)
+    .reduce((sum, value) => sum + value, 0) / Math.max(1, bottomCount);
+
+  // Reward broad coverage, not one extreme counter. The lower-tail term makes
+  // a team improve when a fifth/sixth member patches a specific opposing mon.
+  return {
+    score: 0.72 * mean + 0.28 * bottom,
+    mean,
+    bottom,
+    foeScores,
+  };
+}
+
+function equalLevelTeamProxy(team, bosses, commonLevel) {
+  const bossScores = bosses.map(boss =>
+    equalLevelBossTeamCoverage(team, boss, commonLevel).score
+  );
   const ordered = [...bossScores].sort((a, b) => a - b);
   const bottom = ordered.slice(0, Math.min(5, ordered.length));
   const mean = bossScores.length
@@ -6177,7 +6266,8 @@ function equalLevelTeamProxy(team, bosses, commonLevel) {
   return {
     mean,
     bottom5,
-    composite: 0.65 * mean + 0.35 * bottom5,
+    composite: 0.62 * mean + 0.38 * bottom5,
+    model: 'foe-coverage-v2',
   };
 }
 
@@ -6187,14 +6277,7 @@ function equalLevelHardBosses(bosses) {
 }
 
 function equalLevelBossTeamProxy(team, boss, commonLevel) {
-  const values = team
-    .filter(candidate => Number(candidate.availableFrom || 0) <= Number(boss.stage || 0))
-    .map(candidate => Math.log1p(Math.max(
-      0,
-      Number(candidateBossUtility(candidate, boss, commonLevel) || 0),
-    )))
-    .sort((a, b) => b - a);
-  return Number(values[0] || 0) + 0.35 * Number(values[1] || 0);
+  return equalLevelBossTeamCoverage(team, boss, commonLevel).score;
 }
 
 function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel, cap) {
@@ -6289,7 +6372,10 @@ function selectEqualLevelProxyBeam(states, width, hardBosses = [], commonLevel =
     selected.set(key(state), state);
   };
 
-  // Keep at least one strong partial/full team for each major hard wall.
+  // Preserve multiple hard-wall complete/near-complete teams. At size 5-6,
+  // complementary roster structure matters much more than a single ace.
+  const teamSize = Number(states[0]?.team?.length || 0);
+  const hardBossQuota = teamSize >= 5 ? 3 : 2;
   for (const boss of hardBosses || []) {
     const ranked = [...states].sort((a, b) =>
       equalLevelBossTeamProxy(b.team, boss, commonLevel) -
@@ -6298,8 +6384,7 @@ function selectEqualLevelProxyBeam(states, width, hardBosses = [], commonLevel =
       a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
       key(a).localeCompare(key(b))
     );
-    add(ranked[0]);
-    add(ranked[1]);
+    for (const state of ranked.slice(0, hardBossQuota)) add(state);
   }
 
   const byComposite = [...states].sort((a, b) =>
@@ -6660,6 +6745,13 @@ async function cmdEqualLevelStorySearch() {
         grindExp: row.grindExp,
       })),
       specialistCandidates: screening.specialists,
+      teamProxyModel: {
+        version: 'foe-coverage-v2',
+        perFoeMemberWeights: [1, 0.30, 0.10],
+        bossScore: '0.72 * mean foe coverage + 0.28 * bottom-2 foe coverage',
+        routeScore: '0.62 * mean boss score + 0.38 * bottom-5 boss score',
+        hardBossBeamQuota: '2 states before size5; 3 states at size5-6',
+      },
       beamWidth,
       proxyFinalists,
       screenRuns,
