@@ -6208,6 +6208,42 @@ function redGaCrossoverState(parentA, parentB, candidateRows, commonLevel, rng) 
     : (parentA || parentB);
 }
 
+function redProjectStateToLevel(sourceState, starterRows, candidateRows, commonLevel) {
+  if (!sourceState?.members?.length) return null;
+  const available = [...starterRows, ...candidateRows];
+  const members = [];
+  const usedFamilies = new Set();
+
+  for (const source of sourceState.members) {
+    const exact = available
+      .filter(row =>
+        row.familyId === source.familyId &&
+        row.species === source.species &&
+        !usedFamilies.has(row.familyId)
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )[0];
+    const familyFallback = available
+      .filter(row =>
+        row.familyId === source.familyId &&
+        !usedFamilies.has(row.familyId)
+      )
+      .sort((a, b) =>
+        Number(b.proxyUtility) - Number(a.proxyUtility) ||
+        Number(a.grindExp) - Number(b.grindExp)
+      )[0];
+    const chosen = exact || familyFallback;
+    if (!chosen) return null;
+    members.push(chosen);
+    usedFamilies.add(chosen.familyId);
+  }
+
+  if (members.length !== 6) return null;
+  return redStateFromMembers(members, commonLevel);
+}
+
 function redGaMutateState(parent, candidateRows, commonLevel, rng) {
   const members = [...parent.members];
   if (members.length !== 6) return parent;
@@ -6597,6 +6633,10 @@ async function cmdRedMinGrindGaSearch() {
   const refineGenerations = Math.max(generations, Math.floor(Number(arg('refine-generations', '6'))));
   const refineRuns = Math.max(searchRuns, Math.floor(Number(arg('refine-runs', '2'))));
   const refineLevelCap = Math.max(1, Math.floor(Number(arg('refine-level-cap', '5'))));
+  const crossLevelPopulation = Math.max(8, Math.floor(Number(arg('cross-level-population', '18'))));
+  const crossLevelGenerations = Math.max(1, Math.floor(Number(arg('cross-level-generations', '3'))));
+  const crossLevelRuns = Math.max(1, Math.floor(Number(arg('cross-level-runs', '1'))));
+  const crossLevelSeedCap = Math.max(1, Math.floor(Number(arg('cross-level-seed-cap', '4'))));
 
   if (!['Chikorita', 'Cyndaquil', 'Totodile'].includes(starterName)) {
     throw new Error('starter must be Chikorita, Cyndaquil, or Totodile');
@@ -6755,6 +6795,70 @@ async function cmdRedMinGrindGaSearch() {
       )
       .slice(0, refineLevelCap);
   }
+  const crossLevelRefinedLevels = [];
+  if (narrowLevelWindow) {
+    // Carry good team structures downward through the focused level window.
+    // Independent per-level GA runs can easily miss a strong Lv65 composition
+    // at Lv64 simply because mutation never reconstructs it. Re-materializing
+    // the same families at the lower common level gives the optimizer a smooth
+    // continuation path toward the minimum feasible level.
+    let carryStates = [];
+    const descendingLevels = [...levelResults.keys()].sort((a, b) => b - a);
+    for (const commonLevel of descendingLevels) {
+      const prior = levelResults.get(commonLevel);
+      const input = levelInput(commonLevel);
+      if (!prior?.best?.evaluation || !input.starterRows.length || input.candidates.length < 5) continue;
+
+      const projected = carryStates
+        .map(state => redProjectStateToLevel(
+          state,
+          input.starterRows,
+          input.candidates,
+          commonLevel,
+        ))
+        .filter(Boolean);
+      const ownSeeds = (prior.top || []).map(row => row.state).filter(Boolean);
+      const seedMap = new Map();
+      for (const state of [...projected, ...ownSeeds]) {
+        seedMap.set(redTeamKey(state.members, commonLevel), state);
+      }
+      const seedStates = [...seedMap.values()].slice(0, Math.max(crossLevelSeedCap, 2));
+
+      const descended = await redGaSearchLevel({
+        starterRows: input.starterRows,
+        candidateRows: input.candidates,
+        commonLevel,
+        red,
+        enemyTeam,
+        moveAccess,
+        populationSize: crossLevelPopulation,
+        generations: crossLevelGenerations,
+        searchRuns: crossLevelRuns,
+        seed: 9100 + commonLevel * 37 + starterName.length * 149,
+        seedStates,
+      });
+
+      const combinedTop = [
+        ...(prior.top || []),
+        ...(descended.top || []),
+      ].sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation));
+      levelResults.set(commonLevel, {
+        ...prior,
+        crossLevelRefined: true,
+        evaluatedTeamCount:
+          Number(prior.evaluatedTeamCount || 0) +
+          Number(descended.evaluatedTeamCount || 0),
+        best: combinedTop[0] || descended.best || prior.best,
+        top: combinedTop.slice(0, 10),
+      });
+      crossLevelRefinedLevels.push(commonLevel);
+      carryStates = combinedTop
+        .map(row => row.state)
+        .filter(Boolean)
+        .slice(0, crossLevelSeedCap);
+    }
+  }
+
   const refinedLevels = [];
 
   for (const prior of promisingLevels) {
