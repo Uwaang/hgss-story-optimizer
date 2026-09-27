@@ -6710,7 +6710,26 @@ async function cmdRedMinGrindGaSearch() {
     .sort((a, b) => Number(a.commonLevel) - Number(b.commonLevel));
 
   let promisingLevels = [];
-  if (positiveLevelRows.length) {
+  const narrowLevelWindow = levelMax - levelMin <= 12;
+  if (narrowLevelWindow) {
+    // For a deliberately focused search (for example Lv57-65), spread the
+    // expensive refinement budget across the whole interval. A single lucky
+    // low-level win should not prevent Lv63-65 from being searched deeply.
+    const source = [...levelResults.values()]
+      .filter(row => row?.best?.evaluation)
+      .sort((a, b) => Number(a.commonLevel) - Number(b.commonLevel));
+    if (source.length <= refineLevelCap) {
+      promisingLevels = source;
+    } else {
+      const chosen = new Map();
+      for (let i = 0; i < refineLevelCap; i += 1) {
+        const index = Math.round(i * (source.length - 1) / Math.max(1, refineLevelCap - 1));
+        const row = source[index];
+        if (row) chosen.set(Number(row.commonLevel), row);
+      }
+      promisingLevels = [...chosen.values()];
+    }
+  } else if (positiveLevelRows.length) {
     const firstPositiveLevel = Number(positiveLevelRows[0].commonLevel);
     const lowWindow = positiveLevelRows.filter(
       row => Number(row.commonLevel) <= firstPositiveLevel + levelStep * 2
@@ -6783,6 +6802,15 @@ async function cmdRedMinGrindGaSearch() {
     finalistMap.set(row.evaluation.key, row);
   }
 
+  if (narrowLevelWindow) {
+    for (const level of [...levelResults.keys()].sort((a, b) => a - b)) {
+      const row = [...searchCandidates]
+        .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+        .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[0];
+      addFinalist(row);
+    }
+  }
+
   // First guarantee at least one validation candidate from the earliest levels
   // where the short search has ever beaten Red. This is essential because the
   // objective is minimum EXP, not maximum raw win rate at high level.
@@ -6805,14 +6833,19 @@ async function cmdRedMinGrindGaSearch() {
     addFinalist(row);
   }
 
-  // Reserve extra slots for the adaptively refined low-level states.
+  // Reserve extra slots for adaptively refined states. Give every refined
+  // level one slot before taking second-best candidates.
   for (const level of refinedLevels) {
-    for (const row of [...searchCandidates]
+    const row = [...searchCandidates]
       .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
-      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))
-      .slice(0, 2)) {
-      addFinalist(row);
-    }
+      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[0];
+    addFinalist(row);
+  }
+  for (const level of refinedLevels) {
+    const row = [...searchCandidates]
+      .filter(candidate => Number(candidate.evaluation.commonLevel) === Number(level))
+      .sort((a, b) => redSearchEvaluationCompare(a.evaluation, b.evaluation))[1];
+    addFinalist(row);
   }
 
   // Cheapest observed winners are next, then strongest/deepest candidates.
