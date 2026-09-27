@@ -6181,6 +6181,22 @@ function equalLevelTeamProxy(team, bosses, commonLevel) {
   };
 }
 
+function equalLevelHardBosses(bosses) {
+  const labels = new Set(['Clair', 'Lance', 'Misty', 'Blue', 'Lance 2', 'Red']);
+  return (bosses || []).filter(boss => labels.has(String(boss.label)));
+}
+
+function equalLevelBossTeamProxy(team, boss, commonLevel) {
+  const values = team
+    .filter(candidate => Number(candidate.availableFrom || 0) <= Number(boss.stage || 0))
+    .map(candidate => Math.log1p(Math.max(
+      0,
+      Number(candidateBossUtility(candidate, boss, commonLevel) || 0),
+    )))
+    .sort((a, b) => b - a);
+  return Number(values[0] || 0) + 0.35 * Number(values[1] || 0);
+}
+
 function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel, cap) {
   const starterKey = candidateIdentity(starter);
   const rows = candidates
@@ -6204,6 +6220,32 @@ function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel,
 
   add(rows.find(row => candidateIdentity(row.candidate) === starterKey));
 
+  // Reserve candidate capacity for actual hard-wall specialists before generic
+  // mean-utility/cheap-EXP candidates consume the pool. Add them round-robin
+  // so no early-listed boss monopolizes the cap.
+  const hardBosses = equalLevelHardBosses(bosses);
+  const specialistsByBoss = new Map();
+  for (const boss of hardBosses) {
+    specialistsByBoss.set(
+      String(boss.label),
+      [...rows]
+        .filter(row => Number(row.candidate.availableFrom || 0) <= Number(boss.stage || 0))
+        .sort((a, b) =>
+          Number(candidateBossUtility(b.candidate, boss, commonLevel) || 0) -
+            Number(candidateBossUtility(a.candidate, boss, commonLevel) || 0) ||
+          a.grindExp - b.grindExp ||
+          a.candidate.species.localeCompare(b.candidate.species)
+        )
+    );
+  }
+  const specialistDepth = 4;
+  for (let rank = 0; rank < specialistDepth && selected.size < cap; rank += 1) {
+    for (const boss of hardBosses) {
+      add(specialistsByBoss.get(String(boss.label))?.[rank]);
+      if (selected.size >= cap) break;
+    }
+  }
+
   const byUtility = [...rows].sort((a, b) =>
     b.proxy.mean - a.proxy.mean ||
     b.proxy.max - a.proxy.max ||
@@ -6219,28 +6261,26 @@ function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel,
     a.candidate.species.localeCompare(b.candidate.species)
   );
   for (const row of byExp.slice(0, Math.max(4, Math.ceil(cap * 0.2)))) add(row);
-
-  const hardBosses = bosses.filter(boss =>
-    ['Clair', 'Lance', 'Misty', 'Blue', 'Lance 2', 'Red'].includes(String(boss.label))
-  );
-  for (const boss of hardBosses) {
-    const specialists = [...rows]
-      .filter(row => Number(row.candidate.availableFrom || 0) <= Number(boss.stage || 0))
-      .sort((a, b) =>
-        Number(candidateBossUtility(b.candidate, boss, commonLevel) || 0) -
-          Number(candidateBossUtility(a.candidate, boss, commonLevel) || 0) ||
-        a.grindExp - b.grindExp ||
-        a.candidate.species.localeCompare(b.candidate.species)
-      );
-    add(specialists[0]);
-    add(specialists[1]);
-  }
-
   for (const row of byUtility) add(row);
-  return [...selected.values()];
+
+  return {
+    rows: [...selected.values()],
+    specialists: Object.fromEntries(
+      hardBosses.map(boss => [
+        String(boss.label),
+        (specialistsByBoss.get(String(boss.label)) || []).slice(0, specialistDepth).map(row => ({
+          species: row.candidate.species,
+          familyId: candidateIdentity(row.candidate),
+          utility: Number(candidateBossUtility(row.candidate, boss, commonLevel) || 0),
+          grindExp: row.grindExp,
+          selected: selected.has(candidateIdentity(row.candidate)),
+        })),
+      ])
+    ),
+  };
 }
 
-function selectEqualLevelProxyBeam(states, width) {
+function selectEqualLevelProxyBeam(states, width, hardBosses = [], commonLevel = 50) {
   if (states.length <= width) return states;
   const selected = new Map();
   const key = state => state.team.map(candidateIdentity).sort().join('|');
@@ -6248,6 +6288,19 @@ function selectEqualLevelProxyBeam(states, width) {
     if (!state || selected.size >= width) return;
     selected.set(key(state), state);
   };
+
+  // Keep at least one strong partial/full team for each major hard wall.
+  for (const boss of hardBosses || []) {
+    const ranked = [...states].sort((a, b) =>
+      equalLevelBossTeamProxy(b.team, boss, commonLevel) -
+        equalLevelBossTeamProxy(a.team, boss, commonLevel) ||
+      b.proxy.composite - a.proxy.composite ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      key(a).localeCompare(key(b))
+    );
+    add(ranked[0]);
+    add(ranked[1]);
+  }
 
   const byComposite = [...states].sort((a, b) =>
     b.proxy.composite - a.proxy.composite ||
@@ -6267,9 +6320,9 @@ function selectEqualLevelProxyBeam(states, width) {
     key(a).localeCompare(key(b))
   );
 
-  for (const state of byComposite.slice(0, Math.ceil(width * 0.6))) add(state);
+  for (const state of byComposite.slice(0, Math.ceil(width * 0.55))) add(state);
   for (const state of byBottom.slice(0, Math.ceil(width * 0.25))) add(state);
-  for (const state of byExp.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.2))) add(state);
   for (const state of byComposite) add(state);
   return [...selected.values()].slice(0, width);
 }
@@ -6351,14 +6404,16 @@ async function cmdEqualLevelStorySearch() {
   ]);
   const starter = findStarterCandidate(pool.candidates, starterName);
   const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
-  const screenedRows = selectEqualLevelCandidateRows(
+  const screening = selectEqualLevelCandidateRows(
     pool.candidates,
     starter,
     routeBosses,
     commonLevel,
     candidateCap,
   );
+  const screenedRows = screening.rows;
   const screened = screenedRows.map(row => row.candidate);
+  const hardBosses = equalLevelHardBosses(routeBosses);
   const starterKey = candidateIdentity(starter);
   if (!screened.some(candidate => candidateIdentity(candidate) === starterKey)) {
     throw new Error('starter was lost during equal-level candidate screening');
@@ -6392,7 +6447,7 @@ async function cmdEqualLevelStorySearch() {
         });
       }
     }
-    beam = selectEqualLevelProxyBeam(expanded, beamWidth);
+    beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
     if (!beam.length) break;
   }
 
@@ -6462,6 +6517,7 @@ async function cmdEqualLevelStorySearch() {
         proxy: row.proxy,
         grindExp: row.grindExp,
       })),
+      specialistCandidates: screening.specialists,
       beamWidth,
       proxyFinalists,
       screenRuns,
