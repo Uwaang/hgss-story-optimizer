@@ -5851,7 +5851,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       enemyTeam,
       runs,
       7100001 + Number(commonLevel) * 100000 + Number(boss.stage) * 1000 + battleIndex,
-      { p2Trainer: boss, p1AiMode: 'smart' },
+      { p2Trainer: boss, p1AiMode: 'greedy' },
     );
     weightedWins += Number(result.wins || 0);
     weightedRuns += Number(result.runs || runs);
