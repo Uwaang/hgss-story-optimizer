@@ -6682,7 +6682,7 @@ async function cmdRedMinGrindSearch() {
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six battle members have exactly the same level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently; Red-specific movesets are optimized from the legal pool; route ownership and money are ignored',
-      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this target-boss-only EXP objective',
       battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/legal-ability/item + Red-specific moveset optimization versus source-guided Red trainer AI',
     },
     search: {
@@ -7111,7 +7111,7 @@ async function cmdRedMinGrindGaSearch() {
     method: {
       name: 'battle-guided genetic search',
       referenceIdea: 'population search / mutation inspired by the reviewed Pokemon GA references, with real target-boss battle outcomes rather than story-wide greedy EXP allocation',
-      fitnessOrder: ['winRate', 'average Red fainted', 'max Red fainted', 'fewer player faints', 'lower total grind EXP'],
+      fitnessOrder: ['winRate', 'average target fainted', 'max target fainted', 'fewer player faints', 'lower total grind EXP'],
     },
     version,
     starter: starterName,
@@ -7121,11 +7121,11 @@ async function cmdRedMinGrindGaSearch() {
     targetBossAceLevel: Number(red.aceLevel || 0),
     assumptions: {
       legendaryAndMythical: 'excluded',
-      captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by Red',
+      captureLevel: 'highest source-backed legal capture level at or below the common level, from all sources available by the target boss stage',
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six members exactly equal level',
       tmPolicy: 'all target-boss-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
-      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this target-boss-only EXP objective',
       battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, legal Gen-4 ability search, held-item search, and target-boss-specific moveset optimization versus source-guided trainer AI',
     },
     search: {
