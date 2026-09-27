@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, battleCacheStats, candidateBossUtility, candidateMovePool, candidateMoveUtility, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
@@ -5995,16 +5996,91 @@ function buildEqualLevelRouteBuildPlan(
   return plan;
 }
 
+const EQUAL_LEVEL_PREPARATION_CACHE_PATH = process.env.HGSS_PREPARATION_CACHE_PATH
+  ? path.resolve(process.cwd(), process.env.HGSS_PREPARATION_CACHE_PATH)
+  : null;
+const EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE = String(
+  process.env.HGSS_PREPARATION_CACHE_NAMESPACE || 'equal-level-preparation-v1'
+);
 const equalLevelPreparationCache = new Map();
+let equalLevelPreparationCacheLoaded = false;
+let equalLevelPreparationCacheDirty = 0;
+const equalLevelPreparationCacheCounters = {
+  hits: 0,
+  misses: 0,
+  restored: 0,
+  writes: 0,
+};
 
 function equalLevelPreparationKey(candidates, routeBosses, commonLevel, moveAccess) {
-  return JSON.stringify({
-    team: candidates.map(candidateIdentity).sort(),
-    route: routeBosses.map(boss => [String(boss.key || boss.label), Number(boss.stage)]),
+  const payload = JSON.stringify({
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    team: candidates.map(candidate => ({
+      key: candidateIdentity(candidate),
+      speciesByStage: candidate.speciesByStage || [],
+    })).sort((a, b) => a.key.localeCompare(b.key)),
+    route: routeBosses.map(boss => [
+      String(boss.key || boss.label),
+      Number(boss.stage),
+      Number(boss._routeIndex),
+    ]),
     commonLevel: Number(commonLevel),
     resourceProfile: moveAccess?.resourceProfile || null,
     spendPolicy: moveAccess?.spendPolicy || null,
   });
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+async function ensureEqualLevelPreparationCacheLoaded() {
+  if (equalLevelPreparationCacheLoaded) return;
+  equalLevelPreparationCacheLoaded = true;
+  if (!EQUAL_LEVEL_PREPARATION_CACHE_PATH) return;
+  try {
+    const parsed = JSON.parse(await fs.readFile(EQUAL_LEVEL_PREPARATION_CACHE_PATH, 'utf8'));
+    if (
+      parsed?.namespace === EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE &&
+      parsed?.entries &&
+      typeof parsed.entries === 'object'
+    ) {
+      for (const [key, value] of Object.entries(parsed.entries)) {
+        equalLevelPreparationCache.set(key, value);
+      }
+      equalLevelPreparationCacheCounters.restored = equalLevelPreparationCache.size;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[preparation-cache] restore failed:', error.message);
+    }
+  }
+}
+
+async function flushEqualLevelPreparationCache() {
+  await ensureEqualLevelPreparationCacheLoaded();
+  if (!EQUAL_LEVEL_PREPARATION_CACHE_PATH || equalLevelPreparationCacheDirty <= 0) {
+    return equalLevelPreparationCacheStats();
+  }
+  await fs.mkdir(path.dirname(EQUAL_LEVEL_PREPARATION_CACHE_PATH), { recursive: true });
+  const temp = EQUAL_LEVEL_PREPARATION_CACHE_PATH + '.tmp-' + process.pid;
+  await fs.writeFile(temp, JSON.stringify({
+    schemaVersion: 1,
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    entries: Object.fromEntries(equalLevelPreparationCache),
+  }));
+  await fs.rename(temp, EQUAL_LEVEL_PREPARATION_CACHE_PATH);
+  equalLevelPreparationCacheCounters.writes += equalLevelPreparationCacheDirty;
+  equalLevelPreparationCacheDirty = 0;
+  return equalLevelPreparationCacheStats();
+}
+
+function equalLevelPreparationCacheStats() {
+  return {
+    enabled: Boolean(EQUAL_LEVEL_PREPARATION_CACHE_PATH),
+    path: EQUAL_LEVEL_PREPARATION_CACHE_PATH,
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    entries: equalLevelPreparationCache.size,
+    ...equalLevelPreparationCacheCounters,
+    dirty: equalLevelPreparationCacheDirty,
+  };
 }
 
 async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess, options = {}) {
@@ -6031,6 +6107,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       index,
     ])
   );
+  await ensureEqualLevelPreparationCacheLoaded();
   const preparationKey = equalLevelPreparationKey(
     candidates,
     routeBosses,
@@ -6038,7 +6115,11 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     moveAccess,
   );
   let prepared = equalLevelPreparationCache.get(preparationKey);
-  if (!prepared) {
+  const preparationCacheHit = Boolean(prepared);
+  if (prepared) {
+    equalLevelPreparationCacheCounters.hits += 1;
+  } else {
+    equalLevelPreparationCacheCounters.misses += 1;
     const levels = Object.fromEntries(
       candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
     );
@@ -6073,11 +6154,9 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       purchasable,
       purchasablePlan,
       routeBuildPlan,
-      candidatesByKey: new Map(
-        candidates.map(candidate => [candidateIdentity(candidate), candidate])
-      ),
     };
     equalLevelPreparationCache.set(preparationKey, prepared);
+    equalLevelPreparationCacheDirty += 1;
   }
   const {
     levels,
@@ -6085,8 +6164,10 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     purchasable,
     purchasablePlan,
     routeBuildPlan,
-    candidatesByKey,
   } = prepared;
+  const candidatesByKey = new Map(
+    candidates.map(candidate => [candidateIdentity(candidate), candidate])
+  );
   const rows = [];
   let weightedWins = 0;
   let weightedRuns = 0;
@@ -6206,8 +6287,9 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     purchasablePlan,
     routeBuildPlan,
     preparationCache: {
-      entries: equalLevelPreparationCache.size,
-      reused: equalLevelPreparationCache.has(preparationKey),
+      ...equalLevelPreparationCacheStats(),
+      reused: preparationCacheHit,
+      key: preparationKey,
     },
     playerModel: {
       iv: 16,
@@ -7176,7 +7258,9 @@ async function cmdEqualLevelStorySearch() {
   );
 
   await flushBattleCache();
+  await flushEqualLevelPreparationCache();
   const cacheStats = battleCacheStats();
+  const preparationCacheStats = equalLevelPreparationCacheStats();
 
   console.log(JSON.stringify({
     schemaVersion: 1,
@@ -7226,6 +7310,7 @@ async function cmdEqualLevelStorySearch() {
       finalRuns,
     },
     battleCache: cacheStats,
+    preparationCache: preparationCacheStats,
     knownRedWinnerDiagnostic: {
       trace: knownTrace,
       directEvaluation: knownRedWinnerEvaluation,
@@ -7309,7 +7394,9 @@ async function cmdEqualLevelStoryEvaluate() {
   }
 
   await flushBattleCache();
+  await flushEqualLevelPreparationCache();
   const cacheStats = battleCacheStats();
+  const preparationCacheStats = equalLevelPreparationCacheStats();
 
   console.log(JSON.stringify({
     schemaVersion: 1,
@@ -7325,9 +7412,92 @@ async function cmdEqualLevelStoryEvaluate() {
     bosses: bossLabels,
     seedOffset,
     battleCache: cacheStats,
+    preparationCache: preparationCacheStats,
     resourceProfile: 'all',
     spendPolicy: 'unbounded',
     evaluations,
+  }, null, 2));
+}
+
+async function cmdEvolutionLegalitySmoke() {
+  const story = await loadEqualLevelStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const route = storyBattlesForCandidates(story.bosses, []);
+  const bossByLabel = new Map(route.map(boss => [String(boss.label), boss]));
+
+  function variant(origin, terminal) {
+    const row = pool.candidates.find(candidate =>
+      candidate.species === origin && candidate.terminalSpecies === terminal
+    );
+    if (!row) throw new Error(`Missing trade-aware evolution variant: ${origin}->${terminal}`);
+    return row;
+  }
+
+  function materialized(origin, terminal, bossLabel, level = 65) {
+    const candidate = variant(origin, terminal);
+    const boss = bossByLabel.get(bossLabel);
+    if (!boss) throw new Error(`Unknown boss for evolution smoke: ${bossLabel}`);
+    const levels = { [candidateIdentity(candidate)]: level };
+    return materializeCandidateTeam(
+      [candidate],
+      boss.stage,
+      level,
+      { levelsByCandidate: levels, boss },
+    )[0]?.species || null;
+  }
+
+  const checks = [
+    {
+      name: 'pure-trade-gengar',
+      actual: materialized('Gastly', 'Gengar', 'Morty', 57),
+      expected: 'Gengar',
+    },
+    {
+      name: 'pure-trade-alakazam',
+      actual: materialized('Abra', 'Alakazam', 'Whitney', 57),
+      expected: 'Alakazam',
+    },
+    {
+      name: 'pure-trade-golem',
+      actual: materialized('Geodude', 'Golem', 'Whitney', 57),
+      expected: 'Golem',
+    },
+    {
+      name: 'metal-coat-before-source',
+      actual: materialized('Onix', 'Steelix', 'Whitney', 57),
+      expected: 'Onix',
+    },
+    {
+      name: 'metal-coat-after-source',
+      actual: materialized('Onix', 'Steelix', 'Morty', 57),
+      expected: 'Steelix',
+    },
+    {
+      name: 'protector-before-blue-clear',
+      actual: materialized('Rhyhorn', 'Rhyperior', 'Blue', 65),
+      expected: 'Rhydon',
+    },
+    {
+      name: 'protector-after-blue-clear',
+      actual: materialized('Rhyhorn', 'Rhyperior', 'Will 2', 65),
+      expected: 'Rhyperior',
+    },
+  ];
+  const failures = checks.filter(row => row.actual !== row.expected);
+  if (failures.length) {
+    throw new Error('Evolution legality smoke failed: ' + JSON.stringify(failures));
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    evolutionPolicy: pool.evolutionPolicy,
+    checks,
+    focusItemAccess: {
+      metalCoat: pool.evolutionAccess?.items?.ITEM_METAL_COAT || null,
+      protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
+      kingsRock: pool.evolutionAccess?.items?.ITEM_KINGS_ROCK || null,
+      dragonScale: pool.evolutionAccess?.items?.ITEM_DRAGON_SCALE || null,
+    },
   }, null, 2));
 }
 
@@ -7396,6 +7566,7 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
   'equal-level-story-search': cmdEqualLevelStorySearch,
+  'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
