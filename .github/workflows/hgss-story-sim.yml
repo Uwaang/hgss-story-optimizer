@@ -461,7 +461,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/cache.json
-      HGSS_BATTLE_CACHE_NAMESPACE: eql-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: eql-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -511,7 +511,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/cache-ab.json
-      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -589,7 +589,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/${{ matrix.experiment }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -627,7 +627,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/completion-lv${{ matrix.level }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -677,7 +677,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/validation-${{ matrix.label }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -718,7 +718,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HGSS_BATTLE_CACHE_PATH: .cache/battles/sweep-validate-lv${{ matrix.level }}.json
-      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
     defaults:
       run:
         working-directory: hgss_story_sim
