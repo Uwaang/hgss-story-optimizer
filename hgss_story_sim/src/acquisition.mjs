@@ -526,15 +526,15 @@ export async function buildRedOnlyCandidateForms({
   const maxStage = Number(targetBoss.stage);
 
   const [encounterJson, headbuttJson, evoJson, personalJson] = await Promise.all([
-    fetchJson(\`\${PRET_RAW_ROOT}/\${commit}/files/fielddata/encountdata/gs_enc_data.json\`),
-    fetchJson(\`\${PRET_RAW_ROOT}/\${commit}/files/arc/headbutt.json\`),
-    fetchJson(\`\${PRET_RAW_ROOT}/\${commit}/files/poketool/personal/evo.json\`),
-    fetchJson(\`\${PRET_RAW_ROOT}/\${commit}/files/poketool/personal/personal.json\`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/arc/headbutt.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/evo.json`),
+    fetchJson(`${PRET_RAW_ROOT}/${commit}/files/poketool/personal/personal.json`),
   ]);
   const encounterByMap = buildEncounterIndex(encounterJson.encounters || []);
   const headbuttByMap = new Map((headbuttJson.tables || []).map(row => [row.Map, row]));
   const growthBySpecies = new Map((personalJson.baseStats || []).map(row => [
-    \`SPECIES_\${row.species}\`,
+    `SPECIES_${row.species}`,
     row.growthRate,
   ]));
   const evoByBase = new Map((evoJson.evoTable || []).map(row => [row.baseSpecies, row.evos || []]));
@@ -636,7 +636,7 @@ export async function buildRedOnlyCandidateForms({
     ) {
       return;
     }
-    const key = \`\${rootName}|\${targetName}\`;
+    const key = `${rootName}|${targetName}`;
     const row = formMap.get(key) || {
       species: targetName,
       familyId: rootName,
