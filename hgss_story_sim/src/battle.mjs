@@ -778,7 +778,7 @@ function matchupUtility(mon, foeMon) {
   return (offense * (0.5 + hpRatio)) / Math.max(35, incoming);
 }
 
-function bestVoluntarySwitch(request, side, foeActive, active, activeRequest) {
+function bestVoluntarySwitch(request, side, foeActive, active, activeRequest, policy = {}) {
   if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
   if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
 
@@ -795,9 +795,15 @@ function bestVoluntarySwitch(request, side, foeActive, active, activeRequest) {
   }
 
   if (!best) return null;
-  // Avoid constant switching for marginal gains. Switch when the matchup is
-  // materially better and the active mon does not already have a strong hit.
-  if (best.utility > currentUtility * 1.55 && (currentOffense < 140 || currentUtility < 1.0)) {
+  // Avoid constant switching for marginal gains by default. Diagnostic
+  // policies may relax these thresholds without changing damage resolution.
+  const ratioThreshold = Math.max(1, Number(policy.ratioThreshold || 1.55));
+  const offenseCeiling = Math.max(0, Number(policy.offenseCeiling || 140));
+  const utilityCeiling = Math.max(0, Number(policy.utilityCeiling || 1.0));
+  if (
+    best.utility > currentUtility * ratioThreshold &&
+    (currentOffense < offenseCeiling || currentUtility < utilityCeiling)
+  ) {
     return `switch ${best.idx + 1}`;
   }
   return null;
@@ -847,13 +853,28 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
       if (!activeRequest) return 'pass';
       const active = activeBattleMons[i];
       if (sideId === 'p1' && request.active.length === 1) {
-        const turn = Number(battle?.turn || 0);
-        const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
-        const underSwitchCap = Number(stats?.voluntarySwitches || 0) < 6;
-        const cooldownReady = turn - lastSwitchTurn >= 3;
-        if (underSwitchCap && cooldownReady) {
-          const switchChoice = bestVoluntarySwitch(request, side, foeActive, active, activeRequest);
-          if (switchChoice) return switchChoice;
+        const p1Mode = aiOptions?.mode || 'greedy';
+        if (p1Mode !== 'no-switch') {
+          const aggressive = p1Mode === 'aggressive';
+          const turn = Number(battle?.turn || 0);
+          const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
+          const switchCap = aggressive ? 12 : 6;
+          const cooldown = aggressive ? 1 : 3;
+          const underSwitchCap = Number(stats?.voluntarySwitches || 0) < switchCap;
+          const cooldownReady = turn - lastSwitchTurn >= cooldown;
+          if (underSwitchCap && cooldownReady) {
+            const switchChoice = bestVoluntarySwitch(
+              request,
+              side,
+              foeActive,
+              active,
+              activeRequest,
+              aggressive
+                ? { ratioThreshold: 1.15, offenseCeiling: 220, utilityCeiling: 1.5 }
+                : {},
+            );
+            if (switchChoice) return switchChoice;
+          }
         }
       } else if (useHgssNpcAi && request.active.length === 1) {
         const slot = chooseHgssVoluntarySwitch(
@@ -961,6 +982,10 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const streams = getPlayerStreams(battleStream);
   const p2Profile = options.p2Trainer ? trainerAiProfile(options.p2Trainer) : null;
   const p2Mode = options.p2AiMode || (p2Profile ? 'hgss' : 'greedy');
+  const p1Mode = options.p1AiMode || 'greedy';
+  if (!['greedy', 'aggressive', 'no-switch'].includes(p1Mode)) {
+    throw new Error(`Unknown p1AiMode: ${p1Mode}`);
+  }
   const p1KeyByDisplayName = new Map(
     p1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
   );
@@ -986,7 +1011,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     trainerItemCount: options.p2TrainerItems === false ? 0 : Number(p2Profile?.items?.length || 0),
     trainerItemsUsed: [],
   };
-  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: 'greedy' }).catch(() => undefined);
+  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: p1Mode }).catch(() => undefined);
   const p2Task = runGreedyAi(
     streams.p2,
     battleStream,
@@ -1046,6 +1071,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   return {
     ...result,
     p1Usage,
+    p1AiMode: p1Mode,
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
@@ -1069,6 +1095,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2MoveDecisions = 0;
   let totalP2TrainerItemUses = 0;
   const p1Usage = {};
+  let p1AiMode = options.p1AiMode || 'greedy';
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
   let p2AiFlags = 0;
   let p2AiFlagNames = [];
@@ -1111,6 +1138,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
       }
       p1Usage[key] = aggregate;
     }
+    p1AiMode = result.p1AiMode;
     p2AiMode = result.p2AiMode;
     p2AiFlags = result.p2AiFlags;
     p2AiFlagNames = result.p2AiFlagNames;
@@ -1132,6 +1160,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP2MoveDecisions: totalP2MoveDecisions / runs,
     averageP2TrainerItemUses: totalP2TrainerItemUses / runs,
     p1Usage,
+    p1AiMode,
     p2AiMode,
     p2AiFlags,
     p2AiFlagNames,

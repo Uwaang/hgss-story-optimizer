@@ -541,6 +541,183 @@ export function allocateBossAwareSoftExp(
     { softLevelScale },
   );
 }
+
+
+
+export function allocateBossAwareDepthExp(
+  states,
+  amount,
+  boss,
+  levelUtility,
+  { depth = 2 } = {},
+) {
+  let remaining = Math.max(0, Math.floor(Number(amount || 0)));
+  let allocated = 0;
+  const eligible = states.filter(state => !state.unknown && state.level < 100);
+  const aceLevel = Math.max(1, Math.floor(Number(boss?.aceLevel || 1)));
+  const targetDepth = Math.max(1, Math.floor(Number(depth || 2)));
+
+  while (remaining > 0 && eligible.length) {
+    const potentialRows = eligible
+      .map(state => ({
+        state,
+        aceUtility: Math.max(
+          0,
+          Number(levelUtility?.(state.candidate, boss, aceLevel) || 0),
+        ),
+      }))
+      .sort((a, b) =>
+        b.aceUtility - a.aceUtility ||
+        a.state.key.localeCompare(b.state.key)
+      );
+    const depthKeys = new Set(
+      potentialRows
+        .filter(row => row.aceUtility > 1e-9)
+        .slice(0, targetDepth)
+        .map(row => row.state.key)
+    );
+    const aceUtilityByKey = new Map(
+      potentialRows.map(row => [row.state.key, row.aceUtility])
+    );
+
+    let best = null;
+    for (const state of eligible) {
+      const nextThreshold = expAtLevel(state.growthRate, state.level + 1);
+      if (nextThreshold === null) continue;
+      const need = Math.max(1, nextThreshold - state.exp);
+      const currentUtility = Math.max(
+        0,
+        Number(levelUtility?.(state.candidate, boss, state.level) || 0),
+      );
+      const nextUtility = Math.max(
+        0,
+        Number(levelUtility?.(state.candidate, boss, state.level + 1) || 0),
+      );
+      const gain = Math.max(0, nextUtility - currentUtility);
+      const baseNumerator =
+        0.25 * nextUtility +
+        2 * gain +
+        0.01;
+
+      let depthBonus = 0;
+      const aceUtility = Number(aceUtilityByKey.get(state.key) || 0);
+      if (depthKeys.has(state.key) && aceUtility > 1e-9) {
+        const cappedLevel = Math.min(state.level, aceLevel);
+        const cappedUtility = Math.max(
+          0,
+          Number(levelUtility?.(state.candidate, boss, cappedLevel) || 0),
+        );
+        const readiness = Math.max(0, Math.min(1, cappedUtility / aceUtility));
+        const rawBonus = 0.25 * aceUtility * Math.max(0, 1 - readiness);
+        // The roster-depth signal can at most double the old boss-aware
+        // numerator. This adds a bounded incentive for a second viable answer
+        // without suppressing the existing carry or equalizing all six slots.
+        depthBonus = Math.min(rawBonus, baseNumerator);
+      }
+
+      const priority = (baseNumerator + depthBonus) / need;
+      if (
+        !best ||
+        priority > best.priority ||
+        (priority === best.priority && depthBonus > best.depthBonus) ||
+        (priority === best.priority && depthBonus === best.depthBonus &&
+          nextUtility > best.nextUtility) ||
+        (priority === best.priority && depthBonus === best.depthBonus &&
+          nextUtility === best.nextUtility &&
+          state.key.localeCompare(best.state.key) < 0)
+      ) {
+        best = { state, need, priority, depthBonus, nextUtility };
+      }
+    }
+    if (!best) break;
+
+    const grant = Math.min(remaining, best.need);
+    best.state.exp += grant;
+    allocated += grant;
+    remaining -= grant;
+    best.state.level = levelAtExp(best.state.growthRate, best.state.exp);
+
+    for (let i = eligible.length - 1; i >= 0; i -= 1) {
+      if (eligible[i].level >= 100) eligible.splice(i, 1);
+    }
+  }
+
+  return { allocated, unallocated: remaining };
+}
+
+export function allocateBossAwareSaturationExp(states, amount, boss, levelUtility) {
+  let remaining = Math.max(0, Math.floor(Number(amount || 0)));
+  let allocated = 0;
+  const eligible = states.filter(state => !state.unknown && state.level < 100);
+  const aceLevel = Math.max(1, Math.floor(Number(boss?.aceLevel || 1)));
+
+  while (remaining > 0 && eligible.length) {
+    let best = null;
+    for (const state of eligible) {
+      const nextThreshold = expAtLevel(state.growthRate, state.level + 1);
+      if (nextThreshold === null) continue;
+      const need = Math.max(1, nextThreshold - state.exp);
+
+      // Evaluate readiness only up to the current boss's ace level. This makes
+      // the allocator care about building additional viable answers instead of
+      // repeatedly over-leveling the already-ready carry. Unlike the old
+      // boss-aware-soft rule, it never penalizes a member just for being above
+      // the team's minimum level.
+      const cappedCurrentLevel = Math.min(state.level, aceLevel);
+      const cappedNextLevel = Math.min(state.level + 1, aceLevel);
+      const aceUtility = Math.max(
+        0,
+        Number(levelUtility?.(state.candidate, boss, aceLevel) || 0),
+      );
+      const currentUtility = Math.max(
+        0,
+        Number(levelUtility?.(state.candidate, boss, cappedCurrentLevel) || 0),
+      );
+      const nextUtility = Math.max(
+        0,
+        Number(levelUtility?.(state.candidate, boss, cappedNextLevel) || 0),
+      );
+      const readiness = aceUtility > 1e-9
+        ? Math.max(0, Math.min(1, currentUtility / aceUtility))
+        : 1;
+      const readinessGap = Math.max(0, 1 - readiness);
+      const gain = Math.max(0, nextUtility - currentUtility);
+
+      // Existing boss-aware structure, but the absolute-utility term fades as
+      // the member reaches its own ace-level matchup potential. A strong carry
+      // can still receive EXP through genuine marginal gain, while useful but
+      // under-developed answers get a chance to become battle-ready.
+      const priority =
+        (0.25 * nextUtility * readinessGap + 2 * gain + 0.01) / need;
+
+      if (
+        !best ||
+        priority > best.priority ||
+        (priority === best.priority && aceUtility > best.aceUtility) ||
+        (priority === best.priority && aceUtility === best.aceUtility &&
+          nextUtility > best.nextUtility) ||
+        (priority === best.priority && aceUtility === best.aceUtility &&
+          nextUtility === best.nextUtility &&
+          state.key.localeCompare(best.state.key) < 0)
+      ) {
+        best = { state, need, priority, aceUtility, nextUtility };
+      }
+    }
+    if (!best) break;
+
+    const grant = Math.min(remaining, best.need);
+    best.state.exp += grant;
+    allocated += grant;
+    remaining -= grant;
+    best.state.level = levelAtExp(best.state.growthRate, best.state.exp);
+
+    for (let i = eligible.length - 1; i >= 0; i -= 1) {
+      if (eligible[i].level >= 100) eligible.splice(i, 1);
+    }
+  }
+
+  return { allocated, unallocated: remaining };
+}
 function cachedLevelUtility(candidate, boss, level, levelUtility, cache = null) {
   if (!cache) return Number(levelUtility?.(candidate, boss, level) || 0);
   let byBoss = cache.get(candidate);
@@ -830,7 +1007,7 @@ export function buildTeamExpSchedule({
   if (!['map-order', 'before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
     throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
   }
-  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'breakpoint-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'boss-aware-depth', 'boss-aware-saturation', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(`Unknown EXP allocator: ${allocator}`);
   }
   if (allocator !== 'balanced' && typeof levelUtility !== 'function') {
@@ -968,6 +1145,21 @@ export function buildTeamExpSchedule({
         targetBoss,
         levelUtility,
         bossAwareSoftLevelScale,
+      );
+    } else if (allocator === 'boss-aware-depth') {
+      base = allocateBossAwareDepthExp(
+        states,
+        remaining,
+        targetBoss,
+        levelUtility,
+        { depth: 2 },
+      );
+    } else if (allocator === 'boss-aware-saturation') {
+      base = allocateBossAwareSaturationExp(
+        states,
+        remaining,
+        targetBoss,
+        levelUtility,
       );
     } else {
       base = allocateBalancedExp(states, remaining);
@@ -1159,9 +1351,13 @@ export function buildTeamExpSchedule({
       ? `boss-aware baseline plus actual move/evolution breakpoint bonus across ${breakpointBossHorizon} bosses and ${breakpointLevelLookahead} levels`
       : allocator === 'boss-aware'
         ? 'boss-aware matchup utility per EXP-to-next-level'
-        : allocator === 'boss-aware-soft'
-          ? `boss-aware utility with level-gap penalty scale ${bossAwareSoftLevelScale}`
-          : 'balanced-lowest-level-first',
+        : allocator === 'boss-aware-depth'
+          ? 'boss-aware utility plus a bounded bonus for the top two ace-level matchup answers that are not yet battle-ready'
+          : allocator === 'boss-aware-saturation'
+            ? 'boss-aware utility with ace-readiness saturation to reduce carry overinvestment without level-equality pressure'
+            : allocator === 'boss-aware-soft'
+            ? `boss-aware utility with level-gap penalty scale ${bossAwareSoftLevelScale}`
+            : 'balanced-lowest-level-first',
     bossAwareSoftLevelScale: allocator === 'boss-aware-soft'
       ? Number(bossAwareSoftLevelScale)
       : null,
