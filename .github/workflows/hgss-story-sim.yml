@@ -15,6 +15,25 @@ on:
       - 'hgss_story_sim/**'
       - '.github/workflows/hgss-story-sim.yml'
   workflow_dispatch:
+    inputs:
+      task:
+        description: Manual experiment to run
+        required: false
+        default: default
+        type: choice
+        options:
+          - default
+          - allocator-story-matrix
+          - team-ablation
+          - team-usage
+          - meaningful-six-refinement
+          - activation-pilot
+          - activation-soft-sweep
+          - member-contribution-pilot
+          - contribution-candidate-probe
+          - abra-slot-refinement
+          - meaningful-six-pilot
+          - meaningful-six-refinement
 
 jobs:
   smoke:
@@ -330,6 +349,315 @@ jobs:
           if-no-files-found: error
 
 
+  abra_activation_soft_sweep:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'activation-soft-sweep'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        soft_scale: [4, 6, 8, 12]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Compare soft baseline vs Abra level-16 activation
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-activation --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Pidgey,Qwilfish,Caterpie --target=Abra --target-level=16 --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware-soft --soft-level-scale=${{ matrix.soft_scale }} --objective=story-clear > results/abra-activation-soft-${{ matrix.soft_scale }}.json
+      - name: Upload activation soft sweep
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-abra-activation-soft-${{ matrix.soft_scale }}
+          path: hgss_story_sim/results/abra-activation-soft-${{ matrix.soft_scale }}.json
+          if-no-files-found: error
+
+  abra_activation_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'activation-pilot'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Compare baseline vs Abra level-16 activation
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-activation --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Pidgey,Qwilfish,Caterpie --target=Abra --target-level=16 --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/abra-activation-hg-cyndaquil.json
+      - name: Upload Abra activation pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-abra-activation-hg-cyndaquil
+          path: hgss_story_sim/results/abra-activation-hg-cyndaquil.json
+          if-no-files-found: error
+
+  meaningful_six_refinement_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'meaningful-six-refinement'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Refine HG Cyndaquil six-member team by one-slot swaps
+        run: |
+          mkdir -p results
+          node src/cli.mjs meaningful-six --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --runs=1 --final-runs=20 --candidate-cap=24 --shortlist-cap=24 --finalist-cap=8 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/meaningful-six-refinement-hg-cyndaquil.json
+      - name: Upload meaningful-six refinement
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-meaningful-six-refinement-hg-cyndaquil
+          path: hgss_story_sim/results/meaningful-six-refinement-hg-cyndaquil.json
+          if-no-files-found: error
+
+  meaningful_six_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'meaningful-six-pilot'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil with contribution-aware final rerank
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --member-contribution-rerank=true --contribution-runs=5 --output=results/meaningful-six-pilot-hg-cyndaquil.json
+      - name: Upload meaningful-six pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-meaningful-six-pilot-hg-cyndaquil
+          path: hgss_story_sim/results/meaningful-six-pilot-hg-cyndaquil.json
+          if-no-files-found: error
+
+  member_contribution_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'member-contribution-pilot'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil with contribution-aware reranking
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --member-contribution-rerank=true --contribution-runs=20 --output=results/member-contribution-pilot-hg-cyndaquil.json
+      - name: Upload contribution-aware pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-member-contribution-pilot-hg-cyndaquil
+          path: hgss_story_sim/results/member-contribution-pilot-hg-cyndaquil.json
+          if-no-files-found: error
+
+  contribution_candidate_probe:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'contribution-candidate-probe'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: caterpie
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Caterpie
+          - label: zubat
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Zubat
+          - label: lapras-zubat
+            team: Cyndaquil,Chinchou,Abra,Lapras,Zubat,Pidgey
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Ablate candidate team
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-ablation --version=HEARTGOLD --starter=Cyndaquil --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/probe-ablation-${{ matrix.label }}.json
+      - name: Measure candidate usage
+        run: |
+          node src/cli.mjs team-usage --version=HEARTGOLD --starter=Cyndaquil --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/probe-usage-${{ matrix.label }}.json
+      - name: Upload candidate probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-contribution-probe-${{ matrix.label }}
+          path: |
+            hgss_story_sim/results/probe-ablation-${{ matrix.label }}.json
+            hgss_story_sim/results/probe-usage-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  abra_slot_refinement_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'abra-slot-refinement'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Refine only Abra slot at 20 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs meaningful-six --version=HEARTGOLD --starter=Cyndaquil --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish --replace=Abra --runs=1 --final-runs=20 --candidate-cap=24 --shortlist-cap=12 --finalist-cap=6 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/abra-slot-refinement-hg-cyndaquil.json
+      - name: Upload Abra-slot refinement
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-abra-slot-refinement-hg-cyndaquil
+          path: hgss_story_sim/results/abra-slot-refinement-hg-cyndaquil.json
+          if-no-files-found: error
+
+  member_usage_matrix:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-usage'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Measure member usage for ${{ matrix.version }} ${{ matrix.starter }}
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-usage --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/member-usage-${{ matrix.version }}-${{ matrix.starter }}.json
+      - name: Upload member usage
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-member-usage-${{ matrix.version }}-${{ matrix.starter }}
+          path: hgss_story_sim/results/member-usage-${{ matrix.version }}-${{ matrix.starter }}.json
+          if-no-files-found: error
+
+  member_ablation_matrix:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-ablation'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: SOULSILVER
+            starter: Cyndaquil
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish
+          - version: HEARTGOLD
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: SOULSILVER
+            starter: Totodile
+            team: Totodile,Magnemite,Gastly,Drowzee,Magikarp,Dunsparce
+          - version: HEARTGOLD
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Chinchou,Caterpie,Magikarp
+          - version: SOULSILVER
+            starter: Chikorita
+            team: Chikorita,Abra,Mareep,Qwilfish,Magikarp,Tentacool
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Ablate members for ${{ matrix.version }} ${{ matrix.starter }}
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-ablation --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/member-ablation-${{ matrix.version }}-${{ matrix.starter }}.json
+      - name: Upload member ablation
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-member-ablation-${{ matrix.version }}-${{ matrix.starter }}
+          path: hgss_story_sim/results/member-ablation-${{ matrix.version }}-${{ matrix.starter }}.json
+          if-no-files-found: error
+
+  allocator_story_matrix_12:
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'allocator-story-matrix'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [HEARTGOLD, SOULSILVER]
+        starter: [Cyndaquil, Totodile, Chikorita]
+        expAllocator: [boss-aware, breakpoint-aware]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize ${{ matrix.version }} ${{ matrix.starter }} with ${{ matrix.expAllocator }}
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=${{ matrix.version }} --starters=${{ matrix.starter }} --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=${{ matrix.expAllocator }} --breakpoint-boss-horizon=4 --breakpoint-level-lookahead=12 --breakpoint-discount=0.72 --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/allocator-story-matrix-${{ matrix.version }}-${{ matrix.starter }}-${{ matrix.expAllocator }}.json
+      - name: Upload ${{ matrix.version }} ${{ matrix.starter }} ${{ matrix.expAllocator }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-story-matrix-${{ matrix.version }}-${{ matrix.starter }}-${{ matrix.expAllocator }}
+          path: hgss_story_sim/results/allocator-story-matrix-${{ matrix.version }}-${{ matrix.starter }}-${{ matrix.expAllocator }}.json
+          if-no-files-found: error
+
   story_matrix:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[story-matrix]')
     runs-on: ubuntu-latest
@@ -390,6 +718,58 @@ jobs:
           if-no-files-found: error
 
 
+
+  allocator_cross_compare:
+    if: github.event_name == 'workflow_dispatch' && inputs.task != 'allocator-story-matrix'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Run fixed-team allocator 2x2 cross-test
+        run: |
+          mkdir -p results
+          node src/cli.mjs allocator-cross-compare --runs=20 > results/allocator-cross-compare-hg-cyndaquil.json
+      - name: Upload allocator cross-test
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-cross-compare-hg-cyndaquil
+          path: hgss_story_sim/results/allocator-cross-compare-hg-cyndaquil.json
+          if-no-files-found: error
+
+  breakpoint_allocator_pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.task != 'allocator-story-matrix'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        expAllocator: [boss-aware, breakpoint-aware]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Optimize HG Cyndaquil with ${{ matrix.expAllocator }} EXP
+        run: |
+          mkdir -p results
+          npm run optimize -- --versions=HEARTGOLD --starters=Cyndaquil --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=${{ matrix.expAllocator }} --breakpoint-boss-horizon=4 --breakpoint-level-lookahead=12 --breakpoint-discount=0.72 --objective=story-clear --runs=1 --screen-runs=1 --final-runs=20 --beam-width=8 --candidate-cap=24 --team-size=6 --output=results/allocator-pilot-${{ matrix.expAllocator }}-hg-cyndaquil.json
+      - name: Upload ${{ matrix.expAllocator }} pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-allocator-pilot-${{ matrix.expAllocator }}-hg-cyndaquil
+          path: hgss_story_sim/results/allocator-pilot-${{ matrix.expAllocator }}-hg-cyndaquil.json
+          if-no-files-found: error
 
   trainer_ai_ab:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[trainer-ai-ab]')

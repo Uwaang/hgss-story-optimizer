@@ -541,6 +541,203 @@ export function allocateBossAwareSoftExp(
     { softLevelScale },
   );
 }
+function cachedLevelUtility(candidate, boss, level, levelUtility, cache = null) {
+  if (!cache) return Number(levelUtility?.(candidate, boss, level) || 0);
+  let byBoss = cache.get(candidate);
+  if (!byBoss) {
+    byBoss = new Map();
+    cache.set(candidate, byBoss);
+  }
+  let byLevel = byBoss.get(boss);
+  if (!byLevel) {
+    byLevel = new Map();
+    byBoss.set(boss, byLevel);
+  }
+  const normalizedLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  if (!byLevel.has(normalizedLevel)) {
+    byLevel.set(normalizedLevel, Number(levelUtility?.(candidate, boss, normalizedLevel) || 0));
+  }
+  return byLevel.get(normalizedLevel);
+}
+
+function bossUtilityLevelFactor(boss, level) {
+  const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const aceLevel = Math.max(1, Number(boss?.aceLevel || actualLevel));
+  const levelRatio = actualLevel / aceLevel;
+  return Math.max(0.25, Math.min(2.0, levelRatio ** 1.4));
+}
+
+function normalizedCachedLevelUtility(candidate, boss, level, levelUtility, cache = null) {
+  const raw = cachedLevelUtility(candidate, boss, level, levelUtility, cache);
+  return raw / Math.max(1e-9, bossUtilityLevelFactor(boss, level));
+}
+
+function weightedBreakpointJump(candidate, bosses, targetLevel, levelUtility, discount = 0.72, cache = null) {
+  const future = (bosses || []).filter(Boolean);
+  if (!future.length || targetLevel <= 1) return 0;
+  let weighted = 0;
+  let totalWeight = 0;
+  for (let i = 0; i < future.length; i += 1) {
+    const weight = Math.max(0.01, Number(discount) ** i);
+    const previousCore = normalizedCachedLevelUtility(
+      candidate,
+      future[i],
+      targetLevel - 1,
+      levelUtility,
+      cache,
+    );
+    const targetCore = normalizedCachedLevelUtility(
+      candidate,
+      future[i],
+      targetLevel,
+      levelUtility,
+      cache,
+    );
+    weighted += weight * Math.max(0, targetCore - previousCore);
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? weighted / totalWeight : 0;
+}
+
+export function allocateBreakpointAwareExp(
+  states,
+  amount,
+  futureBosses,
+  levelUtility,
+  {
+    bossHorizon = 4,
+    levelLookahead = 12,
+    discount = 0.72,
+    utilityCache = null,
+    breakpointWeight = 1,
+  } = {},
+) {
+  let remaining = Math.max(0, Math.floor(Number(amount || 0)));
+  let allocated = 0;
+  const horizon = (futureBosses || [])
+    .filter(Boolean)
+    .slice(0, Math.max(1, Number(bossHorizon) || 4));
+  const immediateBoss = horizon[0] || null;
+  const eligible = states.filter(state => !state.unknown && state.level < 100);
+  if (!immediateBoss) return allocateBalancedExp(states, remaining);
+
+  while (remaining > 0 && eligible.length) {
+    let best = null;
+    for (const state of eligible) {
+      const nextLevel = state.level + 1;
+      const nextThreshold = expAtLevel(state.growthRate, nextLevel);
+      if (nextThreshold === null) continue;
+      const nextNeed = Math.max(1, nextThreshold - state.exp);
+      const currentUtility = cachedLevelUtility(
+        state.candidate,
+        immediateBoss,
+        state.level,
+        levelUtility,
+        utilityCache,
+      );
+      const nextUtility = cachedLevelUtility(
+        state.candidate,
+        immediateBoss,
+        nextLevel,
+        levelUtility,
+        utilityCache,
+      );
+      const immediateGain = Math.max(0, nextUtility - currentUtility);
+      // Preserve the existing boss-aware numerator as the baseline. Distant
+      // targets must amortize that value across their full EXP cost; otherwise
+      // any tiny future bonus would make a far breakpoint beat the next level.
+      const immediateNumerator =
+        0.25 * Math.max(0, nextUtility) +
+        2 * immediateGain +
+        0.01;
+      const immediatePriority = immediateNumerator / nextNeed;
+
+      let stateBest = {
+        state,
+        need: nextNeed,
+        priority: immediatePriority,
+        targetLevel: nextLevel,
+        nextUtility,
+        breakpointJump: 0,
+      };
+
+      const maxTargetLevel = Math.min(
+        100,
+        state.level + Math.max(1, Number(levelLookahead) || 12),
+      );
+      for (let targetLevel = nextLevel; targetLevel <= maxTargetLevel; targetLevel += 1) {
+        const breakpointJump = weightedBreakpointJump(
+          state.candidate,
+          horizon,
+          targetLevel,
+          levelUtility,
+          discount,
+          utilityCache,
+        );
+        // After removing the smooth level factor, positive jumps represent
+        // actual move/evolution matchup changes rather than ordinary stat growth.
+        if (breakpointJump <= 1e-9) continue;
+
+        const targetExp = expAtLevel(state.growthRate, targetLevel);
+        if (targetExp === null) continue;
+        const need = Math.max(1, targetExp - state.exp);
+        const rawBreakpointBonus =
+          Math.max(0, Number(breakpointWeight) || 0) * breakpointJump;
+        // Keep foresight bounded: a breakpoint may at most triple the
+        // immediate boss-aware numerator (baseline + 2x bonus). This lets a
+        // nearby evolution/move breakpoint win, but blocks long-range jumps
+        // such as funding many ordinary levels just to reach a distant form.
+        const breakpointBonus = Math.min(
+          rawBreakpointBonus,
+          2 * Math.max(0.01, immediateNumerator),
+        );
+        const priority = (immediateNumerator + breakpointBonus) / need;
+
+        if (
+          priority > stateBest.priority ||
+          (priority === stateBest.priority && breakpointJump > stateBest.breakpointJump) ||
+          (priority === stateBest.priority && breakpointJump === stateBest.breakpointJump &&
+            targetLevel < stateBest.targetLevel)
+        ) {
+          stateBest = {
+            state,
+            need,
+            priority,
+            targetLevel,
+            nextUtility,
+            breakpointJump,
+          };
+        }
+      }
+
+      if (
+        !best ||
+        stateBest.priority > best.priority ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump > best.breakpointJump) ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump === best.breakpointJump &&
+          stateBest.nextUtility > best.nextUtility) ||
+        (stateBest.priority === best.priority && stateBest.breakpointJump === best.breakpointJump &&
+          stateBest.nextUtility === best.nextUtility &&
+          state.key.localeCompare(best.state.key) < 0)
+      ) {
+        best = stateBest;
+      }
+    }
+    if (!best) break;
+
+    const grant = Math.min(remaining, best.need);
+    best.state.exp += grant;
+    allocated += grant;
+    remaining -= grant;
+    best.state.level = levelAtExp(best.state.growthRate, best.state.exp);
+
+    for (let i = eligible.length - 1; i >= 0; i -= 1) {
+      if (eligible[i].level >= 100) eligible.splice(i, 1);
+    }
+  }
+
+  return { allocated, unallocated: remaining };
+}
 
 function stageMapResources(expWorld, stage, excludedKeys) {
   const bucket = expWorld.stageTrainerRewards.get(Number(stage));
@@ -616,6 +813,10 @@ export function buildTeamExpSchedule({
   allocator = 'balanced',
   levelUtility = null,
   bossAwareSoftLevelScale = 8,
+  breakpointBossHorizon = 4,
+  breakpointLevelLookahead = 12,
+  breakpointDiscount = 0.72,
+  activationTargets = [],
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -629,7 +830,7 @@ export function buildTeamExpSchedule({
   if (!['map-order', 'before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
     throw new Error(`Unknown same-stage join policy: ${sameStageJoinPolicy}`);
   }
-  if (!['balanced', 'boss-aware-soft', 'boss-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(`Unknown EXP allocator: ${allocator}`);
   }
   if (allocator !== 'balanced' && typeof levelUtility !== 'function') {
@@ -640,6 +841,24 @@ export function buildTeamExpSchedule({
   if (!Number.isInteger(Number(bossAwareSoftLevelScale)) || Number(bossAwareSoftLevelScale) < 1) {
     throw new Error(`Invalid boss-aware-soft level gap: ${bossAwareSoftLevelScale}`);
   }
+  if (!Number.isInteger(Number(breakpointBossHorizon)) || Number(breakpointBossHorizon) < 1) {
+    throw new Error(`Invalid breakpoint boss horizon: ${breakpointBossHorizon}`);
+  }
+  if (!Number.isInteger(Number(breakpointLevelLookahead)) || Number(breakpointLevelLookahead) < 1) {
+    throw new Error(`Invalid breakpoint level lookahead: ${breakpointLevelLookahead}`);
+  }
+  if (!Number.isFinite(Number(breakpointDiscount)) || Number(breakpointDiscount) <= 0 || Number(breakpointDiscount) > 1) {
+    throw new Error(`Invalid breakpoint discount: ${breakpointDiscount}`);
+  }
+
+  const normalizedActivationTargets = (activationTargets || []).map(target => {
+    const key = String(target?.key || '').trim();
+    const level = Math.max(1, Math.min(100, Math.floor(Number(target?.level || 0))));
+    if (!key || !Number.isFinite(level) || level < 1) {
+      throw new Error(`Invalid activation target: ${JSON.stringify(target)}`);
+    }
+    return { key, level };
+  });
 
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
   const states = [];
@@ -658,6 +877,9 @@ export function buildTeamExpSchedule({
   let totalMapMoney = 0;
   let totalMajorMoney = 0;
   let currentMoney = startingMoney;
+  const breakpointUtilityCache = new Map();
+  let totalActivationExp = 0;
+  const activationAllocatedByKey = new Map();
 
   function addAvailable(stage, map = null, onlyMapped = false) {
     const added = [];
@@ -689,20 +911,71 @@ export function buildTeamExpSchedule({
     return added;
   }
 
-  function allocate(amount, targetBoss) {
-    if (allocator === 'boss-aware') {
-      return allocateBossAwareExp(states, amount, targetBoss, levelUtility);
+  function allocateActivationExp(amount) {
+    let remaining = Math.max(0, Math.floor(Number(amount || 0)));
+    let allocated = 0;
+    for (const target of normalizedActivationTargets) {
+      if (remaining <= 0) break;
+      const state = states.find(item => item.key === target.key);
+      if (!state || state.unknown || state.level >= target.level) continue;
+      const targetExp = expAtLevel(state.growthRate, target.level);
+      if (targetExp === null) continue;
+      const need = Math.max(0, targetExp - state.exp);
+      if (need <= 0) continue;
+      const grant = Math.min(remaining, need);
+      state.exp += grant;
+      state.level = levelAtExp(state.growthRate, state.exp);
+      allocated += grant;
+      remaining -= grant;
+      activationAllocatedByKey.set(
+        target.key,
+        Number(activationAllocatedByKey.get(target.key) || 0) + grant,
+      );
     }
-    if (allocator === 'boss-aware-soft') {
-      return allocateBossAwareSoftExp(
+    return { allocated, unallocated: remaining };
+  }
+
+  function allocate(amount, targetBoss, targetIndex) {
+    const activation = allocateActivationExp(amount);
+    totalActivationExp += activation.allocated;
+    const remaining = activation.unallocated;
+    let base;
+    if (allocator === 'breakpoint-aware') {
+      const startIndex = Math.max(0, Number(targetIndex) || 0);
+      const futureBosses = routeBosses.slice(
+        startIndex,
+        startIndex + Math.max(1, Number(breakpointBossHorizon) || 4),
+      );
+      if (!futureBosses.length && targetBoss) futureBosses.push(targetBoss);
+      base = allocateBreakpointAwareExp(
         states,
-        amount,
+        remaining,
+        futureBosses,
+        levelUtility,
+        {
+          bossHorizon: breakpointBossHorizon,
+          levelLookahead: breakpointLevelLookahead,
+          discount: breakpointDiscount,
+          utilityCache: breakpointUtilityCache,
+        },
+      );
+    } else if (allocator === 'boss-aware') {
+      base = allocateBossAwareExp(states, remaining, targetBoss, levelUtility);
+    } else if (allocator === 'boss-aware-soft') {
+      base = allocateBossAwareSoftExp(
+        states,
+        remaining,
         targetBoss,
         levelUtility,
         bossAwareSoftLevelScale,
       );
+    } else {
+      base = allocateBalancedExp(states, remaining);
     }
-    return allocateBalancedExp(states, amount);
+    return {
+      allocated: activation.allocated + Number(base?.allocated || 0),
+      unallocated: Number(base?.unallocated || 0),
+    };
   }
 
   function configuredMapsBeforeBoss(stage, bossLabel) {
@@ -761,7 +1034,7 @@ export function buildTeamExpSchedule({
         mapExpBefore += source.totalExp;
         mapMoneyBefore += source.totalMoney;
         mapTrainerCount += source.trainers.length;
-        const allocation = allocate(source.totalExp, boss);
+        const allocation = allocate(source.totalExp, boss, battleIndex);
         totalAllocatedExp += allocation.allocated;
         totalUnallocatedExp += allocation.unallocated;
         processedMaps.add(map);
@@ -802,7 +1075,7 @@ export function buildTeamExpSchedule({
         mapExpBefore = source.totalExp;
         mapMoneyBefore = source.totalMoney;
         mapTrainerCount = source.trainers.length;
-        const allocation = allocate(mapExpBefore, boss);
+        const allocation = allocate(mapExpBefore, boss, battleIndex);
         totalAllocatedExp += allocation.allocated;
         totalUnallocatedExp += allocation.unallocated;
         totalMapExp += mapExpBefore;
@@ -860,7 +1133,12 @@ export function buildTeamExpSchedule({
       prizeMoneyAfter: majorPrizeMoney,
     });
 
-    const allocation = allocate(majorReward.total, routeBosses[battleIndex + 1] || boss);
+    const nextAllocationIndex = Math.min(battleIndex + 1, routeBosses.length - 1);
+    const allocation = allocate(
+      majorReward.total,
+      routeBosses[nextAllocationIndex] || boss,
+      nextAllocationIndex,
+    );
     totalMajorExp += majorReward.total;
     totalMajorMoney += majorPrizeMoney;
     currentMoney += majorPrizeMoney;
@@ -877,14 +1155,36 @@ export function buildTeamExpSchedule({
       : `${entryLevelPolicy} source-backed encounter/gift level`,
     sameStageJoinPolicy,
     allocator,
-    allocatorDescription: allocator === 'boss-aware'
-      ? 'boss-aware matchup utility per EXP-to-next-level'
-      : allocator === 'boss-aware-soft'
-        ? `boss-aware utility with level-gap penalty scale ${bossAwareSoftLevelScale}`
-        : 'balanced-lowest-level-first',
+    allocatorDescription: allocator === 'breakpoint-aware'
+      ? `boss-aware baseline plus actual move/evolution breakpoint bonus across ${breakpointBossHorizon} bosses and ${breakpointLevelLookahead} levels`
+      : allocator === 'boss-aware'
+        ? 'boss-aware matchup utility per EXP-to-next-level'
+        : allocator === 'boss-aware-soft'
+          ? `boss-aware utility with level-gap penalty scale ${bossAwareSoftLevelScale}`
+          : 'balanced-lowest-level-first',
     bossAwareSoftLevelScale: allocator === 'boss-aware-soft'
       ? Number(bossAwareSoftLevelScale)
       : null,
+    breakpointBossHorizon: allocator === 'breakpoint-aware'
+      ? Number(breakpointBossHorizon)
+      : null,
+    breakpointLevelLookahead: allocator === 'breakpoint-aware'
+      ? Number(breakpointLevelLookahead)
+      : null,
+    breakpointDiscount: allocator === 'breakpoint-aware'
+      ? Number(breakpointDiscount)
+      : null,
+    activationTargets: normalizedActivationTargets.map(target => {
+      const state = states.find(item => item.key === target.key);
+      return {
+        key: target.key,
+        targetLevel: target.level,
+        finalLevel: state?.level ?? null,
+        achieved: Boolean(state && !state.unknown && state.level >= target.level),
+        allocatedExp: Number(activationAllocatedByKey.get(target.key) || 0),
+      };
+    }),
+    totalActivationExp,
     totalMapExp,
     totalMajorExp,
     totalNaturalExp: totalMapExp + totalMajorExp,

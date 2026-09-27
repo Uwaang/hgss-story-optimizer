@@ -6,7 +6,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
+import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
   loadPretAvailabilityData,
@@ -94,9 +94,9 @@ function normalizeSameStageJoinPolicy(value) {
 
 function normalizeExpAllocator(value) {
   const allocator = String(value || 'balanced').toLowerCase();
-  if (!['balanced', 'boss-aware-soft', 'boss-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(
-      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, or boss-aware.`
+      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, or breakpoint-aware.`
     );
   }
   return allocator;
@@ -192,8 +192,20 @@ async function loadExpContext(
   const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
   const normalizedExpAllocator = normalizeExpAllocator(expAllocator);
   const bossAwareSoftLevelScale = Number(arg('soft-level-scale', '8'));
+  const breakpointBossHorizon = Number(arg('breakpoint-boss-horizon', '4'));
+  const breakpointLevelLookahead = Number(arg('breakpoint-level-lookahead', '12'));
+  const breakpointDiscount = Number(arg('breakpoint-discount', '0.72'));
   if (!Number.isFinite(bossAwareSoftLevelScale) || bossAwareSoftLevelScale <= 0) {
     throw new Error(`Invalid --soft-level-scale: ${bossAwareSoftLevelScale}`);
+  }
+  if (!Number.isInteger(breakpointBossHorizon) || breakpointBossHorizon < 1) {
+    throw new Error(`Invalid --breakpoint-boss-horizon: ${breakpointBossHorizon}`);
+  }
+  if (!Number.isInteger(breakpointLevelLookahead) || breakpointLevelLookahead < 1) {
+    throw new Error(`Invalid --breakpoint-level-lookahead: ${breakpointLevelLookahead}`);
+  }
+  if (!Number.isFinite(breakpointDiscount) || breakpointDiscount <= 0 || breakpointDiscount > 1) {
+    throw new Error(`Invalid --breakpoint-discount: ${breakpointDiscount}`);
   }
   if (profile === 'ace') {
     return {
@@ -203,6 +215,9 @@ async function loadExpContext(
       sameStageJoinPolicy: normalizedSameStageJoinPolicy,
       expAllocator: normalizedExpAllocator,
       bossAwareSoftLevelScale,
+      breakpointBossHorizon,
+      breakpointLevelLookahead,
+      breakpointDiscount,
       world: null,
     };
   }
@@ -228,6 +243,9 @@ async function loadExpContext(
     sameStageJoinPolicy: normalizedSameStageJoinPolicy,
     expAllocator: normalizedExpAllocator,
     bossAwareSoftLevelScale,
+    breakpointBossHorizon,
+    breakpointLevelLookahead,
+    breakpointDiscount,
     world,
   };
 }
@@ -545,6 +563,117 @@ function orderCandidatesForBoss(candidates, boss, levelsByCandidate = null) {
   });
 }
 
+function summarizeMemberUsage(candidates, rows) {
+  const byKey = new Map(candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const summary = {};
+  for (const candidate of candidates) {
+    const key = candidateIdentity(candidate);
+    summary[key] = {
+      species: candidate.species,
+      mandatoryStarter: candidate.exclusiveGroup === 'starter',
+      bossesAvailable: 0,
+      bossesUsed: 0,
+      bossesUsedInWins: 0,
+      runsAvailable: 0,
+      runsUsed: 0,
+      winningRunsUsed: 0,
+      appearances: 0,
+      leadStarts: 0,
+      moveUses: 0,
+      activeTurns: 0,
+      faints: 0,
+      winningMoveUses: 0,
+      winningActiveTurns: 0,
+      peakUseRate: 0,
+      peakWinningUseRate: 0,
+      peakMovesPerRun: 0,
+      peakActiveTurnsPerRun: 0,
+      peakWinningActiveTurnsPerRun: 0,
+      bossUsage: [],
+    };
+  }
+
+  for (const row of rows || []) {
+    for (const [key, usage] of Object.entries(row.p1Usage || {})) {
+      if (!summary[key]) {
+        const candidate = byKey.get(key);
+        summary[key] = {
+          species: candidate?.species || key,
+          mandatoryStarter: candidate?.exclusiveGroup === 'starter',
+          bossesAvailable: 0,
+          bossesUsed: 0,
+          bossesUsedInWins: 0,
+          runsAvailable: 0,
+          runsUsed: 0,
+          winningRunsUsed: 0,
+          appearances: 0,
+          leadStarts: 0,
+          moveUses: 0,
+          activeTurns: 0,
+          faints: 0,
+          winningMoveUses: 0,
+          winningActiveTurns: 0,
+          peakUseRate: 0,
+          peakWinningUseRate: 0,
+          peakMovesPerRun: 0,
+          peakActiveTurnsPerRun: 0,
+          peakWinningActiveTurnsPerRun: 0,
+          bossUsage: [],
+        };
+      }
+      const target = summary[key];
+      const available = Number(usage.runsAvailable || 0);
+      const used = Number(usage.runsUsed || 0);
+      const winningUsed = Number(usage.winningRunsUsed || 0);
+      const moves = Number(usage.moveUses || 0);
+      const activeTurns = Number(usage.activeTurns || 0);
+      const winningActiveTurns = Number(usage.winningActiveTurns || 0);
+      if (available > 0) {
+        target.bossesAvailable += 1;
+        if (used > 0) target.bossesUsed += 1;
+        if (winningUsed > 0) target.bossesUsedInWins += 1;
+        target.peakUseRate = Math.max(target.peakUseRate, used / available);
+        target.peakWinningUseRate = Math.max(target.peakWinningUseRate, winningUsed / available);
+        target.peakMovesPerRun = Math.max(target.peakMovesPerRun, moves / available);
+        target.peakActiveTurnsPerRun = Math.max(target.peakActiveTurnsPerRun, activeTurns / available);
+        target.peakWinningActiveTurnsPerRun = Math.max(
+          target.peakWinningActiveTurnsPerRun,
+          winningActiveTurns / available,
+        );
+      }
+      target.runsAvailable += available;
+      target.runsUsed += used;
+      target.winningRunsUsed += winningUsed;
+      target.appearances += Number(usage.appearances || 0);
+      target.leadStarts += Number(usage.leadStarts || 0);
+      target.moveUses += moves;
+      target.activeTurns += activeTurns;
+      target.faints += Number(usage.faints || 0);
+      target.winningMoveUses += Number(usage.winningMoveUses || 0);
+      target.winningActiveTurns += winningActiveTurns;
+      target.bossUsage.push({
+        boss: row.boss,
+        runsAvailable: available,
+        runsUsed: used,
+        winningRunsUsed: winningUsed,
+        moveUses: moves,
+        activeTurns,
+        winningActiveTurns,
+      });
+    }
+  }
+
+  for (const target of Object.values(summary)) {
+    target.useRate = target.runsAvailable ? target.runsUsed / target.runsAvailable : 0;
+    target.winningUseRate = target.runsAvailable ? target.winningRunsUsed / target.runsAvailable : 0;
+    target.movesPerAvailableRun = target.runsAvailable ? target.moveUses / target.runsAvailable : 0;
+    target.activeTurnsPerAvailableRun = target.runsAvailable ? target.activeTurns / target.runsAvailable : 0;
+    target.winningActiveTurnsPerAvailableRun =
+      target.runsAvailable ? target.winningActiveTurns / target.runsAvailable : 0;
+  }
+  return summary;
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -563,6 +692,10 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         allocator: expContext?.expAllocator || 'balanced',
         levelUtility: candidateBossUtility,
         bossAwareSoftLevelScale: expContext?.bossAwareSoftLevelScale || 8,
+        breakpointBossHorizon: expContext?.breakpointBossHorizon || 4,
+        breakpointLevelLookahead: expContext?.breakpointLevelLookahead || 12,
+        breakpointDiscount: expContext?.breakpointDiscount || 0.72,
+        activationTargets: expContext?.activationTargets || [],
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -648,6 +781,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     });
   }
   const meanWinRate = weightedRuns ? weightedWins / weightedRuns : 0;
+  const memberUsage = summarizeMemberUsage(candidates, rows);
   const worstBossWinRate = rows.length
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
@@ -693,6 +827,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     purchasablePlan,
     purchaseCosts,
     resourceBudget,
+    memberUsage,
     rows,
   };
 }
@@ -1028,6 +1163,7 @@ function searchResultRow(team, evaluation) {
     purchasablePlan: evaluation.purchasablePlan,
     purchaseCosts: evaluation.purchaseCosts,
     resourceBudget: evaluation.resourceBudget,
+    memberUsage: evaluation.memberUsage,
     bosses: evaluation.rows.map(row => ({
       boss: row.boss,
       wins: row.wins,
@@ -1241,6 +1377,134 @@ function selectCandidateScreenRows(rows, width, objective = 'mean') {
   return selected.slice(0, width);
 }
 
+function usageForCandidate(evaluation, candidate) {
+  const usage = evaluation?.memberUsage?.[candidateIdentity(candidate)] || null;
+  if (!usage) return null;
+  return {
+    bossesAvailable: Number(usage.bossesAvailable || 0),
+    bossesUsed: Number(usage.bossesUsed || 0),
+    bossesUsedInWins: Number(usage.bossesUsedInWins || 0),
+    runsAvailable: Number(usage.runsAvailable || 0),
+    runsUsed: Number(usage.runsUsed || 0),
+    winningRunsUsed: Number(usage.winningRunsUsed || 0),
+    winningActiveTurns: Number(usage.winningActiveTurns || 0),
+    useRate: Number(usage.useRate || 0),
+    winningUseRate: Number(usage.winningUseRate || 0),
+  };
+}
+
+function supportedContributionBosses(ablation, usage) {
+  if (!ablation || !usage) return [];
+  const winningBosses = new Set(
+    (usage.bossUsage || [])
+      .filter(row => Number(row.winningRunsUsed || 0) > 0)
+      .map(row => row.boss)
+  );
+  return (ablation.topHelpedBosses || [])
+    .filter(row => Number(row.delta || 0) > 0 && winningBosses.has(row.boss))
+    .sort((a, b) => Number(b.delta || 0) - Number(a.delta || 0) || a.boss.localeCompare(b.boss));
+}
+
+async function memberContributionProfile(
+  state,
+  evaluateTeamAtRuns,
+  requestedRuns,
+  requiredCandidate = null,
+) {
+  const members = [];
+  const requiredKey = requiredCandidate ? candidateIdentity(requiredCandidate) : null;
+  // Contribution must be paired at the same sampling density. In particular,
+  // do not compare a final 20-run full team against a 5-run ablation.
+  const contributionFull = await evaluateTeamAtRuns(state.team, requestedRuns);
+
+  for (const candidate of state.team) {
+    const key = candidateIdentity(candidate);
+    const usageRaw = contributionFull?.memberUsage?.[key] || null;
+    const usage = usageForCandidate(contributionFull, candidate);
+    if (requiredKey && key === requiredKey) {
+      members.push({
+        species: candidate.species,
+        mandatoryStarter: true,
+        meaningful: Number(usage?.winningRunsUsed || 0) > 0,
+        usage,
+        supportedBosses: [],
+        supportedBossCount: 0,
+        maxSupportedBossWinRateGain: 0,
+      });
+      continue;
+    }
+
+    const reduced = state.team.filter(mon => candidateIdentity(mon) !== key);
+    const removed = await evaluateTeamAtRuns(reduced, requestedRuns);
+    const ablation = memberAblationSummary(contributionFull, removed, candidate.species);
+    const winningBosses = new Set(
+      (usageRaw?.bossUsage || [])
+        .filter(row => Number(row.winningRunsUsed || 0) > 0)
+        .map(row => row.boss)
+    );
+    const supportedBosses = (ablation.topHelpedBosses || [])
+      .filter(row => Number(row.delta || 0) > 0 && winningBosses.has(row.boss))
+      .sort((a, b) => Number(b.delta || 0) - Number(a.delta || 0) || a.boss.localeCompare(b.boss));
+    const maxSupportedBossWinRateGain = Number(supportedBosses[0]?.delta || 0);
+    members.push({
+      species: candidate.species,
+      mandatoryStarter: false,
+      meaningful: supportedBosses.length > 0,
+      usage,
+      supportedBosses,
+      supportedBossCount: supportedBosses.length,
+      maxSupportedBossWinRateGain,
+      ablation: {
+        scoreDelta: ablation.scoreDelta,
+        geometricDelta: ablation.geometricDelta,
+        coverageDelta: ablation.coverageDelta,
+        bottom5Delta: ablation.bottom5Delta,
+        worstBossDelta: ablation.worstBossDelta,
+        bossesHelped: ablation.bossesHelped,
+        bossesHurt: ablation.bossesHurt,
+        maxBossWinRateGain: ablation.maxBossWinRateGain,
+      },
+    });
+  }
+
+  const elective = members.filter(member => !member.mandatoryStarter);
+  const meaningfulElective = elective.filter(member => member.meaningful);
+  const weakestSupportedBossGain = elective.length
+    ? Math.min(...elective.map(member => Number(member.maxSupportedBossWinRateGain || 0)))
+    : 0;
+  const totalSupportedBossGain = elective.reduce(
+    (sum, member) => sum + Number(member.maxSupportedBossWinRateGain || 0),
+    0,
+  );
+
+  return {
+    requestedRuns,
+    electiveMemberCount: elective.length,
+    meaningfulElectiveCount: meaningfulElective.length,
+    allElectiveMeaningful: elective.length > 0 && meaningfulElective.length === elective.length,
+    weakestSupportedBossGain,
+    totalSupportedBossGain,
+    members,
+  };
+}
+
+function memberContributionCompare(a, b, objective = 'story-clear') {
+  const ac = a.memberContribution || {};
+  const bc = b.memberContribution || {};
+  if (Number(ac.meaningfulElectiveCount || 0) !== Number(bc.meaningfulElectiveCount || 0)) {
+    return Number(bc.meaningfulElectiveCount || 0) - Number(ac.meaningfulElectiveCount || 0);
+  }
+  if (Number(ac.weakestSupportedBossGain || 0) !== Number(bc.weakestSupportedBossGain || 0)) {
+    return Number(bc.weakestSupportedBossGain || 0) - Number(ac.weakestSupportedBossGain || 0);
+  }
+  const storyOrder = evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
+  if (storyOrder !== 0) return storyOrder;
+  if (Number(ac.totalSupportedBossGain || 0) !== Number(bc.totalSupportedBossGain || 0)) {
+    return Number(bc.totalSupportedBossGain || 0) - Number(ac.totalSupportedBossGain || 0);
+  }
+  return 0;
+}
+
 async function runBeamSearch({
   candidates,
   story,
@@ -1257,6 +1521,8 @@ async function runBeamSearch({
   grindPolicy = 'none',
   evaluationCache = null,
   objective = 'mean',
+  memberContributionRerank = false,
+  contributionRuns = null,
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -1348,7 +1614,37 @@ async function runBeamSearch({
     a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
   );
 
-  const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
+  const baselineState = finalStates[0] || null;
+  const normalizedContributionRuns = Math.max(
+    1,
+    Math.floor(Number(contributionRuns || finalRuns || runs)),
+  );
+  if (memberContributionRerank) {
+    for (const state of finalStates) {
+      state.memberContribution = await memberContributionProfile(
+        state,
+        evaluateTeamAtRuns,
+        normalizedContributionRuns,
+        requiredCandidate,
+      );
+    }
+    finalStates.sort((a, b) =>
+      memberContributionCompare(a, b, objective) ||
+      evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
+      a.team.map(x => x.species).sort().join('|').localeCompare(b.team.map(x => x.species).sort().join('|'))
+    );
+  }
+
+  const top = finalStates.map(state => ({
+    ...searchResultRow(state.team, state.evaluation),
+    memberContribution: state.memberContribution || null,
+  }));
+  const baselineTop = baselineState
+    ? {
+        ...searchResultRow(baselineState.team, baselineState.evaluation),
+        memberContribution: baselineState.memberContribution || null,
+      }
+    : null;
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
@@ -1372,6 +1668,9 @@ async function runBeamSearch({
     finalRescoredTeams: finalStates.length,
     finalRunsPerBoss: finalRuns,
     objective,
+    memberContributionRerank: Boolean(memberContributionRerank),
+    contributionRunsPerBoss: memberContributionRerank ? normalizedContributionRuns : null,
+    baselineTop,
     paretoFront: paretoFront(top),
     top,
   };
@@ -1397,6 +1696,8 @@ async function cmdSearch() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const objective = normalizeSearchObjective(arg('objective', 'mean'));
+  const memberContributionRerank = arg('member-contribution-rerank', 'false') === 'true';
+  const contributionRuns = Number(arg('contribution-runs', String(finalRuns)));
   const story = await loadStory();
 
   let candidates;
@@ -1436,6 +1737,8 @@ async function cmdSearch() {
       expContext,
       grindPolicy,
       objective,
+      memberContributionRerank,
+      contributionRuns,
     });
     console.log(JSON.stringify({
       pool: poolPath,
@@ -1692,6 +1995,8 @@ async function cmdOptimize() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
   const objective = normalizeSearchObjective(arg('objective', 'mean'));
+  const memberContributionRerank = arg('member-contribution-rerank', 'false') === 'true';
+  const contributionRuns = Number(arg('contribution-runs', String(finalRuns)));
 
   const story = await loadStory();
   const moveAccess = await loadMoveAccess(resourceProfile, spendPolicy);
@@ -1714,6 +2019,8 @@ async function cmdOptimize() {
     beamWidth,
     candidateCap,
     teamSize,
+    memberContributionRerank,
+    contributionRunsPerBoss: memberContributionRerank ? contributionRuns : null,
     versions: {},
   };
 
@@ -1762,11 +2069,16 @@ async function cmdOptimize() {
         expContext,
         grindPolicy,
         objective,
+        memberContributionRerank,
+        contributionRuns,
       });
       output.versions[version].starters[requiredCandidate.species] = {
         scannedCandidates: result.scannedCandidates,
         screenedCandidates: result.screenedCandidates,
         evaluatedTeams: result.evaluatedTeams,
+        baselineTop: result.baselineTop,
+        memberContributionRerank: result.memberContributionRerank,
+        contributionRunsPerBoss: result.contributionRunsPerBoss,
         paretoFront: result.paretoFront,
         top: result.top,
       };
@@ -2459,8 +2771,26 @@ async function cmdExpAllocatorSmoke() {
     allocator: 'boss-aware',
     levelUtility: candidateBossUtility,
   });
+  const breakpointAware = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'breakpoint-aware',
+    levelUtility: candidateBossUtility,
+  });
+  const breakpointAwareReversed = buildTeamExpSchedule({
+    candidates: [...team].reverse(),
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'breakpoint-aware',
+    levelUtility: candidateBossUtility,
+  });
 
-  for (const schedule of [bossAwareSoft, bossAware]) {
+  for (const schedule of [bossAwareSoft, bossAware, breakpointAware, breakpointAwareReversed]) {
     if (balanced.totalNaturalExp !== schedule.totalNaturalExp) {
       throw new Error(
         `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${schedule.totalNaturalExp}`
@@ -2470,6 +2800,52 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(balanced.finalLevels) === JSON.stringify(bossAware.finalLevels)) {
     throw new Error('Boss-aware allocator produced the same final level allocation as balanced');
   }
+  if (JSON.stringify(breakpointAware.finalLevels) !== JSON.stringify(breakpointAwareReversed.finalLevels)) {
+    throw new Error(
+      `Breakpoint-aware allocator depends on team order: ${JSON.stringify(breakpointAware.finalLevels)} != ${JSON.stringify(breakpointAwareReversed.finalLevels)}`
+    );
+  }
+
+  const breakpointStates = [
+    {
+      key: 'breakpoint',
+      candidate: { species: 'BreakpointMon' },
+      growthRate: 'MEDIUM_FAST',
+      level: 50,
+      exp: expAtLevel('MEDIUM_FAST', 50),
+      unknown: false,
+    },
+    {
+      key: 'steady',
+      candidate: { species: 'SteadyMon' },
+      growthRate: 'MEDIUM_FAST',
+      level: 50,
+      exp: expAtLevel('MEDIUM_FAST', 50),
+      unknown: false,
+    },
+  ];
+  const syntheticUtility = (candidate, _boss, level) => {
+    if (candidate.species === 'BreakpointMon') return level >= 52 ? 120 : 8;
+    return 8 + (level - 50) * 0.2;
+  };
+  const syntheticAmount =
+    expAtLevel('MEDIUM_FAST', 52) - expAtLevel('MEDIUM_FAST', 50);
+  const synthetic = allocateBreakpointAwareExp(
+    breakpointStates,
+    syntheticAmount,
+    [{ label: 'next' }, { label: 'later' }],
+    syntheticUtility,
+    { bossHorizon: 2, levelLookahead: 4, discount: 0.72 },
+  );
+  if (synthetic.allocated !== syntheticAmount || synthetic.unallocated !== 0) {
+    throw new Error(`Breakpoint allocator failed EXP conservation: ${JSON.stringify(synthetic)}`);
+  }
+  if (breakpointStates[0].level < 52 || breakpointStates[1].level !== 50) {
+    throw new Error(
+      `Breakpoint allocator failed to fund a nearby two-level breakpoint: ${JSON.stringify(breakpointStates)}`
+    );
+  }
+
   const levelSpread = schedule => {
     const levels = Object.values(schedule.finalLevels).map(Number);
     return levels.length ? Math.max(...levels) - Math.min(...levels) : 0;
@@ -2490,6 +2866,18 @@ async function cmdExpAllocatorSmoke() {
       finalLevels: bossAwareSoft.finalLevels,
     },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
+    breakpointAware: {
+      allocator: breakpointAware.allocator,
+      bossHorizon: breakpointAware.breakpointBossHorizon,
+      levelLookahead: breakpointAware.breakpointLevelLookahead,
+      discount: breakpointAware.breakpointDiscount,
+      levelSpread: levelSpread(breakpointAware),
+      finalLevels: breakpointAware.finalLevels,
+    },
+    syntheticBreakpoint: {
+      allocated: synthetic.allocated,
+      finalLevels: Object.fromEntries(breakpointStates.map(state => [state.key, state.level])),
+    },
   }, null, 2));
 }
 
@@ -2645,6 +3033,765 @@ async function cmdSwitchSmoke() {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
   console.log(JSON.stringify(result, null, 2));
+}
+
+async function cmdAllocatorCrossCompare() {
+  const runs = Number(arg('runs', '20'));
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const [moveAccess, bossAwareContext, breakpointContext] = await Promise.all([
+    loadMoveAccess('money', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'boss-aware',
+    ),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'midpoint',
+      'map-order',
+      'breakpoint-aware',
+    ),
+  ]);
+
+  const teams = {
+    bossAwareTop: ['Cyndaquil', 'Chinchou', 'Abra', 'Magikarp', 'Pidgey', 'Qwilfish'],
+    breakpointTop: ['Cyndaquil', 'Lapras', 'Chinchou', 'Sentret', 'Magnemite', 'Hoothoot'],
+  };
+  const allocators = {
+    bossAware: bossAwareContext,
+    breakpointAware: breakpointContext,
+  };
+
+  const results = {};
+  for (const [teamLabel, names] of Object.entries(teams)) {
+    const candidates = selectByNames(pool.candidates, names);
+    results[teamLabel] = { team: names, conditions: {} };
+    for (const [allocatorLabel, expContext] of Object.entries(allocators)) {
+      const evaluation = await evaluateCandidatesWithMoveAccess(
+        candidates,
+        story.bosses,
+        runs,
+        moveAccess,
+        expContext,
+        'none',
+      );
+      results[teamLabel].conditions[allocatorLabel] = {
+        expAllocator: expContext.expAllocator,
+        score: evaluation.score,
+        worstBossWinRate: evaluation.worstBossWinRate,
+        bottom5BossWinRate: evaluation.bottom5BossWinRate,
+        storyClearGeometricScore: evaluation.storyClearGeometricScore,
+        storyClearCoverageScore: evaluation.storyClearCoverageScore,
+        finalTeam: evaluation.finalTeam,
+        finalLevels: evaluation.finalLevels,
+        purchaseCosts: evaluation.purchaseCosts,
+        resourceBudget: evaluation.resourceBudget,
+        bosses: evaluation.rows.map(row => ({
+          boss: row.boss,
+          wins: row.wins,
+          losses: row.losses,
+          ties: row.ties,
+          winRate: row.winRate,
+          playerLevels: row.playerLevels,
+          playerLead: row.playerLead,
+        })),
+      };
+    }
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'controlled EXP allocator 2x2 cross-test with fixed teams, seeds, route, moves, trainer AI, and player policy',
+    version: 'HEARTGOLD',
+    starter: 'Cyndaquil',
+    runsPerBoss: runs,
+    resourceProfile: 'money',
+    spendPolicy: 'natural',
+    expProfile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocators: {
+      bossAware: 'existing immediate next-boss utility per EXP allocator',
+      breakpointAware: 'boss-aware baseline plus actual move/evolution breakpoint bonus across a 4-boss, 12-level lookahead',
+    },
+    results,
+  }, null, 2));
+}
+
+
+function contributionUsageSummary(evaluation) {
+  const members = Object.values(evaluation.memberUsage || {});
+  const rows = members.map(member => ({
+    species: member.species,
+    mandatoryStarter: Boolean(member.mandatoryStarter),
+    bossesUsedInWins: Number(member.bossesUsedInWins || 0),
+    winningMoveUses: Number(member.winningMoveUses || 0),
+    winningActiveTurns: Number(member.winningActiveTurns || 0),
+    peakWinningUseRate: Number(member.peakWinningUseRate || 0),
+    peakWinningActiveTurnsPerRun: Number(member.peakWinningActiveTurnsPerRun || 0),
+  }));
+  const nonStarter = rows.filter(row => !row.mandatoryStarter);
+  const target = nonStarter.length ? nonStarter : rows;
+  return {
+    members: rows,
+    membersWithWinningUse: target.filter(row => row.bossesUsedInWins > 0).length,
+    membersWithWinningMoves: target.filter(row => row.winningMoveUses > 0).length,
+    membersWithWinningActiveTurns: target.filter(row => row.winningActiveTurns > 0).length,
+    minPeakWinningUseRate: target.length
+      ? Math.min(...target.map(row => row.peakWinningUseRate))
+      : 0,
+    minPeakWinningActiveTurnsPerRun: target.length
+      ? Math.min(...target.map(row => row.peakWinningActiveTurnsPerRun))
+      : 0,
+  };
+}
+
+function contributionUsageCompare(a, b) {
+  const aa = contributionUsageSummary(a);
+  const bb = contributionUsageSummary(b);
+  if (aa.membersWithWinningMoves !== bb.membersWithWinningMoves) {
+    return bb.membersWithWinningMoves - aa.membersWithWinningMoves;
+  }
+  if (aa.membersWithWinningActiveTurns !== bb.membersWithWinningActiveTurns) {
+    return bb.membersWithWinningActiveTurns - aa.membersWithWinningActiveTurns;
+  }
+  if (aa.membersWithWinningUse !== bb.membersWithWinningUse) {
+    return bb.membersWithWinningUse - aa.membersWithWinningUse;
+  }
+  if (aa.minPeakWinningActiveTurnsPerRun !== bb.minPeakWinningActiveTurnsPerRun) {
+    return bb.minPeakWinningActiveTurnsPerRun - aa.minPeakWinningActiveTurnsPerRun;
+  }
+  if (aa.minPeakWinningUseRate !== bb.minPeakWinningUseRate) {
+    return bb.minPeakWinningUseRate - aa.minPeakWinningUseRate;
+  }
+  return 0;
+}
+
+function storyNoRegression(candidate, baseline) {
+  if (!candidate || !baseline) return false;
+  const epsilon = 1e-12;
+  return (
+    Number(candidate.storyClearGeometricScore || 0) + epsilon >=
+      Number(baseline.storyClearGeometricScore || 0) &&
+    Number(candidate.storyClearCoverageScore || 0) + epsilon >=
+      Number(baseline.storyClearCoverageScore || 0) &&
+    Number(candidate.bottom5BossWinRate || 0) + epsilon >=
+      Number(baseline.bottom5BossWinRate || 0) &&
+    Number(candidate.worstBossWinRate || 0) + epsilon >=
+      Number(baseline.worstBossWinRate || 0) &&
+    Number(candidate.score || 0) + epsilon >= Number(baseline.score || 0)
+  );
+}
+
+function contributionParetoDominates(a, b) {
+  const ac = a.contribution || {};
+  const bc = b.contribution || {};
+  const aCapture = Number(a.evaluation.captureSearch?.expectedEncounters || 0);
+  const bCapture = Number(b.evaluation.captureSearch?.expectedEncounters || 0);
+  const atLeastAsGood =
+    a.evaluation.storyClearGeometricScore >= b.evaluation.storyClearGeometricScore &&
+    a.evaluation.storyClearCoverageScore >= b.evaluation.storyClearCoverageScore &&
+    Number(ac.meaningfulElectiveCount || 0) >= Number(bc.meaningfulElectiveCount || 0) &&
+    Number(ac.weakestSupportedBossGain || 0) >= Number(bc.weakestSupportedBossGain || 0) &&
+    aCapture <= bCapture;
+  const strictlyBetter =
+    a.evaluation.storyClearGeometricScore > b.evaluation.storyClearGeometricScore ||
+    a.evaluation.storyClearCoverageScore > b.evaluation.storyClearCoverageScore ||
+    Number(ac.meaningfulElectiveCount || 0) > Number(bc.meaningfulElectiveCount || 0) ||
+    Number(ac.weakestSupportedBossGain || 0) > Number(bc.weakestSupportedBossGain || 0) ||
+    aCapture < bCapture;
+  return atLeastAsGood && strictlyBetter;
+}
+
+async function cmdMeaningfulSix() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const replaceOnly = String(arg('replace', '')).trim();
+  const runs = Number(arg('runs', '1'));
+  const finalRuns = Number(arg('final-runs', '20'));
+  const candidateCap = Number(arg('candidate-cap', '24'));
+  const shortlistCap = Number(arg('shortlist-cap', '24'));
+  const finalistCap = Number(arg('finalist-cap', '8'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) {
+    throw new Error('meaningful-six requires an existing six-member --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const baselineTeam = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(baselineTeam, starterName);
+  if (!starter) throw new Error('meaningful-six baseline must contain the selected starter');
+  if (!validateCandidateTeam(baselineTeam) || !teamRespectsExclusiveGroups(baselineTeam)) {
+    throw new Error('meaningful-six baseline violates team constraints');
+  }
+
+  const screenRows = await screenCandidates(
+    pool.candidates,
+    story,
+    moveAccess,
+    runs,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const eligibleScreenRows = screenRows.filter(row =>
+    row.candidate.exclusiveGroup !== 'starter' ||
+    candidateIdentity(row.candidate) === candidateIdentity(starter)
+  );
+  const screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap, objective)
+    .map(row => row.candidate);
+
+  const neighborhood = [];
+  const seen = new Set();
+  async function addTeam(team, source) {
+    const key = team.map(candidateIdentity).sort().join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    neighborhood.push({ team, evaluation, source });
+  }
+
+  await addTeam(baselineTeam, 'baseline');
+  for (const removed of baselineTeam) {
+    if (candidateIdentity(removed) === candidateIdentity(starter)) continue;
+    if (replaceOnly && removed.species !== replaceOnly) continue;
+    const kept = baselineTeam.filter(mon => candidateIdentity(mon) !== candidateIdentity(removed));
+    const existing = new Set(kept.map(candidateIdentity));
+    for (const replacement of screened) {
+      if (existing.has(candidateIdentity(replacement))) continue;
+      if (replacement.exclusiveGroup === 'starter') continue;
+      const team = [...kept, replacement];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      await addTeam(team, `replace:${removed.species}->${replacement.species}`);
+    }
+  }
+
+  const storyRanked = [...neighborhood].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const shortlist = storyRanked.slice(0, Math.max(1, shortlistCap));
+  const usageRanked = [...shortlist].sort((a, b) =>
+    contributionUsageCompare(a.evaluation, b.evaluation) ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const finalists = [];
+  const finalistKeys = new Set();
+  function addFinalist(state) {
+    if (!state || finalists.length >= finalistCap) return;
+    const key = stateTieKey(state);
+    if (finalistKeys.has(key)) return;
+    finalistKeys.add(key);
+    finalists.push(state);
+  }
+  addFinalist(storyRanked.find(state => state.source === 'baseline'));
+  const storySlots = Math.max(1, Math.ceil(finalistCap / 2));
+  for (const state of storyRanked.slice(0, storySlots)) addFinalist(state);
+  for (const state of usageRanked) addFinalist(state);
+  for (const state of storyRanked) addFinalist(state);
+
+  const finalEvaluationCache = new Map();
+  async function evaluateFinalTeamAtRuns(team, requestedRuns) {
+    const key = team.map(candidateIdentity).sort().join('|') +
+      `@runs=${requestedRuns}@objective=${objective}`;
+    if (!finalEvaluationCache.has(key)) {
+      finalEvaluationCache.set(
+        key,
+        await evaluateCandidates(
+          team,
+          story.bosses,
+          requestedRuns,
+          moveAccess,
+          expContext,
+          grindPolicy,
+          objective,
+        )
+      );
+    }
+    return finalEvaluationCache.get(key);
+  }
+
+  const rescored = [];
+  for (const state of finalists) {
+    const evaluation = await evaluateFinalTeamAtRuns(state.team, finalRuns);
+    const contribution = await memberContributionProfile(
+      { team: state.team, evaluation },
+      evaluateFinalTeamAtRuns,
+      finalRuns,
+      starter,
+    );
+    rescored.push({
+      team: state.team,
+      source: state.source,
+      evaluation,
+      contribution,
+      usage: contributionUsageSummary(evaluation),
+    });
+  }
+
+  const baseline = rescored.find(row =>
+    row.team.map(candidateIdentity).sort().join('|') ===
+      baselineTeam.map(candidateIdentity).sort().join('|')
+  ) || null;
+  const meaningfulRanked = [...rescored].sort((a, b) =>
+    memberContributionCompare(
+      { evaluation: a.evaluation, memberContribution: a.contribution },
+      { evaluation: b.evaluation, memberContribution: b.contribution },
+      objective,
+    ) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const storySafeRanked = baseline
+    ? rescored
+        .filter(row => storyNoRegression(row.evaluation, baseline.evaluation))
+        .sort((a, b) => {
+          const ac = a.contribution || {};
+          const bc = b.contribution || {};
+          if (Number(ac.meaningfulElectiveCount || 0) !== Number(bc.meaningfulElectiveCount || 0)) {
+            return Number(bc.meaningfulElectiveCount || 0) - Number(ac.meaningfulElectiveCount || 0);
+          }
+          if (Number(ac.weakestSupportedBossGain || 0) !== Number(bc.weakestSupportedBossGain || 0)) {
+            return Number(bc.weakestSupportedBossGain || 0) - Number(ac.weakestSupportedBossGain || 0);
+          }
+          const storyOrder = evaluationObjectiveCompare(a.evaluation, b.evaluation, objective);
+          if (storyOrder !== 0) return storyOrder;
+          const captureOrder =
+            Number(a.evaluation.captureSearch?.expectedEncounters || 0) -
+            Number(b.evaluation.captureSearch?.expectedEncounters || 0);
+          if (captureOrder !== 0) return captureOrder;
+          if (Number(ac.totalSupportedBossGain || 0) !== Number(bc.totalSupportedBossGain || 0)) {
+            return Number(bc.totalSupportedBossGain || 0) - Number(ac.totalSupportedBossGain || 0);
+          }
+          return stateTieKey(a).localeCompare(stateTieKey(b));
+        })
+    : [];
+  const recommended = storySafeRanked[0] || baseline || meaningfulRanked[0] || null;
+  const pareto = rescored.filter((row, index) =>
+    !rescored.some((other, otherIndex) =>
+      index !== otherIndex && contributionParetoDominates(other, row)
+    )
+  ).sort((a, b) =>
+    memberContributionCompare(
+      { evaluation: a.evaluation, memberContribution: a.contribution },
+      { evaluation: b.evaluation, memberContribution: b.contribution },
+      objective,
+    ) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  function outputRow(row) {
+    if (!row) return null;
+    return {
+      team: row.team.map(mon => mon.species),
+      source: row.source,
+      evaluation: compactEvaluationForAblation(row.evaluation),
+      usage: row.usage,
+      contribution: row.contribution,
+    };
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'one-swap contribution-aware refinement of an existing six-member story team; recommendation is restricted to no-regression story candidates, and a member is meaningful only when removing it hurts at least one boss and that member is actually used in winning runs for a helped boss',
+    version,
+    starter: starter.species,
+    baselineTeam: baselineTeam.map(mon => mon.species),
+    replaceOnly: replaceOnly || null,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    runsPerBoss: runs,
+    finalRunsPerBoss: finalRuns,
+    candidateCap,
+    shortlistCap,
+    finalistCap,
+    screenedCandidates: screened.map(mon => mon.species),
+    neighborhoodEvaluated: neighborhood.length,
+    finalistsEvaluated: rescored.length,
+    baseline: outputRow(baseline),
+    meaningfulTop: outputRow(meaningfulRanked[0]),
+    recommendedTop: outputRow(recommended),
+    storySafeCandidateCount: storySafeRanked.length,
+    storySafeCandidates: storySafeRanked.map(outputRow),
+    paretoFront: pareto.map(outputRow),
+    finalists: meaningfulRanked.map(outputRow),
+  }, null, 2));
+}
+
+
+async function cmdTeamActivation() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const targetName = String(arg('target', 'Abra')).trim();
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('target-level', '16')))));
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) throw new Error('team-activation requires --team=A,B,C,D,E,F');
+  if (!Number.isFinite(targetLevel)) throw new Error('Invalid --target-level');
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-activation requires the selected starter in the team');
+  const target = team.find(mon => mon.species === targetName);
+  if (!target) throw new Error(`Activation target not found in team: ${targetName}`);
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('team-activation team violates team constraints');
+  }
+
+  const baseline = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const activatedContext = {
+    ...expContext,
+    activationTargets: [{ key: candidateIdentity(target), level: targetLevel }],
+  };
+  const activated = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    activatedContext,
+    grindPolicy,
+    objective,
+  );
+
+  const baselineByBoss = new Map((baseline.rows || []).map(row => [row.boss, row]));
+  const activatedByBoss = new Map((activated.rows || []).map(row => [row.boss, row]));
+  const bossDeltas = [...baselineByBoss.keys()].map(boss => {
+    const before = baselineByBoss.get(boss);
+    const after = activatedByBoss.get(boss);
+    return {
+      boss,
+      baselineWinRate: Number(before?.winRate || 0),
+      activatedWinRate: Number(after?.winRate || 0),
+      delta: Number(after?.winRate || 0) - Number(before?.winRate || 0),
+      baselineLevels: before?.playerLevels || {},
+      activatedLevels: after?.playerLevels || {},
+    };
+  });
+  const targetKey = candidateIdentity(target);
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'fixed-team activation-breakpoint test using the same natural EXP budget; EXP after target acquisition is preferentially invested until the requested level, then the normal allocator resumes',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    target: target.species,
+    targetKey,
+    targetLevel,
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    baseline: {
+      ...compactEvaluationForAblation(baseline),
+      naturalFinalLevels: baseline.expSchedule?.finalLevels || null,
+      targetUsage: baseline.memberUsage?.[targetKey] || null,
+      activation: baseline.expSchedule?.activationTargets || [],
+      totalActivationExp: Number(baseline.expSchedule?.totalActivationExp || 0),
+    },
+    activated: {
+      ...compactEvaluationForAblation(activated),
+      naturalFinalLevels: activated.expSchedule?.finalLevels || null,
+      targetUsage: activated.memberUsage?.[targetKey] || null,
+      activation: activated.expSchedule?.activationTargets || [],
+      totalActivationExp: Number(activated.expSchedule?.totalActivationExp || 0),
+    },
+    deltas: {
+      score: activated.score - baseline.score,
+      geometric: activated.storyClearGeometricScore - baseline.storyClearGeometricScore,
+      coverage: activated.storyClearCoverageScore - baseline.storyClearCoverageScore,
+      bottom5: activated.bottom5BossWinRate - baseline.bottom5BossWinRate,
+      worst: activated.worstBossWinRate - baseline.worstBossWinRate,
+    },
+    bossDeltas,
+  }, null, 2));
+}
+
+
+function compactEvaluationForAblation(evaluation) {
+  return {
+    score: evaluation.score,
+    worstBossWinRate: evaluation.worstBossWinRate,
+    bottom5BossWinRate: evaluation.bottom5BossWinRate,
+    storyClearGeometricScore: evaluation.storyClearGeometricScore,
+    storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    effectiveResourceProfile: evaluation.effectiveResourceProfile,
+    captureExpectedEncounters: evaluation.captureSearch?.expectedEncounters ?? null,
+    memberUsage: evaluation.memberUsage,
+  };
+}
+
+function memberAblationSummary(full, removed, species) {
+  const removedByBoss = new Map((removed.rows || []).map(row => [row.boss, row]));
+  const bossDeltas = (full.rows || []).map(row => {
+    const ablated = removedByBoss.get(row.boss);
+    const fullRate = Number(row.winRate || 0);
+    const removedRate = Number(ablated?.winRate || 0);
+    return {
+      boss: row.boss,
+      fullWinRate: fullRate,
+      withoutWinRate: removedRate,
+      delta: fullRate - removedRate,
+    };
+  });
+  const positive = bossDeltas.filter(row => row.delta > 1e-12);
+  const negative = bossDeltas.filter(row => row.delta < -1e-12);
+  const sortedPositive = [...positive].sort((a, b) => b.delta - a.delta || a.boss.localeCompare(b.boss));
+  const sortedNegative = [...negative].sort((a, b) => a.delta - b.delta || a.boss.localeCompare(b.boss));
+  return {
+    species,
+    scoreDelta: full.score - removed.score,
+    geometricDelta: full.storyClearGeometricScore - removed.storyClearGeometricScore,
+    coverageDelta: full.storyClearCoverageScore - removed.storyClearCoverageScore,
+    bottom5Delta: full.bottom5BossWinRate - removed.bottom5BossWinRate,
+    worstBossDelta: full.worstBossWinRate - removed.worstBossWinRate,
+    bossesHelped: positive.length,
+    bossesHurt: negative.length,
+    maxBossWinRateGain: sortedPositive[0]?.delta || 0,
+    maxBossWinRateLoss: sortedNegative[0]?.delta || 0,
+    topHelpedBosses: sortedPositive.slice(0, 8),
+    topHurtBosses: sortedNegative.slice(0, 8),
+    without: compactEvaluationForAblation(removed),
+  };
+}
+
+async function cmdTeamAblation() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length < 2) throw new Error('team-ablation requires --team=A,B,...');
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-ablation requires a starter in the selected team');
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('team-ablation team violates team constraints');
+  }
+
+  const full = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+  const members = [];
+  for (const candidate of team) {
+    if (candidateIdentity(candidate) === candidateIdentity(starter)) {
+      members.push({
+        species: candidate.species,
+        mandatoryStarter: true,
+        note: 'starter is mandatory for this route and is not ablated',
+      });
+      continue;
+    }
+    const reduced = team.filter(mon => candidateIdentity(mon) !== candidateIdentity(candidate));
+    const evaluation = await evaluateCandidates(
+      reduced,
+      story.bosses,
+      runs,
+      moveAccess,
+      expContext,
+      grindPolicy,
+      objective,
+    );
+    members.push(memberAblationSummary(full, evaluation, candidate.species));
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'member ablation of a fixed six-member story team; EXP and move resources are re-planned after removing each non-starter',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    full: compactEvaluationForAblation(full),
+    members,
+  }, null, 2));
+}
+
+
+async function cmdTeamUsage() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Number(arg('runs', '20'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'midpoint'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length < 2) throw new Error('team-usage requires --team=A,B,...');
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('team-usage requires the selected starter in the team');
+  const evaluation = await evaluateCandidates(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    objective,
+  );
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'actual battle participation instrumentation for a fixed story team',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    score: evaluation.score,
+    storyClearGeometricScore: evaluation.storyClearGeometricScore,
+    storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    memberUsage: evaluation.memberUsage,
+  }, null, 2));
 }
 
 async function cmdTrainerAiCompare() {
@@ -3078,6 +4225,11 @@ const commands = {
   'exp-smoke': cmdExpSmoke,
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
+  'allocator-cross-compare': cmdAllocatorCrossCompare,
+  'team-ablation': cmdTeamAblation,
+  'team-usage': cmdTeamUsage,
+  'team-activation': cmdTeamActivation,
+  'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
   'hm-smoke': cmdHmSmoke,
@@ -3088,7 +4240,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();

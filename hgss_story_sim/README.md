@@ -95,9 +95,10 @@ Natural EXP supports three deterministic allocation policies:
 
 - `balanced` (default): lowest-level-first, then lowest progress within the current level;
 - `boss-aware-soft`: uses the same next-boss utility signal but smoothly penalizes concentrating more levels onto a member that is already ahead of the lowest-level active teammate;
-- `boss-aware`: unrestricted specialization toward the next level with the best next-boss matchup utility per EXP-to-next-level, including type matchups, level-up move breakpoints and level-based evolutions.
+- `boss-aware`: unrestricted specialization toward the next level with the best next-boss matchup utility per EXP-to-next-level, including type matchups, level-up move breakpoints and level-based evolutions;
+- `breakpoint-aware`: keeps the existing boss-aware next-level score as the baseline, removes smooth level scaling when detecting future jumps, and adds a bounded bonus only for actual move/evolution matchup breakpoints across the future-boss horizon.
 
-The boss-aware score is intentionally a cheap training heuristic rather than a nested battle simulation, so search cost stays tractable. The soft policy uses a level-gap penalty scale of 8 by default; `--soft-level-scale=N` can adjust how quickly specialization is penalized. Use `--exp-allocator=balanced|boss-aware-soft|boss-aware` to compare sensitivity.
+The boss-aware scores are intentionally cheap training heuristics rather than nested battle simulation, so search cost stays tractable. The soft policy uses a level-gap penalty scale of 8 by default. Breakpoint-aware defaults to a 4-boss horizon, 12-level lookahead and 0.72 per-boss discount. Its breakpoint bonus is capped at twice the immediate boss-aware numerator, preventing distant low-level investments from overwhelming the current-boss signal; tune the horizon/lookahead/discount with `--breakpoint-boss-horizon`, `--breakpoint-level-lookahead` and `--breakpoint-discount`. Use `--exp-allocator=balanced|boss-aware-soft|boss-aware|breakpoint-aware` to compare sensitivity.
 
 Wild encounter entry levels now default to the midpoint of the source-backed min/max encounter range instead of assuming the highest possible encounter level. Fixed gifts/statics are unchanged. For sensitivity checks, the CLI exposes `--entry-level=min|midpoint|max` and `--same-stage-join=map-order|after-map-exp|before-map-exp`. `after-map-exp` is the conservative stage-level fallback; `before-map-exp` restores the previous optimistic same-stage behavior.
 
@@ -330,7 +331,7 @@ This is not yet a bit-perfect HGSS story emulator. Trainer AI now preserves sour
 - overworld TM coverage is incomplete;
 - `normal-route` is a canonical-map envelope, not yet a trainer-by-trainer proof of the exact mandatory/on-route subset;
 - `all-accessible` is an accessible-trainer EXP/money upper envelope;
-- EXP allocation can be balanced or boss-aware, but neither is a globally optimized switch-training schedule;
+- EXP allocation can be balanced, boss-aware, or breakpoint-aware, but none is a globally optimized switch-training schedule;
 - midpoint encounter levels reduce the previous max-level optimism, but encounter-level choice is still an explicit modeling policy;
 - the natural spending budget assumes all modeled pre-Whitney prize money can be reserved for TMs and does not yet subtract routine Poké Ball/healing-item purchases;
 - beam search is heuristic and does not prove the global optimum;
@@ -343,7 +344,7 @@ GitHub Actions currently checks:
 - syntax and source-backed acquisition validation
 - exact growth-curve smoke
 - source-backed natural EXP supply and real per-Pokémon battle levels
-- balanced vs boss-aware EXP allocation
+- balanced vs boss-aware vs breakpoint-aware EXP allocation
 - map-level acquisition timing and boss-window ordering
 - paid-grind EXP / expected-wild-battle accounting
 - starter-specific 30-battle route selection through Red
