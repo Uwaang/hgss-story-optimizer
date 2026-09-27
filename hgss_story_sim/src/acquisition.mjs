@@ -648,7 +648,14 @@ export async function buildRedOnlyCandidateForms({
   }
 
   const formMap = new Map();
-  function recordReachableForm(captureSpeciesConst, captureOption, targetSpeciesConst, evolutionMinLevel, path) {
+  function recordReachableForm(
+    captureSpeciesConst,
+    captureOption,
+    targetSpeciesConst,
+    evolutionMinLevel,
+    path,
+    evolutionSteps,
+  ) {
     const targetName = constantToName(targetSpeciesConst, 'SPECIES_');
     const rootName = familyRoot(targetSpeciesConst, parentByTarget);
     if (
@@ -673,6 +680,12 @@ export async function buildRedOnlyCandidateForms({
       targetSpecies: targetName,
       evolutionMinLevel,
       path: path.map(speciesConst => constantToName(speciesConst, 'SPECIES_')),
+      evolutionSteps: (evolutionSteps || []).map(step => ({
+        fromSpecies: constantToName(step.fromSpecies, 'SPECIES_'),
+        targetSpecies: constantToName(step.targetSpecies, 'SPECIES_'),
+        method: step.method,
+        param: step.param ?? null,
+      })),
       type: captureOption.type,
       map: captureOption.map,
       method: captureOption.method,
@@ -687,6 +700,12 @@ export async function buildRedOnlyCandidateForms({
       targetSpecies: targetName,
       minLevel: evolutionMinLevel,
       path: path.map(speciesConst => constantToName(speciesConst, 'SPECIES_')),
+      evolutionSteps: (evolutionSteps || []).map(step => ({
+        fromSpecies: constantToName(step.fromSpecies, 'SPECIES_'),
+        targetSpecies: constantToName(step.targetSpecies, 'SPECIES_'),
+        method: step.method,
+        param: step.param ?? null,
+      })),
     });
     formMap.set(key, row);
   }
@@ -697,6 +716,7 @@ export async function buildRedOnlyCandidateForms({
         speciesConst: captureSpeciesConst,
         evolutionMinLevel: 1,
         path: [captureSpeciesConst],
+        evolutionSteps: [],
       }];
       const bestThreshold = new Map();
 
@@ -711,6 +731,7 @@ export async function buildRedOnlyCandidateForms({
           current.speciesConst,
           current.evolutionMinLevel,
           current.path,
+          current.evolutionSteps,
         );
 
         for (const evo of evoByBase.get(current.speciesConst) || []) {
@@ -722,6 +743,15 @@ export async function buildRedOnlyCandidateForms({
             speciesConst: evo.target,
             evolutionMinLevel: Math.max(current.evolutionMinLevel, requiredLevel),
             path: [...current.path, evo.target],
+            evolutionSteps: [
+              ...(current.evolutionSteps || []),
+              {
+                fromSpecies: current.speciesConst,
+                targetSpecies: evo.target,
+                method: String(evo.method || ''),
+                param: evo.param ?? null,
+              },
+            ],
           });
         }
       }
@@ -772,7 +802,7 @@ export async function buildRedOnlyCandidateForms({
     familyCount: new Set(forms.map(row => row.familyId)).size,
     notes: [
       'Capture options include every source-backed wild/headbutt/manual level available by the target boss stage, not only the earliest story source.',
-      'For a requested common level, the search may use the highest legal capture level at or below that common level.',
+      'For a requested common level, the search may use the highest capture level that still leaves enough level-ups to complete every level-triggered evolution on the recorded path.',
       'Trade/stone/friendship and other HGSS-feasible non-level evolutions are treated as feasible without extra EXP cost; level evolutions still require their level threshold. DPPt-only field evolutions (magnetic field, Moss/Ice Rock, Beauty) are excluded.',
       'Legendary and mythical species are excluded by a curated Gen 1-4 set when excludeLegendary=true.',
     ],
