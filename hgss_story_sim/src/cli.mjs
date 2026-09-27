@@ -6005,19 +6005,50 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     { levelsByBattle },
   );
   const purchasablePlan = purchasable.assignments;
+  const routeBuildPlan = buildEqualLevelRouteBuildPlan(
+    candidates,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan,
+    levels,
+  );
+  const candidatesByKey = new Map(candidates.map(candidate => [candidateIdentity(candidate), candidate]));
   const rows = [];
   let weightedWins = 0;
   let weightedRuns = 0;
 
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const ordered = orderCandidatesForBoss(candidates, boss, levels);
-    const playerTeam = materializeCandidateTeam(
+    let playerTeam = materializeCandidateTeam(
       ordered,
       boss.stage,
       commonLevel,
       { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels },
     );
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+
+    playerTeam = playerTeam.map(mon => {
+      const key = mon._candidateKey || mon.species;
+      const candidate = candidatesByKey.get(key);
+      const build = routeBuildPlan[key];
+      let built = applyPlayerRouteBuild(mon, build);
+      if (candidate && build?.routeMoves) {
+        built = equalLevelRouteMovesAtStage(
+          built,
+          candidate,
+          boss,
+          moveAccess,
+          singleUsePlan,
+          purchasablePlan,
+          build.routeMoves,
+        );
+      }
+      return built;
+    });
+    const heldItems = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
+    playerTeam = heldItems.team;
 
     if (!playerTeam.length) {
       weightedRuns += runs;
@@ -6041,7 +6072,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       enemyTeam,
       runs,
       7100001 + Number(commonLevel) * 100000 + Number(boss.stage) * 1000 + battleIndex,
-      { p2Trainer: boss, p1AiMode: 'greedy' },
+      { p2Trainer: boss, p1AiMode: 'smart' },
     );
     weightedWins += Number(result.wins || 0);
     weightedRuns += Number(result.runs || runs);
@@ -6052,6 +6083,19 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       playerLead: playerTeam[0]?.species || null,
       availableMons: playerTeam.map(mon => mon.species),
       playerLevels: Object.fromEntries(playerTeam.map(mon => [mon.species, mon.level])),
+      playerBuilds: Object.fromEntries(playerTeam.map(mon => [
+        mon._candidateKey || mon.species,
+        {
+          species: mon.species,
+          nature: mon.nature,
+          ability: mon.ability,
+          item: mon.item || '',
+          ivs: mon.ivs,
+          evs: mon.evs,
+          moves: mon.moves,
+        },
+      ])),
+      heldItemPolicy: heldItems.policy,
       ...result,
     });
   }
@@ -6083,6 +6127,14 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     finalTeam,
     singleUsePlan,
     purchasablePlan,
+    routeBuildPlan,
+    playerModel: {
+      iv: 16,
+      evNatureAbility: 'fixed per evolution family for all 27 battles',
+      routeMoves: 'one target four-move set per family, unlocked only when legal by stage',
+      heldItems: 'no optimization before stage20; boss-specific stage20+ swaps with finite-copy caps',
+      battleAi: 'smart',
+    },
     purchaseCosts: purchasable.costs,
     rows,
   };
