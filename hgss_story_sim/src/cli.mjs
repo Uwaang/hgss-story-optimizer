@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
+import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, buildRedOnlyCandidateForms, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -5993,6 +5993,11 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
       extraMachines,
     ),
   }));
+  playerTeam = playerTeam.map(mon => optimizePlayerBuildForBoss(
+    mon,
+    enemyTeam,
+    { iv: 16 },
+  ));
 
   const battle = await simulateMatchup(
     playerTeam,
@@ -6035,6 +6040,10 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
       moves: mon.moves || [],
       ability: mon.ability || null,
       item: mon.item || null,
+      nature: mon.nature || null,
+      ivs: mon.ivs || null,
+      evs: mon.evs || null,
+      buildOptimization: mon._buildOptimization || null,
     })),
   };
 }
@@ -6448,8 +6457,8 @@ async function cmdRedMinGrindSearch() {
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six battle members have exactly the same level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently for each member; route ownership and money are ignored',
-      heldItems: 'no player held-item optimization; existing simulator defaults are used',
-      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) versus source-guided Red trainer AI',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/item build optimization versus source-guided Red trainer AI',
     },
     search: {
       levelMin,
@@ -6667,8 +6676,8 @@ async function cmdRedMinGrindGaSearch() {
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six members exactly equal level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves independently available; route ownership and money ignored',
-      heldItems: 'not optimized',
-      battlePolicy: 'smart player AI versus source-guided Red AI',
+      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this Red-only EXP objective',
+      battlePolicy: 'smart player AI with fixed IV16, max 252/252/4 EV spread search, nature search, and held-item search versus source-guided Red AI',
     },
     search: {
       levelMin, levelMax, levelStep, candidateCap, populationSize, generations, searchRuns,
@@ -6705,6 +6714,103 @@ async function cmdRedMinGrindGaSearch() {
   }, null, 2));
 }
 
+
+
+async function cmdRedBattleModelSanity() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(
+    arg('team', 'Typhlosion,Kingdra,Seaking,Lanturn,Hitmonlee,Electivire')
+  ).split(',').map(value => value.trim()).filter(Boolean);
+  const levels = String(arg('levels', '50,55,60,65,70'))
+    .split(',')
+    .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))))
+    .filter(Number.isFinite);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+  if (teamNames.length !== 6) {
+    throw new Error('red-battle-model-sanity requires exactly six target species');
+  }
+
+  const story = await loadStory();
+  const red = story.bosses.find(boss => boss.label === 'Red');
+  if (!red) throw new Error('Red boss definition not found');
+  const access = await readJson('config/story-access.canonical.json');
+  const [redPool, moveAccess] = await Promise.all([
+    buildRedOnlyCandidateForms({
+      commit: story.config.sourceCommit,
+      bosses: story.bosses,
+      access,
+      version,
+      targetBossLabel: 'Red',
+      excludeLegendary: true,
+    }),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+
+  const results = [];
+  for (const commonLevel of levels) {
+    const rows = teamNames.map(name => {
+      const candidates = redPool.forms
+        .filter(form => form.species === name)
+        .map(form => redFormLevelRow(form, red, commonLevel))
+        .filter(Boolean)
+        .sort((a, b) =>
+          Number(a.grindExp) - Number(b.grindExp) ||
+          Number(b.proxyUtility) - Number(a.proxyUtility)
+        );
+      return candidates[0] || null;
+    });
+    if (rows.some(row => !row)) {
+      results.push({
+        commonLevel,
+        status: 'unavailable-form-at-level',
+        missing: teamNames.filter((_, index) => !rows[index]),
+      });
+      continue;
+    }
+    const familyIds = rows.map(row => row.familyId);
+    if (new Set(familyIds).size !== 6) {
+      throw new Error('red-battle-model-sanity team contains duplicate evolution families');
+    }
+    if (rows.filter(row => row.familyId === starterName).length !== 1) {
+      throw new Error('sanity team must contain exactly the selected starter family');
+    }
+    const state = redStateFromMembers(rows, commonLevel);
+    results.push({
+      status: 'evaluated',
+      ...(await redEvaluateTeam(
+        state,
+        red,
+        enemyTeam,
+        moveAccess,
+        runs,
+        1440001 + commonLevel * 100,
+      )),
+    });
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'low-level calibration of the Red-only player model before deeper team-search tuning',
+    version,
+    starter: starterName,
+    team: teamNames,
+    levels,
+    runsPerLevel: runs,
+    assumptions: {
+      ivs: 'all stats fixed at 16',
+      evs: 'max practical 252/252/4 spread selected per Pokemon from a compact candidate set',
+      nature: 'selected per Pokemon from offensive, speed, defensive, and neutral candidates',
+      heldItems: 'allowed and selected from a conservative Gen-4 shortlist; acquisition cost ignored',
+      bagItems: 'disabled for the player',
+      commonLevel: 'all six members have exactly the same level',
+      expCost: 'source-backed capture level to common level',
+      playerAi: 'smart',
+    },
+    results,
+  }, null, 2));
+}
 
 async function cmdRedMinGrindValidate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
@@ -6847,6 +6953,7 @@ const commands = {
   'red-min-grind-search': cmdRedMinGrindSearch,
   'red-min-grind-ga-search': cmdRedMinGrindGaSearch,
   'red-min-grind-validate': cmdRedMinGrindValidate,
+  'red-battle-model-sanity': cmdRedBattleModelSanity,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -6858,7 +6965,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, red-min-grind-search, red-min-grind-ga-search, red-min-grind-validate, red-battle-model-sanity, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
