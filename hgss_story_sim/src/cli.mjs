@@ -741,7 +741,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   );
   let weightedWins = 0;
   let weightedRuns = 0;
-  for (const [battleIndex, boss] of routeBosses.entries()) {
+  for (const [battleIndex, boss] of battleBosses.entries()) {
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
     const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
     const playerTeam = materializeCandidateTeam(
@@ -822,7 +822,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     expSchedule,
     finalTeam,
     finalLevels,
-    routeBattleCount: routeBosses.length,
+    routeBattleCount: battleBosses.length,
+    fullRouteBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
     catchUpExp: catchUp.totalExp,
@@ -5975,7 +5976,7 @@ function buildEqualLevelRouteBuildPlan(
   return plan;
 }
 
-async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess) {
+async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess, options = {}) {
   const expCost = equalLevelTeamExpCost(candidates, commonLevel);
   if (!expCost.legal) {
     return {
@@ -5987,6 +5988,12 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
   }
 
   const routeBosses = storyBattlesForCandidates(story.bosses, candidates);
+  const requestedBossLabels = Array.isArray(options.bossLabels)
+    ? new Set(options.bossLabels.map(String))
+    : null;
+  const battleBosses = requestedBossLabels
+    ? routeBosses.filter(boss => requestedBossLabels.has(String(boss.label)))
+    : routeBosses;
   const levels = Object.fromEntries(
     candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
   );
@@ -6412,6 +6419,109 @@ function selectEqualLevelProxyBeam(states, width, hardBosses = [], commonLevel =
   return [...selected.values()].slice(0, width);
 }
 
+
+function equalLevelHybridSummary(evaluation) {
+  const rows = evaluation?.rows || [];
+  const rates = rows.map(row => Number(row.winRate || 0));
+  const mean = rates.length
+    ? rates.reduce((sum, value) => sum + value, 0) / rates.length
+    : 0;
+  const ordered = [...rates].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(2, ordered.length));
+  const bottom2 = bottom.length
+    ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length
+    : 0;
+  const cleared = rates.filter(value => value > 0).length;
+  return {
+    mean,
+    bottom2,
+    cleared,
+    total: rates.length,
+    score: 0.55 * mean + 0.30 * bottom2 + 0.15 * (rates.length ? cleared / rates.length : 0),
+    bosses: Object.fromEntries(rows.map(row => [String(row.boss), Number(row.winRate || 0)])),
+  };
+}
+
+async function attachEqualLevelHybridScreens(
+  states,
+  story,
+  commonLevel,
+  moveAccess,
+  hardBosses,
+  runs,
+) {
+  const labels = hardBosses.map(boss => String(boss.label));
+  const output = [];
+  for (const state of states) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      state.team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      { bossLabels: labels },
+    );
+    output.push({
+      ...state,
+      hybridEvaluation: evaluation,
+      hybrid: equalLevelHybridSummary(evaluation),
+    });
+  }
+  return output;
+}
+
+function selectEqualLevelHybridBeam(states, width, hardBosses = []) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  // Actual battle results get first claim on beam slots. Preserve several
+  // states per hard boss so a Red specialist and a Lance-2 specialist can
+  // coexist rather than one aggregate score erasing the other.
+  for (const boss of hardBosses) {
+    const label = String(boss.label);
+    const ranked = [...states].sort((a, b) =>
+      Number(b.hybrid?.bosses?.[label] || 0) - Number(a.hybrid?.bosses?.[label] || 0) ||
+      Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+      Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+      Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+      key(a).localeCompare(key(b))
+    );
+    for (const state of ranked.slice(0, 3)) add(state);
+  }
+
+  const byHybrid = [...states].sort((a, b) =>
+    Number(b.hybrid?.cleared || 0) - Number(a.hybrid?.cleared || 0) ||
+    Number(b.hybrid?.bottom2 || 0) - Number(a.hybrid?.bottom2 || 0) ||
+    Number(b.hybrid?.mean || 0) - Number(a.hybrid?.mean || 0) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byProxy = [...states].sort((a, b) =>
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(b.proxy?.bottom5 || 0) - Number(a.proxy?.bottom5 || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byHybrid.slice(0, Math.ceil(width * 0.60))) add(state);
+  for (const state of byProxy.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.15))) add(state);
+  for (const state of byHybrid) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
 function equalLevelEvaluationCompare(a, b) {
   return (
     Number(b.storyClearCoverageScore || 0) - Number(a.storyClearCoverageScore || 0) ||
@@ -6547,6 +6657,11 @@ async function cmdEqualLevelStorySearch() {
   const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
   const finalCap = Math.max(1, Math.floor(Number(arg('final-cap', '5'))));
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '10'))));
+  const hybridRuns = Math.max(1, Math.floor(Number(arg('hybrid-runs', '2'))));
+  const hybridPreCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('hybrid-pre-cap', String(beamWidth * 3)))),
+  );
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
     throw new Error('equal-level-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
@@ -6624,7 +6739,40 @@ async function cmdEqualLevelStorySearch() {
       redBoss,
       commonLevel,
     );
-    beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
+
+    let selectionMode = 'proxy';
+    let hybridPreselected = null;
+    if (size === 4) {
+      // Bridge stage: keep a wider cheap-proxy beam so higher-order synergies
+      // are not destroyed before the real-battle screen can see them.
+      beam = selectEqualLevelProxyBeam(
+        expanded,
+        Math.min(expanded.length, beamWidth * 2),
+        hardBosses,
+        commonLevel,
+      );
+      selectionMode = 'proxy-wide-bridge';
+    } else if (size >= 5) {
+      hybridPreselected = selectEqualLevelProxyBeam(
+        expanded,
+        Math.min(expanded.length, hybridPreCap),
+        hardBosses,
+        commonLevel,
+      );
+      const screenedHybrid = await attachEqualLevelHybridScreens(
+        hybridPreselected,
+        story,
+        commonLevel,
+        moveAccess,
+        hardBosses,
+        hybridRuns,
+      );
+      beam = selectEqualLevelHybridBeam(screenedHybrid, beamWidth, hardBosses);
+      selectionMode = 'hybrid-real-battle';
+    } else {
+      beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
+    }
+
     const afterSelection = traceKnownTargetStates(
       beam,
       knownFamilyIds,
@@ -6633,6 +6781,10 @@ async function cmdEqualLevelStorySearch() {
     );
     knownTrace.stages.push({
       size,
+      selectionMode,
+      hybridPreselected: hybridPreselected
+        ? traceKnownTargetStates(hybridPreselected, knownFamilyIds, redBoss, commonLevel)
+        : null,
       beforeSelection,
       afterSelection,
     });
@@ -6746,11 +6898,16 @@ async function cmdEqualLevelStorySearch() {
       })),
       specialistCandidates: screening.specialists,
       teamProxyModel: {
-        version: 'foe-coverage-v2',
+        version: 'foe-coverage-v2+hybrid-battle-v1',
         perFoeMemberWeights: [1, 0.30, 0.10],
         bossScore: '0.72 * mean foe coverage + 0.28 * bottom-2 foe coverage',
         routeScore: '0.62 * mean boss score + 0.38 * bottom-5 boss score',
-        hardBossBeamQuota: '2 states before size5; 3 states at size5-6',
+        size4BridgeWidth: beamWidth * 2,
+        hybridFromTeamSize: 5,
+        hybridPreCap,
+        hybridRuns,
+        hybridBosses: hardBosses.map(boss => String(boss.label)),
+        hybridSelection: 'actual boss clears/bottom2/mean first; proxy and EXP retained as diversity axes',
       },
       beamWidth,
       proxyFinalists,
