@@ -191,7 +191,7 @@ jobs:
             pret-source-v1-${{ runner.os }}-
       - name: Install dependencies
         run: npm install --prefer-offline --no-audit --no-fund
-      - name: Search HG Cyndaquil minimum-grind Lance rematch team
+      - name: Focused Lv40-50 Lance rematch search with 100-run finalists
         run: |
           mkdir -p results
           node src/cli.mjs boss-min-grind-ga-search \
@@ -200,26 +200,63 @@ jobs:
             --target-stage=20 \
             --version=HEARTGOLD \
             --starter=Cyndaquil \
-            --level-min=45 \
-            --level-max=75 \
-            --level-step=5 \
-            --candidate-cap=72 \
-            --population=18 \
-            --generations=4 \
-            --search-runs=1 \
-            --refine-population=28 \
-            --refine-generations=5 \
+            --level-min=40 \
+            --level-max=50 \
+            --level-step=1 \
+            --candidate-cap=84 \
+            --population=24 \
+            --generations=5 \
+            --search-runs=2 \
+            --cross-level-population=20 \
+            --cross-level-generations=3 \
+            --cross-level-runs=2 \
+            --cross-level-seed-cap=6 \
+            --refine-population=34 \
+            --refine-generations=6 \
             --refine-runs=2 \
-            --refine-level-cap=4 \
-            --finalist-cap=12 \
-            --final-runs=30 \
+            --refine-level-cap=6 \
+            --finalist-cap=15 \
+            --final-runs=100 \
             --target-win-rate=0.5 \
-            > results/lance2-min-grind-hg-cyndaquil.json
-      - name: Upload Lance rematch pilot
+            > results/lance2-focused-hg-cyndaquil-lv40-50.json
+      - name: Independently validate best 50-percent finalist at 200 runs
+        shell: bash
+        run: |
+          FILE=results/lance2-focused-hg-cyndaquil-lv40-50.json
+          TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
+          LEVEL=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(String(v.commonLevel));" "$FILE")
+          if [ -n "$TEAM" ] && [ -n "$LEVEL" ]; then
+            node src/cli.mjs boss-min-grind-validate \
+              --target-boss="Lance Rematch" \
+              --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+              --target-stage=20 \
+              --version=HEARTGOLD \
+              --starter=Cyndaquil \
+              --team="$TEAM" \
+              --level="$LEVEL" \
+              --runs=200 \
+              > results/lance2-focused-best50-validate200.json
+          else
+            echo '{"status":"no-50-percent-finalist"}' > results/lance2-focused-best50-validate200.json
+          fi
+      - name: Revalidate pilot Lv45 team at 200 runs
+        run: |
+          node src/cli.mjs boss-min-grind-validate \
+            --target-boss="Lance Rematch" \
+            --target-trainer-key=TRAINER_CHAMPION_LANCE_2 \
+            --target-stage=20 \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Typhlosion,Lanturn,Mantine,Gyarados,Lapras,Rhyperior \
+            --level=45 \
+            --runs=200 \
+            > results/lance2-pilot-lv45-validate200.json
+      - name: Upload focused Lance rematch results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hgss-lance2-min-grind-hg-cyndaquil
-          path: hgss_story_sim/results/lance2-min-grind-hg-cyndaquil.json
+          name: hgss-lance2-focused-hg-cyndaquil-lv40-50
+          path: hgss_story_sim/results/lance2-*.json
           if-no-files-found: error
 
   red_model_sanity:
