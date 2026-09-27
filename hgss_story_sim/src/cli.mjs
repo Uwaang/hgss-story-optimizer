@@ -7053,6 +7053,12 @@ async function cmdRedMinGrindValidate() {
     loadMoveAccess('all', 'unbounded'),
   ]);
 
+  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
+
   const rows = teamNames.map(name => {
     const candidates = redPool.forms
       .filter(form => form.species === name)
@@ -7081,11 +7087,6 @@ async function cmdRedMinGrindValidate() {
   }
 
   const state = redStateFromMembers(rows, commonLevel);
-  const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
-  const redExtraMachines = [
-    ...(moveAccess.singleUseMachines || []),
-    ...(moveAccess.purchasableMachines || []),
-  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
   const evaluation = await redEvaluateTeam(
     state,
     red,
