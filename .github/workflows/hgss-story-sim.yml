@@ -441,6 +441,45 @@ jobs:
           path: hgss_story_sim/results/member-contribution-pilot-hg-cyndaquil.json
           if-no-files-found: error
 
+  contribution_candidate_probe:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: caterpie
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Caterpie
+          - label: zubat
+            team: Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Zubat
+          - label: lapras-zubat
+            team: Cyndaquil,Chinchou,Abra,Lapras,Zubat,Pidgey
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Ablate candidate team
+        run: |
+          mkdir -p results
+          node src/cli.mjs team-ablation --version=HEARTGOLD --starter=Cyndaquil --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/probe-ablation-${{ matrix.label }}.json
+      - name: Measure candidate usage
+        run: |
+          node src/cli.mjs team-usage --version=HEARTGOLD --starter=Cyndaquil --team=${{ matrix.team }} --runs=20 --resources=all --spend-policy=natural --exp-profile=normal-route --grind-policy=none --entry-level=midpoint --same-stage-join=map-order --exp-allocator=boss-aware --objective=story-clear > results/probe-usage-${{ matrix.label }}.json
+      - name: Upload candidate probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-contribution-probe-${{ matrix.label }}
+          path: |
+            hgss_story_sim/results/probe-ablation-${{ matrix.label }}.json
+            hgss_story_sim/results/probe-usage-${{ matrix.label }}.json
+          if-no-files-found: error
+
   member_usage_matrix:
     if: github.event_name == 'workflow_dispatch' && inputs.task == 'team-usage'
     runs-on: ubuntu-latest
