@@ -24,6 +24,7 @@ on:
         options:
           - default
           - red-min-grind-pilot
+          - red-min-grind-matrix
           - allocator-story-matrix
           - allocator-saturation-matrix
           - allocator-depth-matrix
@@ -45,6 +46,63 @@ on:
           - meaningful-six-refinement
 
 jobs:
+  red_min_grind_matrix_6:
+    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: HEARTGOLD
+            starter: Cyndaquil
+            label: hg-cyndaquil
+          - version: SOULSILVER
+            starter: Cyndaquil
+            label: ss-cyndaquil
+          - version: HEARTGOLD
+            starter: Totodile
+            label: hg-totodile
+          - version: SOULSILVER
+            starter: Totodile
+            label: ss-totodile
+          - version: HEARTGOLD
+            starter: Chikorita
+            label: hg-chikorita
+          - version: SOULSILVER
+            starter: Chikorita
+            label: ss-chikorita
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Search minimum-grind Red team
+        run: |
+          mkdir -p results
+          node src/cli.mjs red-min-grind-ga-search --version=${{ matrix.version }} --starter=${{ matrix.starter }} --level-min=45 --level-max=100 --level-step=5 --candidate-cap=60 --population=14 --generations=3 --search-runs=1 --finalist-cap=12 --final-runs=30 --target-win-rate=0.5 > results/red-min-grind-${{ matrix.label }}.json
+      - name: Validate best observed 50 percent team at 100 runs
+        shell: bash
+        run: |
+          FILE=results/red-min-grind-${{ matrix.label }}.json
+          TEAM=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(v.team.map(x=>x.species).join(','));" "$FILE")
+          LEVEL=$(node -e "const d=require('./' + process.argv[1]); const v=d.bestByTarget?.['0.5']; if(v) process.stdout.write(String(v.commonLevel));" "$FILE")
+          if [ -n "$TEAM" ] && [ -n "$LEVEL" ]; then
+            node src/cli.mjs red-min-grind-validate --version=${{ matrix.version }} --starter=${{ matrix.starter }} --team="$TEAM" --level="$LEVEL" --runs=100 > results/red-min-grind-${{ matrix.label }}-validate100.json
+          else
+            echo '{"status":"no-50-percent-finalist"}' > results/red-min-grind-${{ matrix.label }}-validate100.json
+          fi
+      - name: Upload Red minimum-grind matrix result
+        uses: actions/upload-artifact@v4
+        with:
+          name: hgss-red-min-grind-${{ matrix.label }}
+          path: hgss_story_sim/results/red-min-grind-${{ matrix.label }}*.json
+          if-no-files-found: error
+
   red_min_grind_pilot:
     if: (github.event_name == 'workflow_dispatch' && inputs.task == 'red-min-grind-pilot') || (github.event_name == 'pull_request' && github.head_ref == 'experiment/red-min-grind')
     runs-on: ubuntu-latest
