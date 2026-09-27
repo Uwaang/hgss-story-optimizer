@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
@@ -12,6 +15,98 @@ const NATURES_BY_ID = [
   'Modest', 'Mild', 'Quiet', 'Bashful', 'Rash',
   'Calm', 'Gentle', 'Sassy', 'Careful', 'Quirky',
 ];
+
+const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
+  ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
+  : null;
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2');
+let battleCacheLoaded = false;
+let battleCacheDirty = 0;
+let battleCache = new Map();
+const battleCacheCounters = { hits: 0, misses: 0, writes: 0, restored: 0 };
+
+function canonicalizeCacheValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeCacheValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined && typeof entry !== 'function')
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalizeCacheValue(entry)])
+    );
+  }
+  return value;
+}
+
+function battleCacheKey(p1Team, p2Team, seed, options) {
+  const payload = canonicalizeCacheValue({
+    namespace: BATTLE_CACHE_NAMESPACE,
+    p1Team,
+    p2Team,
+    seed: Number(seed),
+    options,
+  });
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+async function ensureBattleCacheLoaded() {
+  if (battleCacheLoaded) return;
+  battleCacheLoaded = true;
+  if (!BATTLE_CACHE_PATH) return;
+  try {
+    const parsed = JSON.parse(await fs.readFile(BATTLE_CACHE_PATH, 'utf8'));
+    if (parsed?.namespace === BATTLE_CACHE_NAMESPACE && parsed?.entries) {
+      battleCache = new Map(Object.entries(parsed.entries));
+      battleCacheCounters.restored = battleCache.size;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[battle-cache] restore failed:', error.message);
+    }
+  }
+}
+
+export function battleCacheStats() {
+  return {
+    enabled: Boolean(BATTLE_CACHE_PATH),
+    path: BATTLE_CACHE_PATH,
+    namespace: BATTLE_CACHE_NAMESPACE,
+    entries: battleCache.size,
+    ...battleCacheCounters,
+    dirty: battleCacheDirty,
+  };
+}
+
+export async function flushBattleCache() {
+  await ensureBattleCacheLoaded();
+  if (!BATTLE_CACHE_PATH || battleCacheDirty <= 0) return battleCacheStats();
+  await fs.mkdir(path.dirname(BATTLE_CACHE_PATH), { recursive: true });
+  const tmp = BATTLE_CACHE_PATH + '.tmp-' + process.pid;
+  await fs.writeFile(tmp, JSON.stringify({
+    schemaVersion: 2,
+    namespace: BATTLE_CACHE_NAMESPACE,
+    entries: Object.fromEntries(battleCache),
+  }));
+  await fs.rename(tmp, BATTLE_CACHE_PATH);
+  battleCacheCounters.writes += battleCacheDirty;
+  battleCacheDirty = 0;
+  return battleCacheStats();
+}
+
+async function cachedRunBattle(p1Team, p2Team, seed, options) {
+  await ensureBattleCacheLoaded();
+  const key = battleCacheKey(p1Team, p2Team, seed, options);
+  if (battleCache.has(key)) {
+    battleCacheCounters.hits += 1;
+    return battleCache.get(key);
+  }
+  battleCacheCounters.misses += 1;
+  const result = await runBattle(p1Team, p2Team, seed, options);
+  battleCache.set(key, result);
+  battleCacheDirty += 1;
+  if (battleCacheDirty >= 500) await flushBattleCache();
+  return result;
+}
 
 function uniformIvs(iv) {
   return { hp: iv, atk: iv, def: iv, spa: iv, spd: iv, spe: iv };
@@ -1928,7 +2023,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let p2AiFlagNames = [];
   let p2TrainerItems = [];
   for (let i = 0; i < runs; i += 1) {
-    const result = await runBattle(p1Team, p2Team, seedBase + i, options);
+    const result = await cachedRunBattle(p1Team, p2Team, seedBase + i, options);
     totalTurns += result.turns || 0;
     totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
     totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;

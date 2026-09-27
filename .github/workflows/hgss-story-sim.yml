@@ -459,6 +459,9 @@ jobs:
       matrix:
         level: [57]
     runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache.json
+      HGSS_BATTLE_CACHE_NAMESPACE: eql-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -467,8 +470,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
       - name: Install dependencies
         run: npm install
+      - name: Restore equal-level battle cache
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-lv${{ matrix.level }}-
       - name: Search equal-level team
         run: |
           mkdir -p results
@@ -490,6 +502,258 @@ jobs:
         with:
           name: hg-cyndaquil-equal-level-search-lv${{ matrix.level }}
           path: hgss_story_sim/results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+
+  overnight_cache_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache-ab.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-cache-ab-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-cache-ab-
+      - name: Run cache A/B
+        run: |
+          mkdir -p results
+          t0=$(date +%s)
+          node src/cli.mjs equal-level-story-search --level=57 --candidate-cap=24 --beam-width=24 --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8 --hybrid-runs=2 --hybrid-pre-cap=72 --size4-mode=bridge --size4-multiplier=2 > results/cache-a.json
+          t1=$(date +%s)
+          node src/cli.mjs equal-level-story-search --level=57 --candidate-cap=24 --beam-width=24 --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8 --hybrid-runs=2 --hybrid-pre-cap=72 --size4-mode=bridge --size4-multiplier=2 > results/cache-b.json
+          t2=$(date +%s)
+          jq 'del(.battleCache)' results/cache-a.json > /tmp/a.json
+          jq 'del(.battleCache)' results/cache-b.json > /tmp/b.json
+          diff -u /tmp/a.json /tmp/b.json
+          printf '{"firstSeconds":%s,"secondSeconds":%s}\n' "$((t1-t0))" "$((t2-t1))" > results/cache-timing.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-cache-ab
+          path: hgss_story_sim/results/cache-*.json
+          if-no-files-found: error
+
+  overnight_search_designs:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - experiment: wide96
+            size4_mode: bridge
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: wide192
+            size4_mode: bridge
+            size4_multiplier: 8
+            size4_pre_cap: 192
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: actual96
+            size4_mode: actual
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: completion96
+            size4_mode: completion
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 6
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/${{ matrix.experiment }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-${{ matrix.experiment }}-
+      - name: Search design
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --level=57 --candidate-cap=24 --beam-width=${{ matrix.beam_width }}             --proxy-finalists=18 --screen-runs=2 --final-cap=8 --final-runs=16             --hybrid-runs=2 --hybrid-pre-cap=${{ matrix.hybrid_pre_cap }}             --size4-mode=${{ matrix.size4_mode }} --size4-multiplier=${{ matrix.size4_multiplier }}             --size4-pre-cap=${{ matrix.size4_pre_cap }}             --completion-choices=${{ matrix.completion_choices }} --completion-runs=${{ matrix.completion_runs }}             > results/${{ matrix.experiment }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-search-${{ matrix.experiment }}
+          path: hgss_story_sim/results/${{ matrix.experiment }}.json
+          if-no-files-found: error
+
+  overnight_level_sweep:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 60, 61, 63, 65]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/completion-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-completion-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-completion-lv${{ matrix.level }}-
+      - name: Completion lookahead level sweep
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --level=${{ matrix.level }} --candidate-cap=24 --beam-width=24             --proxy-finalists=18 --screen-runs=2 --final-cap=8 --final-runs=16             --hybrid-runs=2 --hybrid-pre-cap=120             --size4-mode=completion --size4-multiplier=4 --size4-pre-cap=72             --completion-choices=4 --completion-runs=1             > results/completion-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-completion-lv${{ matrix.level }}
+          path: hgss_story_sim/results/completion-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  overnight_fixed_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: hybrid55
+            level: 55
+            team: Cyndaquil,Geodude,Slowpoke,Magnemite,Magikarp,Heracross
+          - label: hybrid57
+            level: 57
+            team: Cyndaquil,Rhyhorn,Slowpoke,Magnemite,Magikarp,Lapras
+          - label: hybrid60
+            level: 60
+            team: Cyndaquil,Geodude,Slowpoke,Magnemite,Magikarp,Heracross
+          - label: known-red57
+            level: 57
+            team: Cyndaquil,Wooper,Larvitar,Magnemite,Mareep,Rhyhorn
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/validation-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-validation-${{ matrix.label }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-validation-${{ matrix.label }}-
+      - name: High-run boss validation
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses="Lance 2" --runs=200 > results/${{ matrix.label }}-lance2-200.json
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses=Red --runs=500 > results/${{ matrix.label }}-red-500.json
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=100 > results/${{ matrix.label }}-hard100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-validation-${{ matrix.label }}
+          path: hgss_story_sim/results/${{ matrix.label }}-*.json
+          if-no-files-found: error
+
+  overnight_validate_sweep_top:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    needs: overnight_level_sweep
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 60, 61, 63, 65]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/sweep-validate-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hgss_story_sim/package-lock.json
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: overnight-completion-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/battles
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-sweep-validate-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package-lock.json') }}-sweep-validate-lv${{ matrix.level }}-
+      - name: Validate discovered top team
+        run: |
+          mkdir -p results
+          src=input/completion-lv${{ matrix.level }}.json
+          team=$(jq -r '.final[0].team | join(",")' "$src")
+          test -n "$team" && test "$team" != "null"
+          printf '%s\n' "$team" > results/team.txt
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses="Lance 2" --runs=200 > results/lance2-200.json
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses=Red --runs=500 > results/red-500.json
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=100 > results/hard100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-top-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
           if-no-files-found: error
 
   smoke:
