@@ -6074,12 +6074,51 @@ async function cmdRedMinGrindSearch() {
     candidatesForScreen.set(redTeamKey(state.members, state.commonLevel), state);
   }
 
-  const screenStates = [...candidatesForScreen.values()]
+  // Preserve strength candidates across the full level range. A final
+  // cheapest-first truncation would otherwise remove all high-level teams
+  // before the real simulator gets a chance to test them.
+  const perLevel = new Map();
+  for (const state of uniquePairs) {
+    const bucket = perLevel.get(Number(state.commonLevel)) || [];
+    bucket.push(state);
+    perLevel.set(Number(state.commonLevel), bucket);
+  }
+  const screenSelected = new Map();
+  function addScreenState(state) {
+    if (!state || screenSelected.size >= screenCap) return;
+    screenSelected.set(redTeamKey(state.members, state.commonLevel), state);
+  }
+
+  for (const level of [...perLevel.keys()].sort((a, b) => a - b)) {
+    const bucket = perLevel.get(level) || [];
+    addScreenState([...bucket].sort((a, b) =>
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )[0]);
+  }
+  for (const level of [...perLevel.keys()].sort((a, b) => a - b)) {
+    if (screenSelected.size >= screenCap) break;
+    const bucket = perLevel.get(level) || [];
+    addScreenState([...bucket].sort((a, b) => {
+      const ae = Number(a.proxyUtility) / (1 + Number(a.totalExp) / 1_000_000);
+      const be = Number(b.proxyUtility) / (1 + Number(b.totalExp) / 1_000_000);
+      return be - ae || Number(a.totalExp) - Number(b.totalExp);
+    })[0]);
+  }
+  for (const state of [...candidatesForScreen.values()]
     .sort((a, b) =>
-      Number(a.totalExp) - Number(b.totalExp) ||
-      Number(b.proxyUtility) - Number(a.proxyUtility)
-    )
-    .slice(0, screenCap);
+      Number(b.proxyUtility) - Number(a.proxyUtility) ||
+      Number(a.totalExp) - Number(b.totalExp)
+    )) {
+    if (screenSelected.size >= screenCap) break;
+    addScreenState(state);
+  }
+  for (const state of costSorted) {
+    if (screenSelected.size >= screenCap) break;
+    addScreenState(state);
+  }
+
+  const screenStates = [...screenSelected.values()];
 
   const screened = [];
   for (const state of screenStates) {
@@ -6167,6 +6206,8 @@ async function cmdRedMinGrindSearch() {
       generatedProxyPairs: uniquePairs.length,
       screenCap,
       screenedTeams: screened.length,
+      screenedLevelMin: screened.length ? Math.min(...screened.map(row => Number(row.commonLevel))) : null,
+      screenedLevelMax: screened.length ? Math.max(...screened.map(row => Number(row.commonLevel))) : null,
       screenRuns,
       targetWinRate,
       finalistCap,
