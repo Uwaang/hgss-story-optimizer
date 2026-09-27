@@ -3163,6 +3163,58 @@ async function cmdSwitchSmoke() {
     );
   }
 
+  // Choice-lock regression: Jolteon should use Thunderbolt on the first foe,
+  // then switch once Rhydon enters because the locked Electric move is useless.
+  const choiceLockPlayer = [
+    {
+      species: 'Jolteon',
+      level: 45,
+      ability: 'Volt Absorb',
+      item: 'Choice Specs',
+      nature: 'Modest',
+      moves: ['Thunderbolt', 'Shadow Ball', 'Signal Beam', 'Hyper Beam'],
+    },
+    {
+      species: 'Lapras',
+      level: 45,
+      ability: 'Water Absorb',
+      nature: 'Modest',
+      moves: ['Surf', 'Ice Beam', 'Body Slam', 'Confuse Ray'],
+    },
+  ];
+  const choiceLockEnemy = [
+    {
+      species: 'Squirtle',
+      level: 20,
+      ability: 'Torrent',
+      nature: 'Serious',
+      moves: ['Water Gun', 'Tackle'],
+    },
+    {
+      species: 'Rhydon',
+      level: 35,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Earthquake', 'Rock Blast'],
+    },
+  ];
+  const choiceLockResult = await runBattle(
+    choiceLockPlayer,
+    choiceLockEnemy,
+    7333,
+    { p1AiMode: 'smart', p1SmartLead: false },
+  );
+  if (Number(choiceLockResult.p1VoluntarySwitches || 0) < 1) {
+    throw new Error(
+      `Expected smart AI to switch a Choice-locked Jolteon out of Rhydon: ${JSON.stringify(choiceLockResult)}`
+    );
+  }
+  if (Number(choiceLockResult.p1Usage?.Lapras?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected Lapras to appear after the Choice-lock switch: ${JSON.stringify(choiceLockResult.p1Usage)}`
+    );
+  }
+
   if (result.p2VoluntarySwitches !== 0) {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
@@ -3171,6 +3223,7 @@ async function cmdSwitchSmoke() {
     noSwitch: noSwitchResult,
     smart: smartResult,
     forcedSmart: forcedSmartResult,
+    choiceLockSmart: choiceLockResult,
   }, null, 2));
 }
 
