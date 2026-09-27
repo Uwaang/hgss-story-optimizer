@@ -40,7 +40,7 @@ on:
 
 jobs:
   counterfactual_specialist_matrix_6:
-    if: (github.event_name == 'workflow_dispatch' && inputs.task == 'counterfactual-specialist-matrix') || (github.event_name == 'pull_request' && github.head_ref == 'feature/boss-interaction-matrix')
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'counterfactual-specialist-matrix'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
