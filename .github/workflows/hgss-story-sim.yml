@@ -418,6 +418,39 @@ jobs:
           path: hgss_story_sim/results/boss-interaction-hg-cyndaquil.json
           if-no-files-found: error
 
+
+  equal_level_story_pilot:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: node --check src/cli.mjs
+      - name: HG Cyndaquil equal-level route pilot
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish \
+            --levels=30,40,50,57,60 \
+            --runs=3 \
+            > results/hg-cyndaquil-equal-level-route-pilot.json
+      - name: Upload equal-level pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hg-cyndaquil-equal-level-route-pilot
+          path: hgss_story_sim/results/hg-cyndaquil-equal-level-route-pilot.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
