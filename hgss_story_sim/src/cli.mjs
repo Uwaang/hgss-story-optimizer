@@ -6188,6 +6188,126 @@ function redOptimizedPlayerBuild(mon, enemyTeam) {
   };
 }
 
+function targetBossHeldItemPolicy(stage) {
+  const targetStage = Number(stage);
+  if (targetStage < 20) {
+    return {
+      mode: 'legacy-unconstrained-before-stage20',
+      unavailable: [],
+      finiteCaps: {},
+      note: 'Stage-specific held-item inventory is currently enforced only for Blue/Lance-rematch-or-later experiments.',
+    };
+  }
+  return {
+    mode: 'hgss-post-kanto-realistic',
+    unavailable: targetStage < 21 ? ['Expert Belt'] : [],
+    finiteCaps: {
+      'Choice Specs': 1,
+      'Life Orb': 1,
+      Leftovers: 1,
+      'Wise Glasses': 1,
+    },
+    repeatableIgnoredCost: [
+      'Choice Band',
+      'Choice Scarf',
+      'Focus Sash',
+      'Muscle Band',
+    ],
+    note: 'Finite field items cannot be duplicated. Repeatable Battle Frontier items may be bought multiple times; BP acquisition effort is not included in the EXP-only objective.',
+  };
+}
+
+function targetBossBuildScore(mon) {
+  return Number(
+    mon?._movesetOptimization?.jointScore ??
+    mon?._buildOptimization?.proxyScore ??
+    0
+  );
+}
+
+function optimizeTargetBossTeamBuilds(baseTeam, enemyTeam, targetBoss, moveAccess, extraMachines) {
+  const policy = targetBossHeldItemPolicy(targetBoss?.stage);
+  const bannedBySlot = baseTeam.map(() => new Set(policy.unavailable || []));
+
+  function buildSlot(index, extraExcluded = []) {
+    const excluded = new Set([...bannedBySlot[index], ...extraExcluded]);
+    return optimizePlayerMovesAndBuildForBoss(
+      baseTeam[index],
+      enemyTeam,
+      {
+        iv: 16,
+        stage: targetBoss.stage,
+        moveAccess,
+        extraMachines,
+        shortlistCap: 12,
+        movesetFinalists: 8,
+        excludedItems: [...excluded],
+      },
+    );
+  }
+
+  const built = baseTeam.map((_, index) => buildSlot(index));
+  const capEntries = Object.entries(policy.finiteCaps || {});
+  const maxIterations = Math.max(1, baseTeam.length * Math.max(1, capEntries.length) * 2);
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    let violation = null;
+    for (const [item, capRaw] of capEntries) {
+      const cap = Math.max(0, Number(capRaw || 0));
+      const holders = built
+        .map((mon, index) => ({ mon, index }))
+        .filter(entry => entry.mon?.item === item);
+      if (holders.length > cap) {
+        violation = { item, cap, holders };
+        break;
+      }
+    }
+    if (!violation) break;
+
+    const alternatives = violation.holders.map(({ mon, index }) => {
+      const alternative = buildSlot(index, [violation.item]);
+      return {
+        index,
+        mon,
+        alternative,
+        loss: targetBossBuildScore(mon) - targetBossBuildScore(alternative),
+      };
+    }).sort((a, b) =>
+      Number(b.loss) - Number(a.loss) ||
+      String(a.mon?.species || '').localeCompare(String(b.mon?.species || ''))
+    );
+
+    const keep = new Set(alternatives.slice(0, violation.cap).map(entry => entry.index));
+    for (const entry of alternatives) {
+      if (keep.has(entry.index)) continue;
+      bannedBySlot[entry.index].add(violation.item);
+      built[entry.index] = entry.alternative;
+    }
+  }
+
+  const remainingViolations = [];
+  for (const [item, capRaw] of capEntries) {
+    const cap = Math.max(0, Number(capRaw || 0));
+    const count = built.filter(mon => mon?.item === item).length;
+    if (count > cap) remainingViolations.push({ item, cap, count });
+  }
+  if (remainingViolations.length) {
+    throw new Error(
+      'Held-item cap resolution failed: ' + JSON.stringify(remainingViolations),
+    );
+  }
+
+  return {
+    team: built,
+    policy: {
+      ...policy,
+      bannedBySlot: Object.fromEntries(
+        built.map((mon, index) => [mon.species, [...bannedBySlot[index]].sort()]),
+      ),
+    },
+  };
+}
+
 async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase) {
   const commonLevel = Number(state.members[0]?.commonLevel || 1);
   const forms = state.members.map(row => row.form);
@@ -6216,18 +6336,14 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     ...(moveAccess.purchasableMachines || []),
   ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
-  playerTeam = playerTeam.map(mon => optimizePlayerMovesAndBuildForBoss(
-    mon,
+  const optimizedBuilds = optimizeTargetBossTeamBuilds(
+    playerTeam,
     enemyTeam,
-    {
-      iv: 16,
-      stage: red.stage,
-      moveAccess,
-      extraMachines,
-      shortlistCap: 12,
-      movesetFinalists: 8,
-    },
-  ));
+    red,
+    moveAccess,
+    extraMachines,
+  );
+  playerTeam = optimizedBuilds.team;
 
   const battle = await simulateMatchup(
     playerTeam,
@@ -6249,6 +6365,7 @@ async function redEvaluateTeam(state, red, enemyTeam, moveAccess, runs, seedBase
     averagePlayerFaints: Number(battle.averageP1Faints || 0),
     averageRedFaints: Number(battle.averageP2Faints || 0),
     maxRedFaints: Number(battle.maxP2Faints || 0),
+    heldItemPolicy: optimizedBuilds.policy,
     team: state.members.map(row => ({
       familyId: row.familyId,
       species: row.species,
@@ -6776,7 +6893,7 @@ async function cmdRedMinGrindSearch() {
       evolutions: 'level thresholds enforced; trade/stone/friendship/other non-level evolutions treated as feasible without extra EXP',
       commonLevel: 'all six battle members have exactly the same level',
       tmPolicy: 'all Red-stage legal TM/HM/tutor/shop moves may be selected independently; Red-specific movesets are optimized from the legal pool; route ownership and money are ignored',
-      heldItems: 'optimized from a conservative Gen-4 shortlist; acquisition cost is ignored in this target-boss-only EXP objective',
+      heldItems: 'optimized from a conservative Gen-4 shortlist with stage-20 finite-copy caps and Mt. Silver-only Expert Belt excluded; repeatable Battle Frontier item BP cost is reported as reality burden but ignored by the EXP-only objective',
       battlePolicy: 'smart player policy (lead matchup, KO-aware move scoring, matchup-aware forced/voluntary switching, state-aware recovery/setup) with IV16 + max EV/nature/legal-ability/item + Red-specific moveset optimization versus source-guided Red trainer AI',
     },
     search: {
