@@ -1946,11 +1946,11 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     p2Stats,
     { mode: p2Mode, profile: p2Profile },
   ).catch(() => undefined);
+  let p1Faints = 0;
+  let p2Faints = 0;
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
-    let p1Faints = 0;
-    let p2Faints = 0;
     for await (const chunk of streams.omniscient) {
       for (const line of chunk.split('\n')) {
         const parts = line.split('|');
