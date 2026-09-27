@@ -6091,7 +6091,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
   let weightedWins = 0;
   let weightedRuns = 0;
 
-  for (const [battleIndex, boss] of routeBosses.entries()) {
+  for (const [battleIndex, boss] of battleBosses.entries()) {
     const ordered = orderCandidatesForBoss(candidates, boss, levels);
     let playerTeam = materializeCandidateTeam(
       ordered,
@@ -6198,7 +6198,8 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     bottom5BossWinRate: lowerTailBossWinRate(rows),
     storyClearGeometricScore: storyClearGeometricScore(rows),
     storyClearCoverageScore: storyClearCoverageScore(rows),
-    routeBattleCount: routeBosses.length,
+    routeBattleCount: battleBosses.length,
+    fullRouteBattleCount: routeBosses.length,
     equalLevelExp: expCost,
     finalTeam,
     singleUsePlan,
@@ -6786,6 +6787,8 @@ function equalLevelSearchRow(team, evaluation, proxy = null) {
       losses: row.losses,
       ties: row.ties,
       winRate: row.winRate,
+      battleProgressScore: Number(row.battleProgressScore ?? row.winRate ?? 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
       playerLead: row.playerLead || null,
       availableMons: row.availableMons || [],
     })),

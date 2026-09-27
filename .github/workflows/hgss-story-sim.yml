@@ -772,10 +772,27 @@ jobs:
               species, familyId, searchKey, terminalSpecies, availableFrom, speciesByStage
             }]
           }' results/trade-aware-pool.json > results/evolution-audit.json
+      - name: Assert pure-trade and post-Blue timing
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware \
+            --team=Cyndaquil,Gastly,Abra,Geodude,Magnemite,Rhyhorn \
+            --level=65 --bosses="Morty,Blue,Will 2" --runs=1 \
+            > results/evolution-materialization.json
+          jq -e '
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Gengar")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Alakazam")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Golem")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Blue") | .availableMons | index("Rhydon")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Blue") | .availableMons | index("Rhyperior")) == null and
+            (.evaluations[0].rows[] | select(.boss=="Will 2") | .availableMons | index("Rhyperior")) != null
+          ' results/evolution-materialization.json
       - uses: actions/upload-artifact@v4
         with:
           name: evo-ab-audit
-          path: hgss_story_sim/results/evolution-audit.json
+          path: |
+            hgss_story_sim/results/evolution-audit.json
+            hgss_story_sim/results/evolution-materialization.json
           if-no-files-found: error
 
   evo_ab_policy_baseline:
