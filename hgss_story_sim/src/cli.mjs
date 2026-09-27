@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
+import { candidateBossUtility, candidateBossUtilityWithMoveAccess, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerBuildForBoss, planPurchasableMachines, planSingleUseMachines, runBattle, selectCandidateMoves, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, buildRedOnlyCandidateForms, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -5804,12 +5804,15 @@ function redCaptureChoice(form, commonLevel) {
   return options[0] || null;
 }
 
-function redFormLevelRow(form, red, commonLevel) {
+function redFormLevelRow(form, red, commonLevel, moveAccess = null, extraMachines = []) {
   const capture = redCaptureChoice(form, commonLevel);
   if (!capture) return null;
   const targetExp = expAtLevel(form.growthRate, commonLevel);
   const captureExp = expAtLevel(form.growthRate, capture.captureLevel);
   if (targetExp === null || captureExp === null) return null;
+  const proxyUtility = moveAccess
+    ? candidateBossUtilityWithMoveAccess(form, red, commonLevel, moveAccess, extraMachines)
+    : candidateBossUtility(form, red, commonLevel);
   return {
     form,
     familyId: form.familyId,
@@ -5817,7 +5820,7 @@ function redFormLevelRow(form, red, commonLevel) {
     commonLevel,
     capture,
     grindExp: Math.max(0, targetExp - captureExp),
-    proxyUtility: Math.max(0, Number(candidateBossUtility(form, red, commonLevel) || 0)),
+    proxyUtility: Math.max(0, Number(proxyUtility || 0)),
   };
 }
 
@@ -6299,13 +6302,17 @@ async function cmdRedMinGrindSearch() {
     loadMoveAccess('all', 'unbounded'),
   ]);
   const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
   const proxyPairs = [];
   const levelSummaries = [];
   for (let commonLevel = levelMin; commonLevel <= levelMax; commonLevel += 1) {
     const levelRows = redFamilyParetoRows(
       redPool.forms
-        .map(form => redFormLevelRow(form, red, commonLevel))
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
         .filter(Boolean)
     );
     const starterRows = levelRows
@@ -6561,11 +6568,15 @@ async function cmdRedMinGrindGaSearch() {
     loadMoveAccess('all', 'unbounded'),
   ]);
   const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
   function levelInput(commonLevel) {
     const levelRows = redFamilyParetoRows(
       redPool.forms
-        .map(form => redFormLevelRow(form, red, commonLevel))
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
         .filter(Boolean)
     );
     const starterRows = levelRows
@@ -6787,13 +6798,17 @@ async function cmdRedBattleModelSanity() {
     loadMoveAccess('all', 'unbounded'),
   ]);
   const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
 
   const results = [];
   for (const commonLevel of levels) {
     const rows = teamNames.map(name => {
       const candidates = redPool.forms
         .filter(form => form.species === name)
-        .map(form => redFormLevelRow(form, red, commonLevel))
+        .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
         .filter(Boolean)
         .sort((a, b) =>
           Number(a.grindExp) - Number(b.grindExp) ||
@@ -6881,7 +6896,7 @@ async function cmdRedMinGrindValidate() {
   const rows = teamNames.map(name => {
     const candidates = redPool.forms
       .filter(form => form.species === name)
-      .map(form => redFormLevelRow(form, red, commonLevel))
+      .map(form => redFormLevelRow(form, red, commonLevel, moveAccess, redExtraMachines))
       .filter(Boolean)
       .sort((a, b) =>
         Number(a.grindExp) - Number(b.grindExp) ||
@@ -6907,6 +6922,10 @@ async function cmdRedMinGrindValidate() {
 
   const state = redStateFromMembers(rows, commonLevel);
   const enemyTeam = hgssTrainerToShowdownTeam(red.trainer, red);
+  const redExtraMachines = [
+    ...(moveAccess.singleUseMachines || []),
+    ...(moveAccess.purchasableMachines || []),
+  ].filter(machine => Number(machine.availableFrom || 0) <= Number(red.stage || 0));
   const evaluation = await redEvaluateTeam(
     state,
     red,
