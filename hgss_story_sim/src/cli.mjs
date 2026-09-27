@@ -94,9 +94,9 @@ function normalizeSameStageJoinPolicy(value) {
 
 function normalizeExpAllocator(value) {
   const allocator = String(value || 'balanced').toLowerCase();
-  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'breakpoint-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'boss-aware-saturation', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(
-      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, or breakpoint-aware.`
+      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, boss-aware-saturation, or breakpoint-aware.`
     );
   }
   return allocator;
@@ -2771,6 +2771,24 @@ async function cmdExpAllocatorSmoke() {
     allocator: 'boss-aware',
     levelUtility: candidateBossUtility,
   });
+  const bossAwareSaturation = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware-saturation',
+    levelUtility: candidateBossUtility,
+  });
+  const bossAwareSaturationReversed = buildTeamExpSchedule({
+    candidates: [...team].reverse(),
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware-saturation',
+    levelUtility: candidateBossUtility,
+  });
   const breakpointAware = buildTeamExpSchedule({
     candidates: team,
     routeBosses: route,
@@ -2790,7 +2808,7 @@ async function cmdExpAllocatorSmoke() {
     levelUtility: candidateBossUtility,
   });
 
-  for (const schedule of [bossAwareSoft, bossAware, breakpointAware, breakpointAwareReversed]) {
+  for (const schedule of [bossAwareSoft, bossAware, bossAwareSaturation, bossAwareSaturationReversed, breakpointAware, breakpointAwareReversed]) {
     if (balanced.totalNaturalExp !== schedule.totalNaturalExp) {
       throw new Error(
         `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${schedule.totalNaturalExp}`
@@ -2803,6 +2821,11 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(breakpointAware.finalLevels) !== JSON.stringify(breakpointAwareReversed.finalLevels)) {
     throw new Error(
       `Breakpoint-aware allocator depends on team order: ${JSON.stringify(breakpointAware.finalLevels)} != ${JSON.stringify(breakpointAwareReversed.finalLevels)}`
+    );
+  }
+  if (JSON.stringify(bossAwareSaturation.finalLevels) !== JSON.stringify(bossAwareSaturationReversed.finalLevels)) {
+    throw new Error(
+      `Boss-aware-saturation allocator depends on team order: ${JSON.stringify(bossAwareSaturation.finalLevels)} != ${JSON.stringify(bossAwareSaturationReversed.finalLevels)}`
     );
   }
 
@@ -2866,6 +2889,11 @@ async function cmdExpAllocatorSmoke() {
       finalLevels: bossAwareSoft.finalLevels,
     },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
+    bossAwareSaturation: {
+      allocator: bossAwareSaturation.allocator,
+      levelSpread: levelSpread(bossAwareSaturation),
+      finalLevels: bossAwareSaturation.finalLevels,
+    },
     breakpointAware: {
       allocator: breakpointAware.allocator,
       bossHorizon: breakpointAware.breakpointBossHorizon,
@@ -3029,10 +3057,21 @@ async function cmdSwitchSmoke() {
   if (result.p1VoluntarySwitches < 1) {
     throw new Error(`Expected player-side matchup switch, got ${result.p1VoluntarySwitches}`);
   }
+  const noSwitchResult = await runBattle(
+    playerTeam,
+    enemyTeam,
+    7331,
+    { p1AiMode: 'no-switch' },
+  );
+  if (noSwitchResult.p1VoluntarySwitches !== 0) {
+    throw new Error(
+      `no-switch player policy still switched: ${noSwitchResult.p1VoluntarySwitches}`
+    );
+  }
   if (result.p2VoluntarySwitches !== 0) {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ greedy: result, noSwitch: noSwitchResult }, null, 2));
 }
 
 async function cmdAllocatorCrossCompare() {
@@ -3124,6 +3163,101 @@ async function cmdAllocatorCrossCompare() {
       breakpointAware: 'boss-aware baseline plus actual move/evolution breakpoint bonus across a 4-boss, 12-level lookahead',
     },
     results,
+  }, null, 2));
+}
+
+
+
+async function cmdAllocatorSaturationCompare() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) {
+    throw new Error('allocator-saturation-compare requires exactly six members via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, bossAwareContext, saturationContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story, 'normal-route', version, 'none', 'midpoint', 'map-order', 'boss-aware',
+    ),
+    loadExpContext(
+      story, 'normal-route', version, 'none', 'midpoint', 'map-order', 'boss-aware-saturation',
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('allocator-saturation-compare requires the selected starter in the team');
+
+  const results = {};
+  for (const [label, context] of [
+    ['bossAware', bossAwareContext],
+    ['saturation', saturationContext],
+  ]) {
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      context,
+      'none',
+      objective,
+    );
+    results[label] = {
+      ...compactEvaluationForAblation(evaluation),
+      expAllocator: context.expAllocator,
+      naturalFinalLevels: evaluation.expSchedule?.finalLevels || {},
+      bosses: evaluation.rows.map(row => ({
+        boss: row.boss,
+        aceLevel: Number(row.aceLevel || 0),
+        wins: Number(row.wins || 0),
+        losses: Number(row.losses || 0),
+        winRate: Number(row.winRate || 0),
+        playerLevels: row.playerLevels || {},
+      })),
+    };
+  }
+
+  const beforeByBoss = new Map(results.bossAware.bosses.map(row => [row.boss, row]));
+  const bossDeltas = results.saturation.bosses.map(row => {
+    const before = beforeByBoss.get(row.boss);
+    return {
+      boss: row.boss,
+      baselineWinRate: Number(before?.winRate || 0),
+      saturationWinRate: Number(row.winRate || 0),
+      delta: Number(row.winRate || 0) - Number(before?.winRate || 0),
+      baselineLevels: before?.playerLevels || {},
+      saturationLevels: row.playerLevels || {},
+    };
+  });
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'experimental anti-overinvestment allocator A/B. Saturation fades the absolute boss-utility reward as a member approaches its own ace-level matchup potential; it does not force equal team levels and does not alter the optimizer objective.',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    objective,
+    baseline: results.bossAware,
+    saturation: results.saturation,
+    deltas: {
+      score: results.saturation.score - results.bossAware.score,
+      geometric: results.saturation.storyClearGeometricScore - results.bossAware.storyClearGeometricScore,
+      coverage: results.saturation.storyClearCoverageScore - results.bossAware.storyClearCoverageScore,
+      bottom5: results.saturation.bottom5BossWinRate - results.bossAware.bottom5BossWinRate,
+      worst: results.saturation.worstBossWinRate - results.bossAware.worstBossWinRate,
+    },
+    bossDeltas,
   }, null, 2));
 }
 
@@ -4767,6 +4901,244 @@ async function cmdBossLocalOracleProbe() {
   }, null, 2));
 }
 
+
+
+function localOraclePlans(team, boss, levelsByCandidate, moveAccess) {
+  const levelsByBattle = [levelsByCandidate];
+  const singleUsePlan = planSingleUseMachines(
+    team,
+    [boss],
+    moveAccess,
+    { levelsByBattle },
+  );
+  const purchasable = planPurchasableMachines(
+    team,
+    [boss],
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  return {
+    singleUsePlan,
+    purchasablePlan: purchasable.assignments,
+    purchaseCosts: purchasable.costs,
+  };
+}
+
+async function cmdBossLocalResourcePolicyProbe() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const targetBossNames = String(arg('targets', 'Lance,Red'))
+    .split(',').map(value => value.trim()).filter(Boolean);
+  const explicitCandidates = String(arg('candidates', ''))
+    .split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const topPerBoss = Math.max(1, Math.floor(Number(arg('top-per-boss', '8'))));
+  const candidateCap = Math.max(1, Math.floor(Number(arg('candidate-cap', '10'))));
+
+  if (teamNames.length !== 6) {
+    throw new Error('boss-local-resource-policy-probe requires exactly six members via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, requestedMoveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess('all', 'natural'),
+    loadExpContext(
+      story, 'normal-route', version, 'none', 'midpoint', 'map-order', 'boss-aware',
+    ),
+  ]);
+  const baselineTeam = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(baselineTeam, starterName);
+  if (!starter) throw new Error('boss-local-resource-policy-probe requires the selected starter in the team');
+
+  const baseline = await evaluateCandidates(
+    baselineTeam,
+    story.bosses,
+    runs,
+    requestedMoveAccess,
+    expContext,
+    'none',
+    'story-clear',
+  );
+  const weak = weakestElectiveMember(baselineTeam, starter, baseline, '');
+  if (!weak) throw new Error('No elective member is available for replacement');
+  const kept = baselineTeam.filter(mon => candidateIdentity(mon) !== weak.key);
+  const frozenMoveAccess = resourceMoveAccessVariants(requestedMoveAccess)
+    .find(variant => variant.resourceProfile === baseline.effectiveResourceProfile) || requestedMoveAccess;
+  const unlockedMoveAccess = resourceMoveAccessVariants(requestedMoveAccess)
+    .find(variant => variant.resourceProfile === 'all') || requestedMoveAccess;
+
+  const bosses = [];
+  for (const bossName of targetBossNames) {
+    const battleIndex = (baseline.rows || []).findIndex(row => row.boss === bossName);
+    const boss = story.bosses.find(item => item.label === bossName);
+    if (battleIndex < 0 || !boss) {
+      bosses.push({ boss: bossName, skipped: true, reason: 'boss not in evaluated route' });
+      continue;
+    }
+
+    const levelsBefore = {
+      ...(baseline.expSchedule?.battles?.[battleIndex]?.levelsBefore || {}),
+    };
+    const seed = 1000 + Number(boss.stage || 0) * 100000 + battleIndex * 1000;
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+    const candidates = counterfactualCandidatePool({
+      pool,
+      baselineTeam,
+      starter,
+      bosses: [boss],
+      topPerBoss,
+      candidateCap,
+      explicitCandidates,
+    });
+
+    const probes = [];
+    for (const replacement of candidates) {
+      if (Number(replacement.availableFrom || 0) > Number(boss.stage || 0)) continue;
+      const replacementKey = candidateIdentity(replacement);
+      const team = [...kept, replacement];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+
+      const frozenLevels = { ...levelsBefore };
+      delete frozenLevels[weak.key];
+      frozenLevels[replacementKey] = Number(boss.aceLevel || 1);
+
+      async function evaluateMode(label, moveAccess, singleUsePlan, purchasablePlan, p1AiMode) {
+        const ordered = orderCandidatesForBoss(team, boss, frozenLevels);
+        const playerTeam = materializeCandidateTeam(
+          ordered,
+          boss.stage,
+          boss.aceLevel,
+          { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: frozenLevels },
+        );
+        const replacementMon = playerTeam.find(mon => mon._candidateKey === replacementKey) || null;
+        if (!replacementMon) {
+          return { label, skipped: true, reason: 'replacement did not materialize' };
+        }
+        const result = await simulateMatchup(
+          playerTeam,
+          enemyTeam,
+          runs,
+          seed,
+          { p2Trainer: boss, p1AiMode },
+        );
+        return {
+          label,
+          p1AiMode,
+          replacement: {
+            species: replacementMon.species,
+            level: replacementMon.level,
+            moves: replacementMon.moves || [],
+            ability: replacementMon.ability || null,
+            item: replacementMon.item || null,
+          },
+          ...compactFixedBattleResult(result, playerTeam, replacementKey),
+        };
+      }
+
+      const frozenGreedy = await evaluateMode(
+        'frozen-resource-greedy',
+        frozenMoveAccess,
+        baseline.singleUsePlan,
+        baseline.purchasablePlan,
+        'greedy',
+      );
+
+      const localPlans = localOraclePlans(team, boss, frozenLevels, unlockedMoveAccess);
+      const unlockedGreedy = await evaluateMode(
+        'unlocked-resource-greedy',
+        unlockedMoveAccess,
+        localPlans.singleUsePlan,
+        localPlans.purchasablePlan,
+        'greedy',
+      );
+      const unlockedAggressive = await evaluateMode(
+        'unlocked-resource-aggressive',
+        unlockedMoveAccess,
+        localPlans.singleUsePlan,
+        localPlans.purchasablePlan,
+        'aggressive',
+      );
+      const unlockedNoSwitch = await evaluateMode(
+        'unlocked-resource-no-switch',
+        unlockedMoveAccess,
+        localPlans.singleUsePlan,
+        localPlans.purchasablePlan,
+        'no-switch',
+      );
+
+      let classification = 'still-unsolved';
+      if (Number(frozenGreedy.wins || 0) > 0) classification = 'level-only-solver';
+      else if (Number(unlockedGreedy.wins || 0) > 0) classification = 'resource-loadout-sensitive';
+      else if (
+        Number(unlockedAggressive.wins || 0) > 0 ||
+        Number(unlockedNoSwitch.wins || 0) > 0
+      ) classification = 'player-policy-sensitive';
+
+      probes.push({
+        candidate: replacement.species,
+        key: replacementKey,
+        proxyPotential: candidateAceLevelPotential(replacement, boss),
+        localPurchaseCosts: localPlans.purchaseCosts,
+        classification,
+        frozenGreedy,
+        unlockedGreedy,
+        unlockedAggressive,
+        unlockedNoSwitch,
+      });
+    }
+
+    probes.sort((a, b) => {
+      const bestRate = row => Math.max(
+        Number(row.frozenGreedy?.winRate || 0),
+        Number(row.unlockedGreedy?.winRate || 0),
+        Number(row.unlockedAggressive?.winRate || 0),
+        Number(row.unlockedNoSwitch?.winRate || 0),
+      );
+      return bestRate(b) - bestRate(a) ||
+        Number(b.proxyPotential || 0) - Number(a.proxyPotential || 0) ||
+        a.candidate.localeCompare(b.candidate);
+    });
+
+    bosses.push({
+      boss: boss.label,
+      aceLevel: Number(boss.aceLevel || 0),
+      replacedSlot: {
+        species: weak.candidate.species,
+        key: weak.key,
+        naturalLevel: Number(levelsBefore[weak.key] || 0),
+      },
+      screenedCandidates: candidates.map(candidate => candidate.species),
+      anyFrozenSolver: probes.some(row => Number(row.frozenGreedy?.wins || 0) > 0),
+      anyResourceSolver: probes.some(row => Number(row.unlockedGreedy?.wins || 0) > 0),
+      anyPolicySolver: probes.some(row =>
+        Number(row.unlockedAggressive?.wins || 0) > 0 ||
+        Number(row.unlockedNoSwitch?.wins || 0) > 0
+      ),
+      probes,
+    });
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'last-cause diagnostic for hard bosses. Freeze route levels, force the replacement to boss ace level, then compare baseline resource ownership against a boss-local all-resource replan and simple player switching-policy variants. Diagnostic only; no optimizer rule changes.',
+    version,
+    starter: starter.species,
+    baselineTeam: baselineTeam.map(mon => mon.species),
+    selectedWeakSlot: weak.candidate.species,
+    runsPerMode: runs,
+    resourceOracle: 'boss-local single-use/purchasable TM ownership is replanned from the full all-resource pool without route-history or natural-money limits',
+    playerPolicies: {
+      greedy: 'current player policy',
+      aggressive: 'same move scorer, but lower switch threshold, shorter cooldown, and higher switch cap',
+      noSwitch: 'same move scorer with voluntary switching disabled',
+    },
+    bosses,
+  }, null, 2));
+}
+
 async function cmdTrainerAiCompare() {
   const runs = Number(arg('runs', '20'));
   const story = await loadStory();
@@ -5199,12 +5571,14 @@ const commands = {
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
   'allocator-cross-compare': cmdAllocatorCrossCompare,
+  'allocator-saturation-compare': cmdAllocatorSaturationCompare,
   'team-ablation': cmdTeamAblation,
   'team-usage': cmdTeamUsage,
   'team-activation': cmdTeamActivation,
   'boss-interaction-matrix': cmdBossInteractionMatrix,
   'counterfactual-specialist-probe': cmdCounterfactualSpecialistProbe,
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
+  'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -5216,7 +5590,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
