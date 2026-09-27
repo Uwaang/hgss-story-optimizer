@@ -94,9 +94,9 @@ function normalizeSameStageJoinPolicy(value) {
 
 function normalizeExpAllocator(value) {
   const allocator = String(value || 'balanced').toLowerCase();
-  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'boss-aware-saturation', 'breakpoint-aware'].includes(allocator)) {
+  if (!['balanced', 'boss-aware-soft', 'boss-aware', 'boss-aware-depth', 'boss-aware-saturation', 'breakpoint-aware'].includes(allocator)) {
     throw new Error(
-      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, boss-aware-saturation, or breakpoint-aware.`
+      `Unknown EXP allocator: ${value}. Use balanced, boss-aware-soft, boss-aware, boss-aware-depth, boss-aware-saturation, or breakpoint-aware.`
     );
   }
   return allocator;
@@ -2771,6 +2771,24 @@ async function cmdExpAllocatorSmoke() {
     allocator: 'boss-aware',
     levelUtility: candidateBossUtility,
   });
+  const bossAwareDepth = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware-depth',
+    levelUtility: candidateBossUtility,
+  });
+  const bossAwareDepthReversed = buildTeamExpSchedule({
+    candidates: [...team].reverse(),
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    allocator: 'boss-aware-depth',
+    levelUtility: candidateBossUtility,
+  });
   const bossAwareSaturation = buildTeamExpSchedule({
     candidates: team,
     routeBosses: route,
@@ -2808,7 +2826,7 @@ async function cmdExpAllocatorSmoke() {
     levelUtility: candidateBossUtility,
   });
 
-  for (const schedule of [bossAwareSoft, bossAware, bossAwareSaturation, bossAwareSaturationReversed, breakpointAware, breakpointAwareReversed]) {
+  for (const schedule of [bossAwareSoft, bossAware, bossAwareDepth, bossAwareDepthReversed, bossAwareSaturation, bossAwareSaturationReversed, breakpointAware, breakpointAwareReversed]) {
     if (balanced.totalNaturalExp !== schedule.totalNaturalExp) {
       throw new Error(
         `Allocator changed total natural EXP: ${balanced.totalNaturalExp} != ${schedule.totalNaturalExp}`
@@ -2821,6 +2839,11 @@ async function cmdExpAllocatorSmoke() {
   if (JSON.stringify(breakpointAware.finalLevels) !== JSON.stringify(breakpointAwareReversed.finalLevels)) {
     throw new Error(
       `Breakpoint-aware allocator depends on team order: ${JSON.stringify(breakpointAware.finalLevels)} != ${JSON.stringify(breakpointAwareReversed.finalLevels)}`
+    );
+  }
+  if (JSON.stringify(bossAwareDepth.finalLevels) !== JSON.stringify(bossAwareDepthReversed.finalLevels)) {
+    throw new Error(
+      `Boss-aware-depth allocator depends on team order: ${JSON.stringify(bossAwareDepth.finalLevels)} != ${JSON.stringify(bossAwareDepthReversed.finalLevels)}`
     );
   }
   if (JSON.stringify(bossAwareSaturation.finalLevels) !== JSON.stringify(bossAwareSaturationReversed.finalLevels)) {
@@ -2889,6 +2912,11 @@ async function cmdExpAllocatorSmoke() {
       finalLevels: bossAwareSoft.finalLevels,
     },
     bossAware: { allocator: bossAware.allocator, finalLevels: bossAware.finalLevels },
+    bossAwareDepth: {
+      allocator: bossAwareDepth.allocator,
+      levelSpread: levelSpread(bossAwareDepth),
+      finalLevels: bossAwareDepth.finalLevels,
+    },
     bossAwareSaturation: {
       allocator: bossAwareSaturation.allocator,
       levelSpread: levelSpread(bossAwareSaturation),
@@ -3167,6 +3195,101 @@ async function cmdAllocatorCrossCompare() {
 }
 
 
+
+
+
+async function cmdAllocatorDepthCompare() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (teamNames.length !== 6) {
+    throw new Error('allocator-depth-compare requires exactly six members via --team=A,B,C,D,E,F');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, bossAwareContext, depthContext] = await Promise.all([
+    loadCanonicalPool(version, story),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story, 'normal-route', version, 'none', 'midpoint', 'map-order', 'boss-aware',
+    ),
+    loadExpContext(
+      story, 'normal-route', version, 'none', 'midpoint', 'map-order', 'boss-aware-depth',
+    ),
+  ]);
+  const team = selectByNames(pool.candidates, teamNames);
+  const starter = findStarterCandidate(team, starterName);
+  if (!starter) throw new Error('allocator-depth-compare requires the selected starter in the team');
+
+  const results = {};
+  for (const [label, context] of [
+    ['bossAware', bossAwareContext],
+    ['depth', depthContext],
+  ]) {
+    const evaluation = await evaluateCandidates(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      context,
+      'none',
+      objective,
+    );
+    results[label] = {
+      ...compactEvaluationForAblation(evaluation),
+      expAllocator: context.expAllocator,
+      naturalFinalLevels: evaluation.expSchedule?.finalLevels || {},
+      bosses: evaluation.rows.map(row => ({
+        boss: row.boss,
+        aceLevel: Number(row.aceLevel || 0),
+        wins: Number(row.wins || 0),
+        losses: Number(row.losses || 0),
+        winRate: Number(row.winRate || 0),
+        playerLevels: row.playerLevels || {},
+      })),
+    };
+  }
+
+  const beforeByBoss = new Map(results.bossAware.bosses.map(row => [row.boss, row]));
+  const bossDeltas = results.depth.bosses.map(row => {
+    const before = beforeByBoss.get(row.boss);
+    return {
+      boss: row.boss,
+      baselineWinRate: Number(before?.winRate || 0),
+      depthWinRate: Number(row.winRate || 0),
+      delta: Number(row.winRate || 0) - Number(before?.winRate || 0),
+      baselineLevels: before?.playerLevels || {},
+      depthLevels: row.playerLevels || {},
+    };
+  });
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'experimental roster-depth allocator A/B. It keeps the old boss-aware priority intact and adds only a bounded readiness bonus to the top two ace-level matchup answers for the next boss. No six-way level equalization and no objective change.',
+    version,
+    starter: starter.species,
+    team: team.map(mon => mon.species),
+    runsPerBoss: runs,
+    resourceProfile,
+    spendPolicy,
+    objective,
+    baseline: results.bossAware,
+    depth: results.depth,
+    deltas: {
+      score: results.depth.score - results.bossAware.score,
+      geometric: results.depth.storyClearGeometricScore - results.bossAware.storyClearGeometricScore,
+      coverage: results.depth.storyClearCoverageScore - results.bossAware.storyClearCoverageScore,
+      bottom5: results.depth.bottom5BossWinRate - results.bossAware.bottom5BossWinRate,
+      worst: results.depth.worstBossWinRate - results.bossAware.worstBossWinRate,
+    },
+    bossDeltas,
+  }, null, 2));
+}
 
 async function cmdAllocatorSaturationCompare() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
@@ -5069,6 +5192,54 @@ async function cmdBossLocalResourcePolicyProbe() {
         'no-switch',
       );
 
+      const rosterAceLevels = {};
+      for (const candidate of team) {
+        const key = candidateIdentity(candidate);
+        const current = Number(frozenLevels[key] || 0);
+        rosterAceLevels[key] = Math.max(current, Number(boss.aceLevel || 1));
+      }
+      const rosterAcePlans = localOraclePlans(team, boss, rosterAceLevels, unlockedMoveAccess);
+
+      async function evaluateRosterAceMode(label, p1AiMode) {
+        const ordered = orderCandidatesForBoss(team, boss, rosterAceLevels);
+        const playerTeam = materializeCandidateTeam(
+          ordered,
+          boss.stage,
+          boss.aceLevel,
+          {
+            moveAccess: unlockedMoveAccess,
+            singleUsePlan: rosterAcePlans.singleUsePlan,
+            purchasablePlan: rosterAcePlans.purchasablePlan,
+            levelsByCandidate: rosterAceLevels,
+          },
+        );
+        const result = await simulateMatchup(
+          playerTeam,
+          enemyTeam,
+          runs,
+          seed,
+          { p2Trainer: boss, p1AiMode },
+        );
+        return {
+          label,
+          p1AiMode,
+          ...compactFixedBattleResult(result, playerTeam, replacementKey),
+        };
+      }
+
+      const rosterAceGreedy = await evaluateRosterAceMode(
+        'roster-ace-unlocked-greedy',
+        'greedy',
+      );
+      const rosterAceNoSwitch = await evaluateRosterAceMode(
+        'roster-ace-unlocked-no-switch',
+        'no-switch',
+      );
+      const rosterAceAggressive = await evaluateRosterAceMode(
+        'roster-ace-unlocked-aggressive',
+        'aggressive',
+      );
+
       let classification = 'still-unsolved';
       if (Number(frozenGreedy.wins || 0) > 0) classification = 'level-only-solver';
       else if (Number(unlockedGreedy.wins || 0) > 0) classification = 'resource-loadout-sensitive';
@@ -5076,6 +5247,14 @@ async function cmdBossLocalResourcePolicyProbe() {
         Number(unlockedAggressive.wins || 0) > 0 ||
         Number(unlockedNoSwitch.wins || 0) > 0
       ) classification = 'player-policy-sensitive';
+      else if (Number(rosterAceGreedy.wins || 0) > 0) {
+        classification = 'global-progression-ceiling';
+      } else if (
+        Number(rosterAceNoSwitch.wins || 0) > 0 ||
+        Number(rosterAceAggressive.wins || 0) > 0
+      ) {
+        classification = 'global-progression-plus-policy';
+      }
 
       probes.push({
         candidate: replacement.species,
@@ -5087,6 +5266,9 @@ async function cmdBossLocalResourcePolicyProbe() {
         unlockedGreedy,
         unlockedAggressive,
         unlockedNoSwitch,
+        rosterAceGreedy,
+        rosterAceNoSwitch,
+        rosterAceAggressive,
       });
     }
 
@@ -5096,6 +5278,9 @@ async function cmdBossLocalResourcePolicyProbe() {
         Number(row.unlockedGreedy?.winRate || 0),
         Number(row.unlockedAggressive?.winRate || 0),
         Number(row.unlockedNoSwitch?.winRate || 0),
+        Number(row.rosterAceGreedy?.winRate || 0),
+        Number(row.rosterAceNoSwitch?.winRate || 0),
+        Number(row.rosterAceAggressive?.winRate || 0),
       );
       return bestRate(b) - bestRate(a) ||
         Number(b.proxyPotential || 0) - Number(a.proxyPotential || 0) ||
@@ -5117,13 +5302,18 @@ async function cmdBossLocalResourcePolicyProbe() {
         Number(row.unlockedAggressive?.wins || 0) > 0 ||
         Number(row.unlockedNoSwitch?.wins || 0) > 0
       ),
+      anyRosterAceSolver: probes.some(row =>
+        Number(row.rosterAceGreedy?.wins || 0) > 0 ||
+        Number(row.rosterAceNoSwitch?.wins || 0) > 0 ||
+        Number(row.rosterAceAggressive?.wins || 0) > 0
+      ),
       probes,
     });
   }
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'last-cause diagnostic for hard bosses. Freeze route levels, force the replacement to boss ace level, then compare baseline resource ownership against a boss-local all-resource replan and simple player switching-policy variants. Diagnostic only; no optimizer rule changes.',
+    purpose: 'last-cause diagnostic for hard bosses. Freeze route levels, force the replacement to boss ace level, then compare baseline resource ownership against a boss-local all-resource replan and simple player switching-policy variants. A second upper bound raises every team member to at least the boss ace level. Diagnostic only; no optimizer rule changes.',
     version,
     starter: starter.species,
     baselineTeam: baselineTeam.map(mon => mon.species),
@@ -5571,6 +5761,7 @@ const commands = {
   'switch-smoke': cmdSwitchSmoke,
   'trainer-ai-smoke': cmdTrainerAiSmoke,
   'allocator-cross-compare': cmdAllocatorCrossCompare,
+  'allocator-depth-compare': cmdAllocatorDepthCompare,
   'allocator-saturation-compare': cmdAllocatorSaturationCompare,
   'team-ablation': cmdTeamAblation,
   'team-usage': cmdTeamUsage,
@@ -5590,7 +5781,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
