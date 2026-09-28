@@ -6833,6 +6833,117 @@ function compareCompletionHybridRows(a, b) {
   );
 }
 
+function attachEqualLevelCompletionProxyPotentials(
+  states,
+  screened,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+) {
+  const labels = hardBosses.map(boss => String(boss.label));
+  return states.map(state => {
+    const families = new Set(state.team.map(candidateIdentity));
+    let bestRoute = null;
+    const bossBest = Object.fromEntries(labels.map(label => [label, 0]));
+    const bossBestTeams = Object.fromEntries(labels.map(label => [label, []]));
+
+    for (const candidate of screened) {
+      if (families.has(candidateIdentity(candidate))) continue;
+      const team = [...state.team, candidate];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      const expCost = equalLevelTeamExpCost(team, commonLevel);
+      if (!expCost.legal || expCost.totalGrindExp === null) continue;
+      const proxy = equalLevelTeamProxy(team, routeBosses, commonLevel);
+      const row = { team, proxy, expCost };
+
+      if (
+        !bestRoute ||
+        Number(proxy.composite || 0) > Number(bestRoute.proxy.composite || 0) ||
+        (
+          Math.abs(Number(proxy.composite || 0) - Number(bestRoute.proxy.composite || 0)) <= 1e-12 &&
+          (
+            Number(proxy.bottom5 || 0) > Number(bestRoute.proxy.bottom5 || 0) ||
+            (
+              Math.abs(Number(proxy.bottom5 || 0) - Number(bestRoute.proxy.bottom5 || 0)) <= 1e-12 &&
+              Number(expCost.totalGrindExp) < Number(bestRoute.expCost.totalGrindExp)
+            )
+          )
+        )
+      ) {
+        bestRoute = row;
+      }
+
+      for (const boss of hardBosses) {
+        const label = String(boss.label);
+        const score = Number(equalLevelBossTeamProxy(team, boss, commonLevel) || 0);
+        if (score > Number(bossBest[label] || 0)) {
+          bossBest[label] = score;
+          bossBestTeams[label] = team.map(mon => mon.species);
+        }
+      }
+    }
+
+    return {
+      ...state,
+      completionProxy: {
+        composite: Number(bestRoute?.proxy?.composite || 0),
+        mean: Number(bestRoute?.proxy?.mean || 0),
+        bottom5: Number(bestRoute?.proxy?.bottom5 || 0),
+        bestExp: bestRoute?.expCost?.totalGrindExp ?? Infinity,
+        bestTeam: bestRoute?.team?.map(mon => mon.species) || [],
+        bosses: bossBest,
+        bossBestTeams,
+      },
+    };
+  });
+}
+
+function selectEqualLevelCompletionProxyBeam(states, width, hardBosses = []) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  for (const boss of hardBosses) {
+    const label = String(boss.label);
+    const ranked = [...states].sort((a, b) =>
+      Number(b.completionProxy?.bosses?.[label] || 0) -
+        Number(a.completionProxy?.bosses?.[label] || 0) ||
+      Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+      Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+      key(a).localeCompare(key(b))
+    );
+    for (const state of ranked.slice(0, 3)) add(state);
+  }
+
+  const byComposite = [...states].sort((a, b) =>
+    Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+    Number(b.completionProxy?.bottom5 || 0) - Number(a.completionProxy?.bottom5 || 0) ||
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byBottom = [...states].sort((a, b) =>
+    Number(b.completionProxy?.bottom5 || 0) - Number(a.completionProxy?.bottom5 || 0) ||
+    Number(b.completionProxy?.mean || 0) - Number(a.completionProxy?.mean || 0) ||
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byComposite.slice(0, Math.ceil(width * 0.55))) add(state);
+  for (const state of byBottom.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.20))) add(state);
+  for (const state of byComposite) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
 async function attachEqualLevelSingleCompletionRollouts(
   states,
   screened,
@@ -7110,6 +7221,11 @@ async function cmdEqualLevelElectricTrace() {
     beamWidth,
     Math.floor(Number(arg('hybrid-pre-cap', '256'))),
   );
+  const completionProxyOnly = String(arg('completion-proxy-only', 'false')).toLowerCase() === 'true';
+  const targetFamilySpecies = String(arg('target-families', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
 
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
@@ -7127,6 +7243,23 @@ async function cmdEqualLevelElectricTrace() {
     candidateCap,
   );
   const screened = screening.rows.map(row => row.candidate);
+  const targetFamilyIds = targetFamilySpecies.map(species => {
+    const candidate = pool.candidates.find(row => row.species === species);
+    if (!candidate) throw new Error('Unknown target family species: ' + species);
+    return candidateFamilyIdentity(candidate);
+  });
+  const targetFamilySet = new Set(targetFamilyIds);
+  const summarizeTargetParents = states => ({
+    count: (states || []).filter(state =>
+      state.team.every(candidate => targetFamilySet.has(candidateFamilyIdentity(candidate)))
+    ).length,
+    maxTargetMembers: Math.max(
+      0,
+      ...(states || []).map(state =>
+        state.team.filter(candidate => targetFamilySet.has(candidateFamilyIdentity(candidate))).length
+      )
+    ),
+  });
 
   const classify = state => {
     const hasMagneton = state.team.some(candidate =>
@@ -7227,6 +7360,53 @@ async function cmdEqualLevelElectricTrace() {
       hardBosses,
       commonLevel,
     );
+
+    if (size === 5 && completionProxyOnly) {
+      const completionAnnotated = attachEqualLevelCompletionProxyPotentials(
+        expanded,
+        screened,
+        routeBosses,
+        hardBosses,
+        commonLevel,
+      );
+      const completionPreselected = selectEqualLevelCompletionProxyBeam(
+        completionAnnotated,
+        Math.min(completionAnnotated.length, hybridPreCap),
+        hardBosses,
+      );
+      stages.push({
+        size,
+        mode: 'completion-aware-proxy-preselection-trace',
+        expanded: summarize(expanded),
+        baselinePreselected: summarize(preselected),
+        completionAwarePreselected: summarize(completionPreselected),
+        expandedCount: expanded.length,
+        baselinePreselectedCount: preselected.length,
+        completionAwarePreselectedCount: completionPreselected.length,
+        targetFamilies: targetFamilySpecies,
+        targetParents: {
+          expanded: summarizeTargetParents(expanded),
+          baselinePreselected: summarizeTargetParents(preselected),
+          completionAwarePreselected: summarizeTargetParents(completionPreselected),
+        },
+        completionTop: [...completionPreselected]
+          .sort((a, b) =>
+            Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+            Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity)
+          )
+          .slice(0, 20)
+          .map(state => ({
+            parent: state.team.map(candidate => candidate.species),
+            bestTeam: state.completionProxy?.bestTeam || [],
+            composite: Number(state.completionProxy?.composite || 0),
+            bottom5: Number(state.completionProxy?.bottom5 || 0),
+            bestExp: state.completionProxy?.bestExp ?? null,
+          })),
+      });
+      beam = completionPreselected;
+      break;
+    }
+
     const screenedHybrid = await attachEqualLevelHybridScreens(
       preselected,
       story,
@@ -7257,7 +7437,9 @@ async function cmdEqualLevelElectricTrace() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'trace Magneton/Ampharos survival through equal-level proxy beam stages',
+    purpose: completionProxyOnly
+      ? 'trace completion-aware proxy preselection before expensive size-five battle screening'
+      : 'trace Magneton/Ampharos survival through equal-level proxy beam stages',
     commonLevel,
     candidateCap,
     beamWidth,
