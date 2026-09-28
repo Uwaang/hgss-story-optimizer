@@ -2606,6 +2606,105 @@ async function cmdExpBudget() {
   }, null, 2));
 }
 
+async function cmdRouteExpDataAudit() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  if (expProfile === 'ace' || expProfile === 'major') {
+    throw new Error('route-exp-data-audit requires normal-route or all-accessible');
+  }
+
+  const story = await loadStory();
+  const expContext = await loadExpContext(
+    story,
+    expProfile,
+    version,
+    'none',
+    'max',
+    'map-order',
+    'balanced',
+  );
+  const world = expContext.world;
+  const timingWindows = world?.expTiming?.windows || [];
+
+  const timingByMap = new Map();
+  for (const window of timingWindows) {
+    for (const map of window.maps || []) {
+      const rows = timingByMap.get(map) || [];
+      rows.push({
+        stage: Number(window.stage),
+        beforeBoss: window.beforeBoss || null,
+      });
+      timingByMap.set(map, rows);
+    }
+  }
+
+  const maps = [...(world?.mapTrainerRewards?.values?.() || [])]
+    .map(row => ({
+      map: row.map,
+      stage: Number(row.stage),
+      trainerCount: row.trainers.length,
+      totalExp: Number(row.totalExp || 0),
+      totalMoney: Number(row.totalMoney || 0),
+      timingWindows: timingByMap.get(row.map) || [],
+      trainers: row.trainers
+        .map(trainer => ({
+          key: trainer.key,
+          trainerId: trainer.trainerId,
+          totalExp: Number(trainer.totalExp || 0),
+          prizeMoney: Number(trainer.prizeMoney || 0),
+          party: trainer.party || [],
+        }))
+        .sort((a, b) => b.totalExp - a.totalExp || a.key.localeCompare(b.key)),
+    }))
+    .sort((a, b) =>
+      a.stage - b.stage ||
+      b.totalExp - a.totalExp ||
+      a.map.localeCompare(b.map)
+    );
+
+  const stageSummary = [];
+  for (const stage of [...new Set(maps.map(row => row.stage))].sort((a, b) => a - b)) {
+    const rows = maps.filter(row => row.stage === stage);
+    stageSummary.push({
+      stage,
+      mapCount: rows.length,
+      trainerCount: rows.reduce((sum, row) => sum + row.trainerCount, 0),
+      totalExp: rows.reduce((sum, row) => sum + row.totalExp, 0),
+      largestMaps: [...rows]
+        .sort((a, b) => b.totalExp - a.totalExp || a.map.localeCompare(b.map))
+        .slice(0, 10)
+        .map(row => ({
+          map: row.map,
+          trainerCount: row.trainerCount,
+          totalExp: row.totalExp,
+        })),
+    });
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'audit route EXP source coverage before route-aware optimization',
+    version,
+    expProfile,
+    sourceCommit: story.config.sourceCommit,
+    granularity: {
+      accessibility: 'map-level',
+      trainerExtraction: 'all trainer refs found in the map zone-event JSON',
+      knownLimitation:
+        'A map may contain geographically gated trainer objects that are not reachable when the map first becomes partially accessible. These currently require trainer/window-level curation.',
+    },
+    coverage: {
+      mapCount: Number(world?.mapCount || 0),
+      trainerCount: Number(world?.mapTrainerRows?.length || 0),
+      expYieldSpeciesCount: Number(world?.expYieldBySpecies?.size || 0),
+      unresolvedMaps: world?.unresolvedMaps || [],
+      timingWindowCount: timingWindows.length,
+    },
+    stageSummary,
+    maps,
+  }, null, 2));
+}
+
 async function cmdRouteExpStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -8267,6 +8366,7 @@ const commands = {
   'exp-envelope': cmdExpEnvelope,
   'exp-envelope-smoke': cmdExpEnvelopeSmoke,
   'exp-budget': cmdExpBudget,
+  'route-exp-data-audit': cmdRouteExpDataAudit,
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
