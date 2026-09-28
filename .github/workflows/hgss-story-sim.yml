@@ -1387,6 +1387,31 @@ jobs:
           path: hgss_story_sim/results/*.json
           if-no-files-found: error
 
+  ampharos_magneton_beam_trace:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[electric-trace]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Trace Lv63 electric-slot beam survival
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-electric-trace \
+            --level=63 --candidate-cap=36 --beam-width=32 --size4-multiplier=8 \
+            > results/electric-trace-lv63.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ampharos-magneton-beam-trace-lv63
+          path: hgss_story_sim/results/electric-trace-lv63.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
