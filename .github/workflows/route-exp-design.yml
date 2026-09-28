@@ -1,0 +1,68 @@
+name: route-exp-design
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  route_exp_semantics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: early-level-only
+            evolution_policy: level-only
+            team_arg: Cyndaquil,Mareep,Geodude,Zubat,Lapras,Tentacool
+            use_keys: "false"
+          - label: trade-aware-direct-quagsire
+            evolution_policy: trade-aware
+            team_arg: Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1
+            use_keys: "true"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Route EXP legacy smoke
+        run: |
+          npm run exp-budget-smoke
+      - name: Evaluate route EXP team
+        shell: bash
+        run: |
+          mkdir -p results
+          if [ "${{ matrix.use_keys }}" = "true" ]; then
+            TEAM_FLAG="--team-keys"
+          else
+            TEAM_FLAG="--team"
+          fi
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=${{ matrix.evolution_policy }} \
+            --exp-profile=normal-route --grind-policy=none \
+            --entry-level=max --same-stage-join=map-order \
+            --exp-allocator=balanced \
+            --resources=all --spend-policy=natural \
+            --runs=2 \
+            "${TEAM_FLAG}=${{ matrix.team_arg }}" \
+            > results/route-exp-${{ matrix.label }}.json
+      - name: Assert realistic first-gym levels
+        run: |
+          jq -e '
+            .firstGym != null and
+            (.firstGym.playerLevels | length) >= 1 and
+            ([.firstGym.playerLevels[]] | max) < 30 and
+            .ledger.unknownEntryLevels == []
+          ' results/route-exp-${{ matrix.label }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-${{ matrix.label }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
