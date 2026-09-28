@@ -1473,6 +1473,55 @@ jobs:
           path: hgss_story_sim/results/*.json
           if-no-files-found: error
 
+  size5_completion_lookahead_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[size5-lookahead]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [63, 72]
+        size5_mode: [actual, completion]
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/size5-lookahead-${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: size5-lookahead-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/size5-lookahead-${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: size5-lookahead-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Search with size-five mode
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} \
+            --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=256 \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --size5-mode=${{ matrix.size5_mode }} \
+            --completion-choices=6 --completion-runs=2 \
+            --seed-offset=505000 \
+            > results/size5-lookahead-lv${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size5-lookahead-lv${{ matrix.level }}-${{ matrix.size5_mode }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
