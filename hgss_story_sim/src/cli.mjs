@@ -6763,6 +6763,132 @@ function selectCompletionRolloutCandidates(
   return [...selected.values()].slice(0, cap);
 }
 
+function selectSingleCompletionRolloutCandidates(
+  state,
+  screened,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  cap,
+) {
+  const families = new Set(state.team.map(candidateIdentity));
+  const candidates = [];
+  for (const candidate of screened) {
+    if (families.has(candidateIdentity(candidate))) continue;
+    const team = [...state.team, candidate];
+    if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+    const expCost = equalLevelTeamExpCost(team, commonLevel);
+    if (!expCost.legal || expCost.totalGrindExp === null) continue;
+    candidates.push({
+      team,
+      proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+      expCost,
+    });
+  }
+
+  const selected = new Map();
+  const key = row => familySetKey(row.team);
+  const add = row => {
+    if (!row || selected.size >= cap) return;
+    selected.set(key(row), row);
+  };
+  const byRoute = [...candidates].sort((a, b) =>
+    b.proxy.composite - a.proxy.composite ||
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  for (const row of byRoute.slice(0, 2)) add(row);
+  for (const boss of hardBosses) {
+    const ranked = [...candidates].sort((a, b) =>
+      equalLevelBossTeamProxy(b.team, boss, commonLevel) -
+        equalLevelBossTeamProxy(a.team, boss, commonLevel) ||
+      b.proxy.composite - a.proxy.composite ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      key(a).localeCompare(key(b))
+    );
+    add(ranked[0]);
+  }
+  const byExp = [...candidates].sort((a, b) =>
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    b.proxy.composite - a.proxy.composite ||
+    key(a).localeCompare(key(b))
+  );
+  add(byExp[0]);
+  for (const row of byRoute) add(row);
+  return [...selected.values()].slice(0, cap);
+}
+
+function compareCompletionHybridRows(a, b) {
+  return (
+    Number(b.hybrid?.progressBottom2 || 0) - Number(a.hybrid?.progressBottom2 || 0) ||
+    Number(b.hybrid?.progressMean || 0) - Number(a.hybrid?.progressMean || 0) ||
+    Number(b.hybrid?.cleared || 0) - Number(a.hybrid?.cleared || 0) ||
+    Number(b.hybrid?.bottom2 || 0) - Number(a.hybrid?.bottom2 || 0) ||
+    Number(b.hybrid?.mean || 0) - Number(a.hybrid?.mean || 0) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+}
+
+async function attachEqualLevelSingleCompletionRollouts(
+  states,
+  screened,
+  story,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  moveAccess,
+  completionCap,
+  runs,
+  seedOffset = 0,
+) {
+  const output = [];
+  for (const state of states) {
+    const completions = selectSingleCompletionRolloutCandidates(
+      state,
+      screened,
+      routeBosses,
+      hardBosses,
+      commonLevel,
+      completionCap,
+    );
+    const evaluated = await attachEqualLevelHybridScreens(
+      completions,
+      story,
+      commonLevel,
+      moveAccess,
+      hardBosses,
+      runs,
+      seedOffset,
+    );
+    const ranked = [...evaluated].sort(compareCompletionHybridRows);
+    const best = ranked[0] || null;
+    output.push({
+      ...state,
+      hybrid: best?.hybrid || {
+        mean: 0,
+        bottom2: 0,
+        progressMean: 0,
+        progressBottom2: 0,
+        cleared: 0,
+        total: hardBosses.length,
+        score: 0,
+        bosses: {},
+        progressBosses: {},
+      },
+      completionRollout: {
+        evaluated: evaluated.length,
+        bestTeam: best?.team?.map(candidate => candidate.species) || [],
+        bestScore: Number(best?.hybrid?.score || 0),
+      },
+    });
+  }
+  return output;
+}
+
 async function attachEqualLevelCompletionRollouts(
   states,
   screened,
@@ -7170,6 +7296,10 @@ async function cmdEqualLevelStorySearch() {
   if (!['bridge', 'actual', 'completion'].includes(size4Mode)) {
     throw new Error('size4-mode must be bridge, actual, or completion');
   }
+  const size5Mode = String(arg('size5-mode', 'actual')).toLowerCase();
+  if (!['actual', 'completion'].includes(size5Mode)) {
+    throw new Error('size5-mode must be actual or completion');
+  }
   const size4Multiplier = Math.max(1, Math.floor(Number(arg('size4-multiplier', '2'))));
   const size4PreCap = Math.max(
     beamWidth * size4Multiplier,
@@ -7312,17 +7442,34 @@ async function cmdEqualLevelStorySearch() {
         hardBosses,
         commonLevel,
       );
-      const screenedHybrid = await attachEqualLevelHybridScreens(
-        hybridPreselected,
-        story,
-        commonLevel,
-        moveAccess,
-        hardBosses,
-        hybridRuns,
-        seedOffset,
-      );
-      beam = selectEqualLevelHybridBeam(screenedHybrid, beamWidth, hardBosses);
-      selectionMode = 'hybrid-real-battle';
+      if (size === 5 && size5Mode === 'completion') {
+        const rolloutStates = await attachEqualLevelSingleCompletionRollouts(
+          hybridPreselected,
+          screened,
+          story,
+          routeBosses,
+          hardBosses,
+          commonLevel,
+          moveAccess,
+          completionChoices,
+          completionRuns,
+          seedOffset,
+        );
+        beam = selectEqualLevelHybridBeam(rolloutStates, beamWidth, hardBosses);
+        selectionMode = 'size5-completion-lookahead';
+      } else {
+        const screenedHybrid = await attachEqualLevelHybridScreens(
+          hybridPreselected,
+          story,
+          commonLevel,
+          moveAccess,
+          hardBosses,
+          hybridRuns,
+          seedOffset,
+        );
+        beam = selectEqualLevelHybridBeam(screenedHybrid, beamWidth, hardBosses);
+        selectionMode = 'hybrid-real-battle';
+      }
     } else {
       beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
     }
