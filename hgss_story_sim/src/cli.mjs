@@ -741,6 +741,20 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       : { levelsByBattle },
   );
   const purchasablePlan = purchasable.assignments;
+  const routeBuildOptimization = Boolean(battleOptions.routeBuildOptimization);
+  const routeBuildPlan = routeBuildOptimization
+    ? buildRouteExpRouteBuildPlan(
+        candidates,
+        routeBosses,
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        levelsByBattle,
+      )
+    : {};
+  const candidatesByKey = new Map(
+    candidates.map(candidate => [candidateIdentity(candidate), candidate])
+  );
   const purchaseCosts = purchasable.costs;
   const resourceBudget = summarizeResourceBudget(
     purchaseCosts,
@@ -752,12 +766,34 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
     const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
-    const playerTeam = materializeCandidateTeam(
+    let playerTeam = materializeCandidateTeam(
       orderedCandidates,
       boss.stage,
       boss.aceLevel,
-      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate },
+      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate, boss },
     );
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+    if (routeBuildOptimization) {
+      playerTeam = playerTeam.map(mon => {
+        const key = mon._candidateKey || mon.species;
+        const candidate = candidatesByKey.get(key);
+        const build = routeBuildPlan[key];
+        let built = applyPlayerRouteBuild(mon, build);
+        if (candidate && build?.routeMoves) {
+          built = equalLevelRouteMovesAtStage(
+            built,
+            candidate,
+            boss,
+            moveAccess,
+            singleUsePlan,
+            purchasablePlan,
+            build.routeMoves,
+          );
+        }
+        return built;
+      });
+      playerTeam = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss).team;
+    }
     if (!playerTeam.length) {
       weightedRuns += runs;
       rows.push({
@@ -774,13 +810,17 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       });
       continue;
     }
-    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
     const result = await simulateMatchup(
       playerTeam,
       enemyTeam,
       runs,
       1000 + boss.stage * 100000 + battleIndex * 1000,
-      { p2Trainer: boss, ...battleOptions },
+      {
+        p2Trainer: boss,
+        ...Object.fromEntries(
+          Object.entries(battleOptions).filter(([key]) => key !== 'routeBuildOptimization')
+        ),
+      },
     );
     weightedWins += result.wins;
     weightedRuns += result.runs;
@@ -840,6 +880,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     captureSearch,
     singleUsePlan,
     purchasablePlan,
+    routeBuildOptimization,
+    routeBuildPlan,
     purchaseCosts,
     resourceBudget,
     memberUsage,
@@ -2801,7 +2843,7 @@ async function cmdRouteExpStoryEvaluate() {
     moveAccess,
     expContext,
     grindPolicy,
-    { p1AiMode: 'smart' },
+    { p1AiMode: 'smart', routeBuildOptimization: true },
   );
 
   const scheduleRows = evaluation.expSchedule?.battles || [];
@@ -6212,6 +6254,80 @@ function equalLevelRouteMovesAtStage(
     throw new Error(`equal-level route moves exceeded four slots for ${mon.species}: ${selected.join(', ')}`);
   }
   return { ...mon, moves: selected };
+}
+
+function buildRouteExpRouteBuildPlan(
+  candidates,
+  routeBosses,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  levelsByBattle,
+) {
+  const plan = {};
+  for (const candidate of candidates) {
+    const key = candidateIdentity(candidate);
+    const samples = [];
+    for (const [bossIndex, boss] of routeBosses.entries()) {
+      const levels = levelsByBattle?.[bossIndex] || {};
+      const actualLevel = Number(levels[key]);
+      if (!Number.isFinite(actualLevel)) continue;
+      const mon = materializeCandidateTeam(
+        [candidate],
+        boss.stage,
+        boss.aceLevel,
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
+      )[0];
+      if (!mon) continue;
+      samples.push({
+        boss,
+        bossIndex,
+        mon,
+        foeTeam: hgssTrainerToShowdownTeam(boss.trainer, boss),
+      });
+    }
+    if (!samples.length) continue;
+
+    let build = optimizePlayerRouteBuild(samples, { iv: 16 });
+    const last = samples[samples.length - 1];
+    let finalMon = applyPlayerRouteBuild(last.mon, build);
+    const assignedMachines = [
+      ...(singleUsePlan[key] || []),
+      ...(purchasablePlan[key] || []),
+    ];
+    const routeMoves = optimizePlayerRouteMoves(
+      finalMon,
+      samples.map(sample => sample.foeTeam),
+      {
+        stage: Number(last.boss.stage),
+        moveAccess,
+        extraMachines: assignedMachines,
+        originSpeciesName: candidate.species,
+        shortlistCap: 12,
+      },
+    );
+
+    const refinedSamples = samples.map(sample => {
+      let mon = applyPlayerRouteBuild(sample.mon, build);
+      mon = equalLevelRouteMovesAtStage(
+        mon,
+        candidate,
+        sample.boss,
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        routeMoves.moves,
+      );
+      return { mon, foeTeam: sample.foeTeam };
+    });
+    build = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
+    plan[key] = {
+      ...build,
+      routeMoves: routeMoves.moves,
+      routeMoveOptimization: routeMoves,
+    };
+  }
+  return plan;
 }
 
 function buildEqualLevelRouteBuildPlan(
