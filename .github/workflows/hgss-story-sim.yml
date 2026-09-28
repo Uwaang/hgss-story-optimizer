@@ -1611,6 +1611,103 @@ jobs:
           path: hgss_story_sim/results/*.json
           if-no-files-found: error
 
+  overnight_hybrid_recall_sweep:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight-recall]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - level: 63
+            hybrid_pre_cap: 1024
+            seed_offset: 505000
+            label: lv63-cap1024-seed505
+          - level: 63
+            hybrid_pre_cap: 2048
+            seed_offset: 505000
+            label: lv63-cap2048-seed505
+          - level: 63
+            hybrid_pre_cap: 2048
+            seed_offset: 605000
+            label: lv63-cap2048-seed605
+          - level: 72
+            hybrid_pre_cap: 1024
+            seed_offset: 505000
+            label: lv72-cap1024-seed505
+          - level: 72
+            hybrid_pre_cap: 2048
+            seed_offset: 505000
+            label: lv72-cap2048-seed505
+          - level: 72
+            hybrid_pre_cap: 2048
+            seed_offset: 605000
+            label: lv72-cap2048-seed605
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/overnight-recall-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-recall-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/overnight-recall-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: overnight-recall-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Wider hard-boss screening search
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} \
+            --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=${{ matrix.hybrid_pre_cap }} \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --size5-mode=actual \
+            --seed-offset=${{ matrix.seed_offset }} \
+            > results/overnight-recall-${{ matrix.label }}.json
+      - name: Write compact summary
+        run: |
+          jq '{
+            commonLevel,
+            search: {
+              beamWidth: .search.beamWidth,
+              hybridPreCap: .search.teamProxyModel.hybridPreCap,
+              hybridRuns: .search.teamProxyModel.hybridRuns,
+              seedOffset: .search.teamProxyModel.seedOffset
+            },
+            finalPareto: [.finalPareto[] | {
+              team, teamKeys, totalGrindExp, score,
+              bottom5BossWinRate, storyClearGeometricScore,
+              storyClearCoverageScore,
+              red: ([.bosses[] | select(.boss=="Red") | .winRate][0] // null),
+              lance2: ([.bosses[] | select(.boss=="Lance 2") | .winRate][0] // null)
+            }],
+            final: [.final[] | {
+              team, teamKeys, totalGrindExp, score,
+              bottom5BossWinRate, storyClearGeometricScore,
+              storyClearCoverageScore,
+              red: ([.bosses[] | select(.boss=="Red") | .winRate][0] // null),
+              lance2: ([.bosses[] | select(.boss=="Lance 2") | .winRate][0] // null)
+            }]
+          }' results/overnight-recall-${{ matrix.label }}.json \
+            > results/overnight-recall-${{ matrix.label }}-summary.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/overnight-recall-${{ matrix.label }}.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-recall-${{ matrix.label }}
+          path: hgss_story_sim/results/overnight-recall-${{ matrix.label }}*.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
