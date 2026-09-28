@@ -25,6 +25,15 @@ jobs:
           node src/cli.mjs route-exp-data-audit \
             --version=HEARTGOLD --exp-profile=normal-route \
             > results/route-exp-data-audit.json
+      - name: Assert audited access corrections
+        run: |
+          jq -e '
+            ([.maps[] | select(.map=="D25R0102" or .map=="D25R0103") | .stage] | all(. == 4)) and
+            (.coverage.deferredTrainerCount >= 3) and
+            ([.maps[] | select(.map=="R46") | .trainers[] |
+              select(.key=="TRAINER_HIKER_BAILEY" or .key=="TRAINER_CAMPER_TED" or .key=="TRAINER_PICNICKER_ERIN") |
+              .deferredWindow.stage] | all(. == 7))
+          ' results/route-exp-data-audit.json >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: route-exp-data-audit
@@ -77,13 +86,18 @@ jobs:
             --runs=2 \
             "${TEAM_FLAG}=${{ matrix.team_arg }}" \
             > results/route-exp-${{ matrix.label }}.json
-      - name: Assert realistic first-gym levels
+      - name: Assert realistic first-gym levels and deferred Route 46 EXP
         run: |
           jq -e '
             .firstGym != null and
             (.firstGym.playerLevels | length) >= 1 and
             ([.firstGym.playerLevels[]] | max) < 30 and
-            .ledger.unknownEntryLevels == []
+            .ledger.unknownEntryLevels == [] and
+            ([.firstGym.mapSegments[] | select(.map=="R46") | .exp][0] == 0) and
+            ([.checkpoints[] | select(.boss=="Clair") | .trainerWindowSegments[].key] |
+              (index("TRAINER_HIKER_BAILEY") != null) and
+              (index("TRAINER_CAMPER_TED") != null) and
+              (index("TRAINER_PICNICKER_ERIN") != null))
           ' results/route-exp-${{ matrix.label }}.json >/dev/null
       - uses: actions/upload-artifact@v4
         with:
