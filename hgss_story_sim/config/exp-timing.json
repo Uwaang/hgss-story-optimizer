@@ -21,8 +21,6 @@
       "maps": [
         "R32",
         "D25R0101",
-        "D25R0102",
-        "D25R0103",
         "R33",
         "D26R0102",
         "D26R0103"
@@ -72,7 +70,9 @@
         "W40",
         "W41",
         "T24",
-        "T24GYM0101"
+        "T24GYM0101",
+        "D25R0102",
+        "D25R0103"
       ]
     },
     {
@@ -255,6 +255,20 @@
         "D41R0106",
         "D41R0107"
       ]
+    }
+  ],
+  "trainerWindows": [
+    {
+      "id": "route46-north-after-blackthorn",
+      "stage": 7,
+      "beforeBoss": "Clair",
+      "trainers": [
+        "TRAINER_HIKER_BAILEY",
+        "TRAINER_CAMPER_TED",
+        "TRAINER_PICNICKER_ERIN"
+      ],
+      "source": "pret zone-event 045_R46.json; north Route 46 is reached from Route 45 after Blackthorn access",
+      "note": "Route 46 itself is partially reachable from Route 29 before Falkner, but these trainer objects are in the northern section and must not contribute early EXP."
     }
   ]
 }
