@@ -6979,10 +6979,16 @@ async function cmdEqualLevelElectricTrace() {
   const candidateCap = Math.max(8, Math.floor(Number(arg('candidate-cap', '36'))));
   const beamWidth = Math.max(4, Math.floor(Number(arg('beam-width', '32'))));
   const size4Multiplier = Math.max(1, Math.floor(Number(arg('size4-multiplier', '8'))));
+  const hybridRuns = Math.max(1, Math.floor(Number(arg('hybrid-runs', '4'))));
+  const hybridPreCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('hybrid-pre-cap', '256'))),
+  );
 
   const story = await loadEqualLevelStory();
-  const [pool] = await Promise.all([
+  const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
   ]);
   const starter = findStarterCandidate(pool.candidates, 'Cyndaquil');
   const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
@@ -7020,12 +7026,22 @@ async function cmdEqualLevelElectricTrace() {
         Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
         stateTieKey(a).localeCompare(stateTieKey(b))
       );
+      const byHybrid = [...rows].filter(row => row.hybrid).sort((a, b) =>
+        Number(b.hybrid?.progressBottom2 || 0) - Number(a.hybrid?.progressBottom2 || 0) ||
+        Number(b.hybrid?.progressMean || 0) - Number(a.hybrid?.progressMean || 0) ||
+        Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
       return [name, {
         count: rows.length,
         bestComposite: byComposite[0]?.proxy?.composite ?? null,
         bestBottom5: byComposite[0]?.proxy?.bottom5 ?? null,
         bestExp: byComposite[0]?.expCost?.totalGrindExp ?? null,
         bestTeam: byComposite[0]?.team?.map(candidate => candidate.species) || [],
+        bestHybridScore: byHybrid[0]?.hybrid?.score ?? null,
+        bestProgressMean: byHybrid[0]?.hybrid?.progressMean ?? null,
+        bestProgressBottom2: byHybrid[0]?.hybrid?.progressBottom2 ?? null,
+        bestHybridTeam: byHybrid[0]?.team?.map(candidate => candidate.species) || [],
       }];
     }));
   };
@@ -7036,7 +7052,7 @@ async function cmdEqualLevelElectricTrace() {
     expCost: equalLevelTeamExpCost([starter], commonLevel),
   }];
   const stages = [];
-  for (let size = 2; size <= 4; size += 1) {
+  for (let size = 2; size <= 6; size += 1) {
     const expanded = [];
     const seen = new Set();
     for (const state of beam) {
@@ -7057,20 +7073,57 @@ async function cmdEqualLevelElectricTrace() {
         });
       }
     }
-    const width = size === 4
-      ? Math.min(expanded.length, beamWidth * size4Multiplier)
-      : beamWidth;
-    const selected = selectEqualLevelProxyBeam(
+    if (size <= 4) {
+      const width = size === 4
+        ? Math.min(expanded.length, beamWidth * size4Multiplier)
+        : beamWidth;
+      const selected = selectEqualLevelProxyBeam(
+        expanded,
+        width,
+        hardBosses,
+        commonLevel,
+      );
+      stages.push({
+        size,
+        mode: size === 4 ? 'proxy-wide-bridge' : 'proxy',
+        expanded: summarize(expanded),
+        selected: summarize(selected),
+        expandedCount: expanded.length,
+        selectedCount: selected.length,
+      });
+      beam = selected;
+      continue;
+    }
+
+    const preselected = selectEqualLevelProxyBeam(
       expanded,
-      width,
+      Math.min(expanded.length, hybridPreCap),
       hardBosses,
       commonLevel,
     );
+    const screenedHybrid = await attachEqualLevelHybridScreens(
+      preselected,
+      story,
+      commonLevel,
+      moveAccess,
+      hardBosses,
+      hybridRuns,
+      0,
+    );
+    const selected = selectEqualLevelHybridBeam(
+      screenedHybrid,
+      beamWidth,
+      hardBosses,
+    );
     stages.push({
       size,
+      mode: 'hybrid-real-battle',
       expanded: summarize(expanded),
+      preselected: summarize(preselected),
+      hybridEvaluated: summarize(screenedHybrid),
       selected: summarize(selected),
       expandedCount: expanded.length,
+      preselectedCount: preselected.length,
       selectedCount: selected.length,
     });
     beam = selected;
@@ -7083,6 +7136,8 @@ async function cmdEqualLevelElectricTrace() {
     candidateCap,
     beamWidth,
     size4Multiplier,
+    hybridRuns,
+    hybridPreCap,
     screenedElectricCandidates: screening.rows
       .filter(row => ['Magneton', 'Ampharos'].includes(String(row.candidate.terminalSpecies || '')))
       .map(row => ({
