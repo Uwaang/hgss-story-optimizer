@@ -7,6 +7,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  route_exp_data_audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Audit normal-route EXP sources
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-data-audit \\
+            --version=HEARTGOLD --exp-profile=normal-route \\
+            > results/route-exp-data-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-data-audit
+          path: hgss_story_sim/results/route-exp-data-audit.json
+          if-no-files-found: error
+
   route_exp_semantics:
     runs-on: ubuntu-latest
     timeout-minutes: 90
