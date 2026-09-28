@@ -34,7 +34,8 @@
     "resource-budget-smoke": "node src/cli.mjs resource-budget-smoke",
     "exp-envelope": "node src/cli.mjs exp-envelope",
     "exp-envelope-smoke": "node src/cli.mjs exp-envelope-smoke",
-    "trainer-ai-smoke": "node src/cli.mjs trainer-ai-smoke"
+    "trainer-ai-smoke": "node src/cli.mjs trainer-ai-smoke",
+    "route-exp-story-evaluate": "node src/cli.mjs route-exp-story-evaluate"
   },
   "engines": {
     "node": ">=22.18.0"
