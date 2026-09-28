@@ -390,7 +390,11 @@ export async function buildExpWorld({
 }
 
 function candidateKey(candidate) {
-  return candidate.familyId || candidate.species;
+  // Keep EXP state keys identical to battle.mjs. Trade-aware evolution
+  // variants share a familyId but have distinct searchKey values; using only
+  // familyId here makes materializeCandidateTeam miss levelsByCandidate and
+  // silently fall back to the boss ace level.
+  return candidate.searchKey || candidate.familyId || candidate.species;
 }
 
 function entryLevel(candidate, policy = 'midpoint') {
