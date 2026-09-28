@@ -841,3 +841,87 @@ Useful for controlled team-power analysis and late-game breakpoints.
 > From the start of HGSS to Red, under a conserved source-backed EXP budget, what individual level trajectory and final-six composition gives the best story performance for the least optional grinding?
 
 This second question is much closer to the original "best story team" goal.
+
+
+## 23. Implementation audit findings
+
+A Stage-0 implementation audit found that the repository already contains much of the route-aware EXP infrastructure in `src/exp-budget.mjs` and the non-equal-level story evaluator:
+
+- Gen IV growth curves and EXP-to-level conversion;
+- trainer battle EXP calculation from source-backed species EXP yields;
+- wild-grind yield estimates;
+- map trainer extraction from pinned pret/pokeheartgold zone-event data;
+- route timing windows;
+- per-member EXP states and `levelsBefore` snapshots;
+- multiple EXP allocators;
+- battle materialization through `levelsByCandidate`.
+
+Therefore the route EXP work should extend and validate this infrastructure rather than build a second allocator from scratch.
+
+### 23.1 Trade-aware EXP key mismatch fixed
+
+The old EXP scheduler keyed member state by `familyId`, while battle materialization keys trade-aware evolution variants by `searchKey`.
+
+This could cause a trade-aware member's route level to be missed and silently fall back to the boss ace level.
+
+The design branch aligns EXP state keys with battle keys:
+
+```js
+candidate.searchKey || candidate.familyId || candidate.species
+```
+
+Any future route-aware code must preserve this identity rule.
+
+### 23.2 Map-level access is not sufficient for trainer EXP
+
+The first data audit exposed a separate source-granularity issue.
+
+The existing EXP world interprets:
+
+> map becomes accessible -> every trainer object in that map's zone-event file becomes EXP-accessible
+
+This is not always true.
+
+Concrete examples:
+
+- Route 46 is partially reachable from Route 29 before Falkner, but the three trainer objects in the northern section are reached from Route 45 much later.
+- Union Cave B1F/B2F were previously assigned to the pre-Bugsy map stage even though their Lv23-28 trainer content belongs to the Surf-accessible lower-cave route.
+
+Thus route EXP requires two kinds of timing correction:
+
+1. **whole-map access correction** when the entire map/subfloor is unavailable;
+2. **trainer-window correction** when a map is partially accessible but specific trainer objects are gated.
+
+The model must never solve these mistakes by capping levels or deleting EXP based on battle difficulty. Access timing should be corrected from map/trainer provenance.
+
+### 23.3 Current corrections on the design branch
+
+- Union Cave B1F/B2F are deferred from stage 1 to stage 4, after Surf is usable.
+- Route 46 northern trainers are removed from the early map bucket and assigned to an explicit stage-7 trainer window before Clair.
+- The EXP audit command reports every map, trainer key, party, EXP yield and timing window so additional access mismatches can be reviewed.
+
+### 23.4 First semantics check
+
+Before access corrections, a fixed-team route evaluation already demonstrated the intended individual-level semantics:
+
+```
+Falkner:
+Geodude   Lv12
+Cyndaquil Lv11
+Zubat     Lv11
+```
+
+rather than the equal-level benchmark's common Lv50-70 values.
+
+Those exact levels are not yet considered the final natural-route truth because the same audit found early EXP overcounting. The purpose of Stage 0 is to make the ledger trustworthy before any full team search is attempted.
+
+### 23.5 EXP profile interpretation
+
+For now, distinguish these meanings explicitly:
+
+- `major`: scored major battles only; useful as a conservative lower EXP envelope but incomplete as a normal playthrough.
+- `normal-route`: trainer rewards on curated normal-route access windows; this is the intended basis for route optimization once access timing is audited.
+- `all-accessible`: a wider accessible-map envelope and should not be interpreted as mandatory EXP.
+- optional wild grinding remains an explicit cost rather than silently increasing natural EXP.
+
+A future `mandatory-only` profile may be added if every unavoidable trainer battle can be source-backed confidently.
