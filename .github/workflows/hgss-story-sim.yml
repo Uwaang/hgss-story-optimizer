@@ -1522,6 +1522,95 @@ jobs:
           path: hgss_story_sim/results/*.json
           if-no-files-found: error
 
+  short_preflight_completion_proxy:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[short-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - level: 63
+            target_families: Cyndaquil,Magnemite,Geodude,Abra,Wooper,Rhyhorn
+          - level: 72
+            target_families: Cyndaquil,Magnemite,Geodude,Abra,Wooper,Rhyhorn
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Completion-aware proxy trace
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-electric-trace \
+            --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32 \
+            --size4-multiplier=8 --hybrid-pre-cap=256 \
+            --completion-proxy-only=true \
+            --target-families="${{ matrix.target_families }}" \
+            > results/completion-proxy-trace-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: completion-proxy-trace-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  short_preflight_lv72_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[short-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: direct-quagsire
+            team_keys: Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1
+          - label: pupitar-tyranitar
+            team_keys: Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Abra::Abra->Alakazam#1,Larvitar::Pupitar->Tyranitar#1
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/short-preflight-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: short-preflight-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/short-preflight-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: short-preflight-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate late hard bosses
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" --level=72 \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=728000 \
+            > results/${{ matrix.label }}-hard500.json
+      - name: Validate Red
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" --level=72 \
+            --bosses="Red" --runs=1500 --seed-offset=729000 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: short-preflight-lv72-${{ matrix.label }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
