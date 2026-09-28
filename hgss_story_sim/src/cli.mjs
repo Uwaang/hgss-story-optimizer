@@ -6974,6 +6974,128 @@ function traceKnownTargetStates(states, targetFamilyIds, redBoss, commonLevel) {
   };
 }
 
+async function cmdEqualLevelElectricTrace() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '63')))));
+  const candidateCap = Math.max(8, Math.floor(Number(arg('candidate-cap', '36'))));
+  const beamWidth = Math.max(4, Math.floor(Number(arg('beam-width', '32'))));
+  const size4Multiplier = Math.max(1, Math.floor(Number(arg('size4-multiplier', '8'))));
+
+  const story = await loadEqualLevelStory();
+  const [pool] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+  ]);
+  const starter = findStarterCandidate(pool.candidates, 'Cyndaquil');
+  const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
+  const hardBosses = equalLevelHardBosses(routeBosses);
+  const screening = selectEqualLevelCandidateRows(
+    pool.candidates,
+    starter,
+    routeBosses,
+    commonLevel,
+    candidateCap,
+  );
+  const screened = screening.rows.map(row => row.candidate);
+
+  const classify = state => {
+    const hasMagneton = state.team.some(candidate =>
+      String(candidate.terminalSpecies || '') === 'Magneton'
+    );
+    const hasAmpharos = state.team.some(candidate =>
+      String(candidate.terminalSpecies || '') === 'Ampharos'
+    );
+    if (hasMagneton && hasAmpharos) return 'both';
+    if (hasMagneton) return 'magnetonOnly';
+    if (hasAmpharos) return 'ampharosOnly';
+    return 'neither';
+  };
+  const summarize = states => {
+    const groups = Object.fromEntries(
+      ['magnetonOnly', 'ampharosOnly', 'both', 'neither'].map(name => [name, []])
+    );
+    for (const state of states) groups[classify(state)].push(state);
+    return Object.fromEntries(Object.entries(groups).map(([name, rows]) => {
+      const byComposite = [...rows].sort((a, b) =>
+        Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+        Number(b.proxy?.bottom5 || 0) - Number(a.proxy?.bottom5 || 0) ||
+        Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
+      return [name, {
+        count: rows.length,
+        bestComposite: byComposite[0]?.proxy?.composite ?? null,
+        bestBottom5: byComposite[0]?.proxy?.bottom5 ?? null,
+        bestExp: byComposite[0]?.expCost?.totalGrindExp ?? null,
+        bestTeam: byComposite[0]?.team?.map(candidate => candidate.species) || [],
+      }];
+    }));
+  };
+
+  let beam = [{
+    team: [starter],
+    proxy: equalLevelTeamProxy([starter], routeBosses, commonLevel),
+    expCost: equalLevelTeamExpCost([starter], commonLevel),
+  }];
+  const stages = [];
+  for (let size = 2; size <= 4; size += 1) {
+    const expanded = [];
+    const seen = new Set();
+    for (const state of beam) {
+      const identities = new Set(state.team.map(candidateIdentity));
+      for (const candidate of screened) {
+        if (identities.has(candidateIdentity(candidate))) continue;
+        const team = [...state.team, candidate];
+        if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+        const key = team.map(candidateIdentity).sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const expCost = equalLevelTeamExpCost(team, commonLevel);
+        if (!expCost.legal || expCost.totalGrindExp === null) continue;
+        expanded.push({
+          team,
+          proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+          expCost,
+        });
+      }
+    }
+    const width = size === 4
+      ? Math.min(expanded.length, beamWidth * size4Multiplier)
+      : beamWidth;
+    const selected = selectEqualLevelProxyBeam(
+      expanded,
+      width,
+      hardBosses,
+      commonLevel,
+    );
+    stages.push({
+      size,
+      expanded: summarize(expanded),
+      selected: summarize(selected),
+      expandedCount: expanded.length,
+      selectedCount: selected.length,
+    });
+    beam = selected;
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'trace Magneton/Ampharos survival through equal-level proxy beam stages',
+    commonLevel,
+    candidateCap,
+    beamWidth,
+    size4Multiplier,
+    screenedElectricCandidates: screening.rows
+      .filter(row => ['Magneton', 'Ampharos'].includes(String(row.candidate.terminalSpecies || '')))
+      .map(row => ({
+        species: row.candidate.species,
+        terminalSpecies: row.candidate.terminalSpecies,
+        searchKey: candidateIdentity(row.candidate),
+        proxy: row.proxy,
+        grindExp: row.grindExp,
+      })),
+    stages,
+  }, null, 2));
+}
+
 async function cmdEqualLevelStorySearch() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -7616,6 +7738,7 @@ const commands = {
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
   'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
