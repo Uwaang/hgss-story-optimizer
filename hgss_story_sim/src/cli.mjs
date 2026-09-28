@@ -5921,10 +5921,13 @@ function equalLevelRouteMovesAtStage(
     if (selected.length >= 4) break;
   }
   for (const move of mon.moves || []) {
-    if (legal.has(move) && !selected.includes(move)) selected.push(move);
     if (selected.length >= 4) break;
+    if (legal.has(move) && !selected.includes(move)) selected.push(move);
   }
   if (!selected.length) selected.push('Tackle');
+  if (selected.length > 4) {
+    throw new Error(`equal-level route moves exceeded four slots for ${mon.species}: ${selected.join(', ')}`);
+  }
   return { ...mon, moves: selected };
 }
 
