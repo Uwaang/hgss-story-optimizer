@@ -1176,7 +1176,7 @@ jobs:
           if-no-files-found: error
 
   evo_ab_postfix_targeted_validation:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -1238,7 +1238,7 @@ jobs:
           if-no-files-found: error
 
   evo_ab_postfix_boundary_search:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -1288,7 +1288,7 @@ jobs:
           if-no-files-found: error
 
   evo_ab_postfix_boundary_validate:
-    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
     needs: evo_ab_postfix_boundary_search
     timeout-minutes: 360
     strategy:
@@ -1339,6 +1339,52 @@ jobs:
         with:
           name: evo-postfix-boundary-validation-lv${{ matrix.level }}
           path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+  ampharos_magneton_direct_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[ampharos-ab]')
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: magneton
+            team: Cyndaquil,Slowpoke,Rhyhorn,Magnemite,Jynx,Wooper
+          - variant: ampharos
+            team: Cyndaquil,Slowpoke,Rhyhorn,Mareep,Jynx,Wooper
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/ampharos-ab-${{ matrix.variant }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: ampharos-ab-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/ampharos-ab-${{ matrix.variant }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: ampharos-ab-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Lv63 full-route direct A/B
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=63 --runs=200 --seed-offset=630000 \
+            > results/${{ matrix.variant }}-route200.json
+      - name: Lv63 hard-boss direct A/B
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=63 \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=631000 \
+            > results/${{ matrix.variant }}-hard500.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ampharos-magneton-ab-${{ matrix.variant }}
+          path: hgss_story_sim/results/*.json
           if-no-files-found: error
 
   smoke:
