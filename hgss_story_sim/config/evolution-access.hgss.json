@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "version": "HGSS",
+  "policyNotes": [
+    "Trade inconvenience is not an optimization cost; only legality/timing is modeled.",
+    "Pure trade evolution is considered available from stage 0 (Pokédex/Union Room before Falkner benchmark).",
+    "EVO_TRADE_ITEM requires both trading and a source-backed item source.",
+    "Rare wild held-item sources are derived automatically from pinned pret personal+encounter data and treated as repeatable; drop-rate friction is ignored.",
+    "Curated fixed/shop sources below are conservative story stages. Weekday inconvenience is ignored, but National Dex / Rock Climb gates are respected.",
+    "Same-stage post-boss item gates use route-order checkpoints, so post-Blue items are unavailable for Blue but legal for the rematch Elite Four.",
+    "Post-16-badge evolution items are checkpointed after Blue and before the rematch Elite Four because Blue and the rematch share numeric stage 20."
+  ],
+  "tradeUnlockStage": 0,
+  "items": {
+    "ITEM_KINGS_ROCK": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; Sunday pre-National-Dex stock"
+      },
+      "note": "Earlier than the Surf-gated Slowpoke Well gift in this route model."
+    },
+    "ITEM_METAL_COAT": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; Friday pre-National-Dex stock"
+      },
+      "note": "Wild Magnemite held-item source is also derived automatically if earlier."
+    },
+    "ITEM_DRAGON_SCALE": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "National Dex stock"
+      },
+      "note": "Wild Horsea/Seadra held-item source is derived automatically and may move this earlier."
+    },
+    "ITEM_UPGRADE": {
+      "availableFrom": 14,
+      "repeatable": false,
+      "source": {
+        "type": "gift",
+        "location": "Silph Co, Saffron City"
+      },
+      "note": "Available during early Kanto before the modeled Sabrina checkpoint."
+    },
+    "ITEM_MAGMARIZER": {
+      "availableFrom": 20,
+      "repeatable": false,
+      "source": {
+        "type": "field",
+        "location": "Cinnabar Island"
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Cinnabar Island Rock Climb source; legal only after all 16 badges/Blue in the modeled route."
+    },
+    "ITEM_DEEPSEATOOTH": {
+      "availableFrom": 19,
+      "repeatable": false,
+      "source": {
+        "type": "field-hidden",
+        "location": "Route 20"
+      }
+    },
+    "ITEM_DEEPSEASCALE": {
+      "availableFrom": 19,
+      "repeatable": false,
+      "source": {
+        "type": "field-hidden",
+        "location": "Route 20"
+      }
+    },
+    "ITEM_PROTECTOR": {
+      "availableFrom": 20,
+      "repeatable": false,
+      "source": {
+        "type": "field",
+        "location": "Mt. Mortar",
+        "condition": "Rock Climb after all 16 badges"
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Mt. Mortar Rock Climb source; legal after Blue and before the rematch Elite Four."
+    },
+    "ITEM_DUBIOUS_DISC": {
+      "availableFrom": 20,
+      "repeatable": false,
+      "source": {
+        "type": "field",
+        "location": "Route 42",
+        "condition": "Rock Climb after all 16 badges"
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Route 42/Mt. Mortar Rock Climb source; legal after Blue and before the rematch Elite Four."
+    },
+    "ITEM_ELECTIRIZER": {
+      "availableFrom": 20,
+      "repeatable": false,
+      "source": {
+        "type": "field",
+        "location": "Cerulean Cave",
+        "condition": "post-16-badge access"
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Cerulean Cave source; modeled after all 16 badges/Blue and before the rematch Elite Four."
+    },
+    "ITEM_REAPER_CLOTH": {
+      "availableFrom": 20,
+      "repeatable": false,
+      "source": {
+        "type": "field",
+        "location": "Mt. Silver"
+      },
+      "afterBoss": "Blue",
+      "beforeBoss": "Will 2",
+      "note": "Mt. Silver source; modeled after all 16 badges/Blue and before the rematch Elite Four."
+    }
+  }
+}

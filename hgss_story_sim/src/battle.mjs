@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
@@ -12,6 +15,98 @@ const NATURES_BY_ID = [
   'Modest', 'Mild', 'Quiet', 'Bashful', 'Rash',
   'Calm', 'Gentle', 'Sassy', 'Careful', 'Quirky',
 ];
+
+const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
+  ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
+  : null;
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2');
+let battleCacheLoaded = false;
+let battleCacheDirty = 0;
+let battleCache = new Map();
+const battleCacheCounters = { hits: 0, misses: 0, writes: 0, restored: 0 };
+
+function canonicalizeCacheValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeCacheValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined && typeof entry !== 'function')
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalizeCacheValue(entry)])
+    );
+  }
+  return value;
+}
+
+function battleCacheKey(p1Team, p2Team, seed, options) {
+  const payload = canonicalizeCacheValue({
+    namespace: BATTLE_CACHE_NAMESPACE,
+    p1Team,
+    p2Team,
+    seed: Number(seed),
+    options,
+  });
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+async function ensureBattleCacheLoaded() {
+  if (battleCacheLoaded) return;
+  battleCacheLoaded = true;
+  if (!BATTLE_CACHE_PATH) return;
+  try {
+    const parsed = JSON.parse(await fs.readFile(BATTLE_CACHE_PATH, 'utf8'));
+    if (parsed?.namespace === BATTLE_CACHE_NAMESPACE && parsed?.entries) {
+      battleCache = new Map(Object.entries(parsed.entries));
+      battleCacheCounters.restored = battleCache.size;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[battle-cache] restore failed:', error.message);
+    }
+  }
+}
+
+export function battleCacheStats() {
+  return {
+    enabled: Boolean(BATTLE_CACHE_PATH),
+    path: BATTLE_CACHE_PATH,
+    namespace: BATTLE_CACHE_NAMESPACE,
+    entries: battleCache.size,
+    ...battleCacheCounters,
+    dirty: battleCacheDirty,
+  };
+}
+
+export async function flushBattleCache() {
+  await ensureBattleCacheLoaded();
+  if (!BATTLE_CACHE_PATH || battleCacheDirty <= 0) return battleCacheStats();
+  await fs.mkdir(path.dirname(BATTLE_CACHE_PATH), { recursive: true });
+  const tmp = BATTLE_CACHE_PATH + '.tmp-' + process.pid;
+  await fs.writeFile(tmp, JSON.stringify({
+    schemaVersion: 2,
+    namespace: BATTLE_CACHE_NAMESPACE,
+    entries: Object.fromEntries(battleCache),
+  }));
+  await fs.rename(tmp, BATTLE_CACHE_PATH);
+  battleCacheCounters.writes += battleCacheDirty;
+  battleCacheDirty = 0;
+  return battleCacheStats();
+}
+
+async function cachedRunBattle(p1Team, p2Team, seed, options) {
+  await ensureBattleCacheLoaded();
+  const key = battleCacheKey(p1Team, p2Team, seed, options);
+  if (battleCache.has(key)) {
+    battleCacheCounters.hits += 1;
+    return battleCache.get(key);
+  }
+  battleCacheCounters.misses += 1;
+  const result = await runBattle(p1Team, p2Team, seed, options);
+  battleCache.set(key, result);
+  battleCacheDirty += 1;
+  if (battleCacheDirty >= 500) await flushBattleCache();
+  return result;
+}
 
 function uniformIvs(iv) {
   return { hp: iv, atk: iv, def: iv, spa: iv, spd: iv, spe: iv };
@@ -105,6 +200,43 @@ export function levelUpMoves(speciesName, level) {
 
 export function levelUpMovePool(speciesName, level) {
   return levelUpMoveEntries(speciesName, level).map(x => x.name);
+}
+
+function evolutionMoveLineage(speciesName, originSpeciesName = null, level = 100) {
+  const finalSpecies = dex.species.get(speciesName);
+  if (!finalSpecies.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
+  const origin = originSpeciesName ? dex.species.get(originSpeciesName) : null;
+  if (!originSpeciesName || !origin?.exists || origin.id === finalSpecies.id) {
+    return [{ species: finalSpecies, maxLevel: targetLevel }];
+  }
+  const reversed = [finalSpecies];
+  let cursor = finalSpecies;
+  let foundOrigin = false;
+  for (let guard = 0; guard < 8 && cursor.prevo; guard += 1) {
+    const prevo = dex.species.get(cursor.prevo);
+    if (!prevo.exists) break;
+    reversed.push(prevo);
+    cursor = prevo;
+    if (prevo.id === origin.id) {
+      foundOrigin = true;
+      break;
+    }
+  }
+  if (!foundOrigin) return [{ species: finalSpecies, maxLevel: targetLevel }];
+  const lineage = reversed.reverse();
+  return lineage.map((species, index) => {
+    let remainingLevelUpEvolutions = 0;
+    for (let nextIndex = index + 1; nextIndex < lineage.length; nextIndex += 1) {
+      const evolved = lineage[nextIndex];
+      const evoType = String(evolved.evoType || '').toLowerCase();
+      if (evoType.startsWith('level') || Number.isFinite(Number(evolved.evoLevel))) {
+        remainingLevelUpEvolutions += 1;
+      }
+    }
+    const reservedLevels = Math.max(0, remainingLevelUpEvolutions - 1);
+    return { species, maxLevel: Math.max(1, targetLevel - reservedLevels) };
+  });
 }
 
 function canLearnGen4Machine(species, moveName) {
@@ -203,37 +335,60 @@ export function candidateMoveUtility(speciesName, moveName) {
   return candidateMoveScore(species, moveName);
 }
 
-export function candidateMovePool(speciesName, level, stage, moveAccess = null, extraMachines = []) {
+export function candidateMovePool(
+  speciesName,
+  level,
+  stage,
+  moveAccess = null,
+  extraMachines = [],
+  originSpeciesName = null,
+) {
   const species = dex.species.get(speciesName);
   if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
-
-  const moves = new Set(levelUpMovePool(species.name, level));
+  const lineage = evolutionMoveLineage(species.name, originSpeciesName, level);
+  const moves = new Set();
+  for (const entry of lineage) {
+    for (const moveName of levelUpMovePool(entry.species.name, entry.maxLevel)) moves.add(moveName);
+  }
   for (const machine of moveAccess?.reusableMachines || []) {
     if (Number(machine.availableFrom) > stage) continue;
-    if (canLearnGen4Machine(species, machine.move)) moves.add(machine.move);
+    if (lineage.some(entry => canLearnGen4Machine(entry.species, machine.move))) moves.add(machine.move);
   }
   for (const tutor of moveAccess?.reusableTutors || []) {
     if (Number(tutor.availableFrom) > stage) continue;
-    if (canLearnGen4Tutor(species, tutor.move)) moves.add(tutor.move);
+    if (lineage.some(entry => canLearnGen4Tutor(entry.species, tutor.move))) moves.add(tutor.move);
   }
   for (const machine of extraMachines || []) {
     const descriptor = typeof machine === 'string' ? { move: machine, availableFrom: 0 } : machine;
     if (!descriptor?.move || Number(descriptor.availableFrom || 0) > stage) continue;
-    if (canLearnGen4Machine(species, descriptor.move)) moves.add(descriptor.move);
+    if (lineage.some(entry => canLearnGen4Machine(entry.species, descriptor.move))) moves.add(descriptor.move);
   }
   return [...moves];
 }
 
-export function selectCandidateMoves(speciesName, level, stage, moveAccess = null, extraMachines = []) {
+export function selectCandidateMoves(
+  speciesName,
+  level,
+  stage,
+  moveAccess = null,
+  extraMachines = [],
+  originSpeciesName = null,
+) {
   const species = dex.species.get(speciesName);
-  const pool = candidateMovePool(speciesName, level, stage, moveAccess, extraMachines);
+  const pool = candidateMovePool(
+    speciesName,
+    level,
+    stage,
+    moveAccess,
+    extraMachines,
+    originSpeciesName,
+  );
   const scored = pool.map(name => ({
     name,
     move: dex.moves.get(name),
     score: candidateMoveScore(species, name),
   }));
   scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-
   const selected = [];
   const damagingTypes = new Map();
   for (const entry of scored) {
@@ -254,14 +409,13 @@ export function selectCandidateMoves(speciesName, level, stage, moveAccess = nul
   return selected;
 }
 
-
 function moveSetScore(speciesName, moves) {
   const species = dex.species.get(speciesName);
   return moves.reduce((sum, moveName) => sum + candidateMoveScore(species, moveName), 0);
 }
 
 function candidateKey(candidate) {
-  return candidate.familyId || candidate.species;
+  return candidate.searchKey || candidate.familyId || candidate.species;
 }
 
 export function planSingleUseMachines(candidates, bosses, moveAccess = null, options = {}) {
@@ -287,7 +441,7 @@ export function planSingleUseMachines(candidates, bosses, moveAccess = null, opt
         const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
           ? Number(levelsByBattle[bossIndex][key])
           : Number(boss.aceLevel);
-        const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
+        const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel, boss?._routeIndex);
         const species = dex.species.get(speciesName);
         if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
         legalSomewhere = true;
@@ -369,7 +523,7 @@ function planPurchasableMachinesBudgeted(
           const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[state.key]))
             ? Number(levelsByBattle[bossIndex][state.key])
             : Number(boss.aceLevel);
-          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage, actualLevel);
+          const speciesName = candidateSpeciesAtStage(state.candidate, boss.stage, actualLevel, boss?._routeIndex);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
@@ -484,7 +638,7 @@ export function planPurchasableMachines(
           const actualLevel = levelsByBattle && Number.isFinite(Number(levelsByBattle[bossIndex]?.[key]))
             ? Number(levelsByBattle[bossIndex][key])
             : Number(boss.aceLevel);
-          const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel);
+          const speciesName = candidateSpeciesAtStage(candidate, boss.stage, actualLevel, boss?._routeIndex);
           const species = dex.species.get(speciesName);
           if (!species.exists || !canLearnGen4Machine(species, machine.move)) continue;
           legalSomewhere = true;
@@ -550,14 +704,20 @@ export function hgssTrainerToShowdownTeam(trainer, trainerMeta) {
   });
 }
 
-function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
+function candidateSpeciesAtStage(mon, stage, actualLevel = null, checkpointIndex = null) {
   let speciesName = mon.species;
   const transitions = Array.isArray(mon.speciesByStage) ? [...mon.speciesByStage] : [];
-  transitions.sort((a, b) =>
-    Number(a.level || Infinity) - Number(b.level || Infinity) ||
-    Number(a.stage || 0) - Number(b.stage || 0)
-  );
+  transitions.sort((a, b) => {
+    if (Number.isFinite(Number(a.order)) || Number.isFinite(Number(b.order))) {
+      return Number(a.order || 0) - Number(b.order || 0);
+    }
+    return (
+      Number(a.level || Infinity) - Number(b.level || Infinity) ||
+      Number(a.stage || 0) - Number(b.stage || 0)
+    );
+  });
   for (const transition of transitions) {
+    if (transition.fromSpecies && String(transition.fromSpecies) !== String(speciesName)) continue;
     const isLevelEvolution =
       transition.derived === 'level-evolution' ||
       /^level\s+\d+/i.test(String(transition.reason || ''));
@@ -565,19 +725,27 @@ function candidateSpeciesAtStage(mon, stage, actualLevel = null) {
       if (Number(actualLevel) >= Number(transition.level)) speciesName = transition.species;
       continue;
     }
+    if (
+      Number.isFinite(Number(transition.checkpointIndex)) &&
+      Number.isFinite(Number(checkpointIndex))
+    ) {
+      if (Number(checkpointIndex) >= Number(transition.checkpointIndex)) {
+        speciesName = transition.species;
+      }
+      continue;
+    }
     if (Number(transition.stage) <= stage) speciesName = transition.species;
   }
   return speciesName;
 }
-
 export function candidateBossUtility(candidate, boss, level) {
   const actualLevel = Math.max(1, Math.min(100, Math.floor(Number(level || 1))));
   const stage = Number(boss?.stage || 0);
-  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel);
+  const speciesName = candidateSpeciesAtStage(candidate, stage, actualLevel, boss?._routeIndex);
   const species = dex.species.get(speciesName);
   if (!species.exists) return 0;
 
-  const candidateMoves = levelUpMovePool(species.name, actualLevel);
+  const candidateMoves = candidateMovePool(species.name, actualLevel, stage, null, [], candidate.species);
   const usableCandidateMoves = candidateMoves.length ? candidateMoves : ['Tackle'];
   const foes = boss?.trainer?.party || [];
   if (!foes.length) return actualLevel;
@@ -630,6 +798,9 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
   const singleUsePlan = options.singleUsePlan || {};
   const purchasablePlan = options.purchasablePlan || {};
   const levelsByCandidate = options.levelsByCandidate || null;
+  const checkpointIndex = Number.isFinite(Number(options.routeIndex))
+    ? Number(options.routeIndex)
+    : Number(options.boss?._routeIndex);
   return candidates
     .filter(mon => Number(mon.availableFrom || 0) <= stage)
     .slice(0, 6)
@@ -638,7 +809,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       const candidateLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[key]))
         ? Math.max(1, Math.min(100, Math.floor(Number(levelsByCandidate[key]))))
         : level;
-      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel);
+      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel, checkpointIndex);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
       const assignedMachines = [
@@ -647,7 +818,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       ];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines);
+        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines, mon.species);
       return {
         _candidateKey: key,
         name: species.name,
@@ -661,6 +832,610 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
         moves: moves.length ? moves : ['Tackle'],
       };
     });
+}
+
+
+function natureStatMultiplier(natureName, stat) {
+  const nature = dex.natures.get(natureName || NEUTRAL_NATURE);
+  if (!nature?.exists) return 1;
+  if (nature.plus === stat) return 1.1;
+  if (nature.minus === stat) return 0.9;
+  return 1;
+}
+
+function previewStat(mon, stat) {
+  const species = dex.species.get(mon.species);
+  if (!species.exists) return 1;
+  const level = Math.max(1, Number(mon.level || 1));
+  const iv = Math.max(0, Math.min(31, Number(mon.ivs?.[stat] ?? 20)));
+  const ev = Math.max(0, Number(mon.evs?.[stat] ?? 0));
+  const base = Number(species.baseStats?.[stat] || 1);
+  if (stat === 'hp') {
+    return Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + level + 10;
+  }
+  const raw = Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+  return Math.floor(raw * natureStatMultiplier(mon.nature, stat));
+}
+
+function previewItemDamageMultiplier(mon, move, target) {
+  const item = dex.items.get(mon?.item || '');
+  if (!item?.exists || !move?.exists) return 1;
+  if (item.id === 'choiceband' && move.category === 'Physical') return 1.5;
+  if (item.id === 'choicespecs' && move.category === 'Special') return 1.5;
+  if (item.id === 'lifeorb') return 1.3;
+  if (item.id === 'expertbelt') {
+    const defender = dex.species.get(target?.species || '');
+    if (defender.exists && dex.getImmunity(move.type, defender) && dex.getEffectiveness(move, defender) > 0) {
+      return 1.2;
+    }
+  }
+  if (item.id === 'muscleband' && move.category === 'Physical') return 1.1;
+  if (item.id === 'wiseglasses' && move.category === 'Special') return 1.1;
+  return 1;
+}
+
+function previewSpeedMultiplier(mon) {
+  const item = dex.items.get(mon?.item || '');
+  return item?.id === 'choicescarf' ? 1.5 : 1;
+}
+
+function previewEffectiveHpMultiplier(mon, incomingDamage) {
+  const item = dex.items.get(mon?.item || '');
+  if (!item?.exists) return 1;
+  if (item.id === 'leftovers') return 1.12;
+  if (item.id === 'sitrusberry') return 1.25;
+  if (item.id === 'focussash' && Number(incomingDamage || 0) >= previewStat(mon, 'hp')) return 1.9;
+  if (item.id === 'lumberry') return 1.05;
+  return 1;
+}
+
+function legalGen4Abilities(speciesName) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return [];
+  const values = [species.abilities?.['0'], species.abilities?.['1']]
+    .filter(Boolean);
+  return [...new Set(values)];
+}
+
+function previewDefensiveAbilityMultiplier(target, move, defenderSpecies) {
+  const ability = dex.abilities.get(target?.ability || '');
+  const id = ability?.id || '';
+  const type = move?.type || '';
+  const effectiveness = 2 ** dex.getEffectiveness(move, defenderSpecies);
+
+  if (id === 'levitate' && type === 'Ground') return 0;
+  // In Gen 4, Storm Drain and Lightning Rod only redirect attacks in
+  // doubles; their immunity/stat-boost behavior starts in Gen 5.
+  if (['waterabsorb', 'dryskin'].includes(id) && type === 'Water') return 0;
+  if (['voltabsorb', 'motordrive'].includes(id) && type === 'Electric') return 0;
+  if (id === 'flashfire' && type === 'Fire') return 0;
+  if (id === 'dryskin' && type === 'Fire') return 1.25;
+  if (id === 'thickfat' && ['Fire', 'Ice'].includes(type)) return 0.5;
+  if (id === 'heatproof' && type === 'Fire') return 0.5;
+  if (['solidrock', 'filter'].includes(id) && effectiveness > 1) return 0.75;
+  if (id === 'wonderguard' && effectiveness <= 1) return 0;
+  return 1;
+}
+
+function previewOffensiveAbilityMultiplier(mon, move) {
+  const ability = dex.abilities.get(mon?.ability || '');
+  const id = ability?.id || '';
+  if (move.category === 'Physical' && ['hugepower', 'purepower'].includes(id)) return 2;
+  if (move.category === 'Physical' && id === 'hustle') return 1.2;
+  if (id === 'technician' && Number(move.basePower || 0) > 0 && Number(move.basePower || 0) <= 60) return 1.5;
+  if (id === 'ironfist' && move.flags?.punch) return 1.2;
+  if (id === 'reckless' && (move.recoil || move.hasCrashDamage)) return 1.2;
+  return 1;
+}
+
+function previewStabMultiplier(mon, attackerSpecies, move) {
+  const hasStab = attackerSpecies.types.includes(move.type);
+  if (!hasStab) return 1;
+  const ability = dex.abilities.get(mon?.ability || '');
+  return ability?.id === 'adaptability' ? 2 : 1.5;
+}
+
+function previewConditionalMoveMultiplier(mon, target, move) {
+  if (move.id === 'dreameater') {
+    const sleepSupport = (mon?.moves || []).some(moveName =>
+      ['hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'yawn', 'spore'].includes(
+        dex.moves.get(moveName).id
+      )
+    );
+    if (!sleepSupport && target?.status !== 'slp') return 0;
+    return target?.status === 'slp' ? 1 : 0.45;
+  }
+  if (move.id === 'lastresort') return 0.22;
+  if (move.id === 'suckerpunch') return 0.72;
+  return 1;
+}
+
+function previewMoveDamage(mon, target, moveName) {
+  const move = dex.moves.get(moveName);
+  const attacker = dex.species.get(mon.species);
+  const defender = dex.species.get(target.species);
+  if (!move.exists || !attacker.exists || !defender.exists || move.category === 'Status') return 0;
+  if (!dex.getImmunity(move.type, defender)) return 0;
+
+  const abilityDefense = previewDefensiveAbilityMultiplier(target, move, defender);
+  if (abilityDefense <= 0) return 0;
+  const conditional = previewConditionalMoveMultiplier(mon, target, move);
+  if (conditional <= 0) return 0;
+  if (typeof move.damage === 'number') {
+    return Number(move.damage) * abilityDefense * conditional;
+  }
+
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = previewStat(mon, attackStat);
+  const defense = previewStat(target, defenseStat);
+  const level = Math.max(1, Number(mon.level || 1));
+  let power = Math.max(1, effectiveMovePower(move));
+  if (move.id === 'eruption' || move.id === 'waterspout') {
+    power *= 0.82;
+  }
+  const stab = previewStabMultiplier(mon, attacker, move);
+  const effectiveness = 2 ** dex.getEffectiveness(move, defender);
+  const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
+  return ((((2 * level / 5 + 2) * power * attack / Math.max(1, defense)) / 50) + 2) *
+    stab * effectiveness * accuracy * 0.925 * moveStrategicMultiplier(move) *
+    previewItemDamageMultiplier(mon, move, target) *
+    previewOffensiveAbilityMultiplier(mon, move) *
+    abilityDefense *
+    conditional;
+}
+
+function previewMatchupUtility(mon, target) {
+  if (!mon || !target) return -Infinity;
+  const out = Math.max(0, ...(mon.moves || []).map(move => previewMoveDamage(mon, target, move)));
+  const incoming = Math.max(0, ...(target.moves || []).map(move => previewMoveDamage(target, mon, move)));
+  const targetHp = Math.max(1, previewStat(target, 'hp'));
+  const baseOwnHp = Math.max(1, previewStat(mon, 'hp'));
+  const ownHp = baseOwnHp * previewEffectiveHpMultiplier(mon, incoming);
+  const ownSpeed = previewStat(mon, 'spe') * previewSpeedMultiplier(mon);
+  const foeSpeed = previewStat(target, 'spe') * previewSpeedMultiplier(target);
+  const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
+  return (out / targetHp) * speedFactor / Math.max(0.25, incoming / ownHp);
+}
+
+const RED_BUILD_EV_SPREADS = [
+  { label: 'atk-spe', evs: { hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252 } },
+  { label: 'spa-spe', evs: { hp: 4, atk: 0, def: 0, spa: 252, spd: 0, spe: 252 } },
+  { label: 'hp-atk', evs: { hp: 252, atk: 252, def: 4, spa: 0, spd: 0, spe: 0 } },
+  { label: 'hp-spa', evs: { hp: 252, atk: 0, def: 4, spa: 252, spd: 0, spe: 0 } },
+  { label: 'hp-def', evs: { hp: 252, atk: 0, def: 252, spa: 0, spd: 4, spe: 0 } },
+  { label: 'hp-spd', evs: { hp: 252, atk: 0, def: 4, spa: 0, spd: 252, spe: 0 } },
+  { label: 'hp-spe', evs: { hp: 252, atk: 0, def: 4, spa: 0, spd: 0, spe: 252 } },
+];
+const RED_BUILD_NATURES = [
+  'Adamant', 'Jolly', 'Modest', 'Timid',
+  'Impish', 'Careful', 'Bold', 'Calm',
+  'Serious',
+];
+const RED_BUILD_ITEMS = [
+  '', 'Leftovers', 'Life Orb', 'Expert Belt',
+  'Choice Band', 'Choice Specs', 'Choice Scarf',
+  'Focus Sash', 'Sitrus Berry', 'Muscle Band',
+  'Wise Glasses', 'Lum Berry',
+];
+
+const playerBuildOptimizationCache = new Map();
+
+function playerBuildScore(mon, foeTeam) {
+  const foes = Array.isArray(foeTeam) ? foeTeam.filter(Boolean) : [];
+  if (!foes.length) return 0;
+  const utilities = foes
+    .map(foe => previewMatchupUtility(mon, foe))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (!utilities.length) return 0;
+  const mean = utilities.reduce((sum, value) => sum + value, 0) / utilities.length;
+  const worst = utilities[0];
+  const best = utilities[utilities.length - 1];
+  return 0.6 * mean + 0.15 * worst + 0.25 * best;
+}
+
+export function optimizePlayerBuildForBoss(mon, foeTeam, options = {}) {
+  const iv = Math.max(0, Math.min(31, Math.floor(Number(options.iv ?? 16))));
+  const ivs = uniformIvs(iv);
+  const spreads = options.evSpreads || RED_BUILD_EV_SPREADS;
+  const natures = options.natures || RED_BUILD_NATURES;
+  const items = options.items || RED_BUILD_ITEMS;
+  const cacheable =
+    spreads === RED_BUILD_EV_SPREADS &&
+    natures === RED_BUILD_NATURES &&
+    items === RED_BUILD_ITEMS;
+  const foeSignature = (foeTeam || []).map(foe =>
+    [foe.species, foe.level, foe.item || '', foe.nature || '', ...(foe.moves || [])].join(':')
+  ).join('|');
+  const cacheKey = cacheable
+    ? [
+        mon.species,
+        mon.level,
+        mon.ability || '',
+        (mon.moves || []).join(','),
+        iv,
+        foeSignature,
+      ].join('||')
+    : null;
+  if (cacheKey && playerBuildOptimizationCache.has(cacheKey)) {
+    const cached = playerBuildOptimizationCache.get(cacheKey);
+    return {
+      ...mon,
+      ...cached,
+      ivs: { ...cached.ivs },
+      evs: { ...cached.evs },
+      _buildOptimization: { ...cached._buildOptimization },
+    };
+  }
+
+  // Stage 1: choose promising EV/nature pairs without an item. This keeps the
+  // build search cheap enough to sit inside the GA while still considering all
+  // requested max-EV spreads and nature families.
+  const baseBuilds = [];
+  for (const spread of spreads) {
+    for (const nature of natures) {
+      const candidate = {
+        ...mon,
+        ivs,
+        evs: { ...spread.evs },
+        nature,
+        item: '',
+      };
+      baseBuilds.push({
+        mon: candidate,
+        score: playerBuildScore(candidate, foeTeam),
+        evSpread: spread.label,
+      });
+    }
+  }
+  baseBuilds.sort((a, b) =>
+    Number(b.score) - Number(a.score) ||
+    `${a.evSpread}:${a.mon.nature}`.localeCompare(`${b.evSpread}:${b.mon.nature}`)
+  );
+
+  // Stage 2: keep the strongest generic bases, but also guarantee the
+  // offensive EV spreads that match this moveset. Otherwise a frail attacker
+  // can have hp/def survive the item-less proxy round and never give hp/atk or
+  // atk/spe a chance to pair with Choice Band (same issue for Specs).
+  const finalistBaseMap = new Map();
+  function addBase(base) {
+    if (!base) return;
+    finalistBaseMap.set(
+      `${base.evSpread}:${base.mon.nature}`,
+      base,
+    );
+  }
+  for (const base of baseBuilds.slice(0, Math.min(4, baseBuilds.length))) addBase(base);
+
+  const damagingCategories = new Set(
+    (mon.moves || [])
+      .map(moveName => dex.moves.get(moveName))
+      .filter(move => move.exists && move.category !== 'Status')
+      .map(move => move.category)
+  );
+  const guaranteedSpreads = [];
+  if (damagingCategories.has('Physical')) guaranteedSpreads.push('atk-spe', 'hp-atk');
+  if (damagingCategories.has('Special')) guaranteedSpreads.push('spa-spe', 'hp-spa');
+  for (const spreadLabel of guaranteedSpreads) {
+    addBase(baseBuilds.find(base => base.evSpread === spreadLabel));
+  }
+
+  const finalistBases = [...finalistBaseMap.values()]
+    .sort((a, b) =>
+      Number(b.score) - Number(a.score) ||
+      `${a.evSpread}:${a.mon.nature}`.localeCompare(`${b.evSpread}:${b.mon.nature}`)
+    );
+  let best = null;
+  for (const base of finalistBases) {
+    for (const item of items) {
+      const candidate = { ...base.mon, item };
+      let score = playerBuildScore(candidate, foeTeam);
+      const itemId = dex.items.get(item || '').id;
+      if (['choiceband', 'choicespecs', 'choicescarf'].includes(itemId)) {
+        const statusCount = (candidate.moves || [])
+          .filter(moveName => dex.moves.get(moveName).category === 'Status')
+          .length;
+        // Locking into setup/recovery/status is strategically toxic. Keep
+        // Choice items available for pure attacking sets, but strongly prefer
+        // non-Choice items when the moveset contains utility moves.
+        score *= 0.42 ** statusCount;
+      }
+      if (
+        !best ||
+        score > best.score + 1e-12 ||
+        (Math.abs(score - best.score) <= 1e-12 &&
+          `${base.evSpread}:${candidate.nature}:${item}`.localeCompare(
+            `${best.evSpread}:${best.mon.nature}:${best.mon.item}`
+          ) < 0)
+      ) {
+        best = {
+          mon: candidate,
+          score,
+          evSpread: base.evSpread,
+        };
+      }
+    }
+  }
+
+  const result = {
+    ...(best?.mon || { ...mon, ivs }),
+    _buildOptimization: {
+      iv,
+      evSpread: best?.evSpread || null,
+      nature: best?.mon?.nature || mon.nature || NEUTRAL_NATURE,
+      item: best?.mon?.item || mon.item || '',
+      proxyScore: Number(best?.score || 0),
+      searchMode: 'staged-ev-nature-then-item',
+    },
+  };
+  if (cacheKey) {
+    playerBuildOptimizationCache.set(cacheKey, {
+      ivs: { ...result.ivs },
+      evs: { ...result.evs },
+      nature: result.nature,
+      item: result.item,
+      _buildOptimization: { ...result._buildOptimization },
+    });
+  }
+  return result;
+}
+
+function abilityForSlot(speciesName, slot = 0) {
+  const species = dex.species.get(speciesName);
+  if (!species.exists) return '';
+  return species.abilities?.[String(slot)] || species.abilities?.['0'] || '';
+}
+
+function lowerTailMean(values, k = 5) {
+  const finite = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!finite.length) return 0;
+  const slice = finite.slice(0, Math.min(k, finite.length));
+  return slice.reduce((sum, value) => sum + value, 0) / slice.length;
+}
+
+export function applyPlayerRouteBuild(mon, build) {
+  if (!build) return mon;
+  const ability = abilityForSlot(mon.species, Number(build.abilitySlot || 0));
+  return {
+    ...mon,
+    ability: ability || mon.ability || '',
+    nature: build.nature || mon.nature || NEUTRAL_NATURE,
+    ivs: { ...(build.ivs || uniformIvs(16)) },
+    evs: { ...(build.evs || {}) },
+    _routeBuild: {
+      iv: Number(build.iv ?? 16),
+      evSpread: build.evSpread || null,
+      nature: build.nature || NEUTRAL_NATURE,
+      abilitySlot: Number(build.abilitySlot || 0),
+      proxyScore: Number(build.proxyScore || 0),
+    },
+  };
+}
+
+export function optimizePlayerRouteBuild(samples, options = {}) {
+  const usable = (samples || []).filter(sample => sample?.mon && Array.isArray(sample.foeTeam) && sample.foeTeam.length);
+  if (!usable.length) return null;
+  const iv = Math.max(0, Math.min(31, Math.floor(Number(options.iv ?? 16))));
+  const ivs = uniformIvs(iv);
+  const spreads = options.evSpreads || RED_BUILD_EV_SPREADS;
+  const natures = options.natures || RED_BUILD_NATURES;
+  const abilitySlots = options.abilitySlots || [0, 1];
+  let best = null;
+
+  for (const spread of spreads) {
+    for (const nature of natures) {
+      for (const abilitySlot of abilitySlots) {
+        const scores = usable.map(sample => {
+          const mon = {
+            ...sample.mon,
+            item: '',
+            ability: abilityForSlot(sample.mon.species, abilitySlot),
+            nature,
+            ivs,
+            evs: { ...spread.evs },
+          };
+          return playerBuildScore(mon, sample.foeTeam);
+        });
+        const mean = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+        const tail = lowerTailMean(scores, 5);
+        const proxyScore = 0.72 * mean + 0.28 * tail;
+        if (
+          !best ||
+          proxyScore > best.proxyScore + 1e-12 ||
+          (Math.abs(proxyScore - best.proxyScore) <= 1e-12 &&
+            `${spread.label}:${nature}:${abilitySlot}`.localeCompare(
+              `${best.evSpread}:${best.nature}:${best.abilitySlot}`
+            ) < 0)
+        ) {
+          best = {
+            iv,
+            ivs: { ...ivs },
+            evSpread: spread.label,
+            evs: { ...spread.evs },
+            nature,
+            abilitySlot,
+            proxyScore,
+            meanScore: mean,
+            bottom5Score: tail,
+          };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+export function optimizePlayerHeldItemForBoss(mon, foeTeam, options = {}) {
+  const items = Array.isArray(options.items) && options.items.length
+    ? options.items
+    : [''];
+  let best = null;
+  for (const item of items) {
+    const candidate = { ...mon, item };
+    let score = playerBuildScore(candidate, foeTeam);
+    const itemId = dex.items.get(item || '').id;
+    if (['choiceband', 'choicespecs', 'choicescarf'].includes(itemId)) {
+      const statusCount = (candidate.moves || [])
+        .filter(moveName => dex.moves.get(moveName).category === 'Status')
+        .length;
+      score *= 0.42 ** statusCount;
+    }
+    if (
+      !best ||
+      score > best.score + 1e-12 ||
+      (Math.abs(score - best.score) <= 1e-12 && String(item).localeCompare(String(best.item)) < 0)
+    ) {
+      best = { item, score };
+    }
+  }
+  return {
+    ...mon,
+    item: best?.item || '',
+    _heldItemOptimization: {
+      item: best?.item || '',
+      proxyScore: Number(best?.score || 0),
+    },
+  };
+}
+
+function routeMoveCombinations(values, choose = 4, start = 0, prefix = [], output = []) {
+  if (prefix.length === choose) {
+    output.push(prefix.slice());
+    return output;
+  }
+  const remaining = choose - prefix.length;
+  for (let i = start; i <= values.length - remaining; i += 1) {
+    prefix.push(values[i]);
+    routeMoveCombinations(values, choose, i + 1, prefix, output);
+    prefix.pop();
+  }
+  return output;
+}
+
+function routeMovesetScore(mon, moves, foeTeams) {
+  const bossScores = [];
+  for (const foes of foeTeams || []) {
+    const foeScores = [];
+    for (const foe of foes || []) {
+      const foeHp = Math.max(1, previewStat(foe, 'hp'));
+      const bestDamage = Math.max(0, ...moves.map(move => previewMoveDamage(
+        { ...mon, moves },
+        foe,
+        move,
+      )));
+      foeScores.push(bestDamage / foeHp);
+    }
+    if (foeScores.length) {
+      const mean = foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length;
+      const best = Math.max(...foeScores);
+      bossScores.push(0.7 * mean + 0.3 * best);
+    }
+  }
+  if (!bossScores.length) return 0;
+  const meanBoss = bossScores.reduce((sum, value) => sum + value, 0) / bossScores.length;
+  const specialist = [...bossScores].sort((a, b) => b - a)
+    .slice(0, Math.min(5, bossScores.length))
+    .reduce((sum, value, _, arr) => sum + value / arr.length, 0);
+  const damagingTypes = new Set(
+    moves.map(name => dex.moves.get(name))
+      .filter(move => move.exists && move.category !== 'Status')
+      .map(move => move.type)
+  ).size;
+  const statusBonus = moves
+    .map(name => dex.moves.get(name))
+    .filter(move => move.exists && move.category === 'Status')
+    .reduce((sum, move) => sum + Math.min(0.08, moveStrategicMultiplier(move) * 0.02), 0);
+  return meanBoss + 0.25 * specialist + 0.015 * damagingTypes + statusBonus;
+}
+
+export function optimizePlayerRouteMoves(
+  mon,
+  foeTeams,
+  {
+    stage = 21,
+    moveAccess = null,
+    extraMachines = [],
+    originSpeciesName = null,
+    shortlistCap = 12,
+  } = {},
+) {
+  const pool = candidateMovePool(
+    mon.species,
+    mon.level,
+    stage,
+    moveAccess,
+    extraMachines,
+    originSpeciesName || mon.species,
+  );
+  if (!pool.length) return { moves: ['Tackle'], legalMoveCount: 0, proxyScore: 0 };
+
+  const allFoes = (foeTeams || []).flat().filter(Boolean);
+  const individual = pool.map(name => {
+    const move = dex.moves.get(name);
+    if (!move.exists) return { name, score: 0 };
+    if (move.category === 'Status') {
+      return { name, score: candidateMoveScore(dex.species.get(mon.species), name) * 0.02 };
+    }
+    const fractions = allFoes.map(foe =>
+      previewMoveDamage({ ...mon, moves: [name] }, foe, name) /
+      Math.max(1, previewStat(foe, 'hp'))
+    );
+    const mean = fractions.length ? fractions.reduce((sum, value) => sum + value, 0) / fractions.length : 0;
+    const best = fractions.length ? Math.max(...fractions) : 0;
+    return { name, score: mean + 0.35 * best };
+  }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const shortlist = new Map();
+  for (const entry of individual.slice(0, Math.max(4, shortlistCap))) shortlist.set(entry.name, entry.score);
+  for (const foe of allFoes) {
+    let best = null;
+    for (const name of pool) {
+      const move = dex.moves.get(name);
+      if (!move.exists || move.category === 'Status') continue;
+      const fraction = previewMoveDamage({ ...mon, moves: [name] }, foe, name) /
+        Math.max(1, previewStat(foe, 'hp'));
+      if (!best || fraction > best.score) best = { name, score: fraction };
+    }
+    if (best) shortlist.set(best.name, Math.max(shortlist.get(best.name) || 0, best.score));
+  }
+
+  const candidates = [...shortlist.keys()]
+    .sort((a, b) =>
+      Number(shortlist.get(b) || 0) - Number(shortlist.get(a) || 0) ||
+      a.localeCompare(b)
+    )
+    .slice(0, Math.max(4, shortlistCap));
+  const sets = candidates.length <= 4
+    ? [[...candidates]]
+    : routeMoveCombinations(candidates, 4);
+  let best = null;
+  for (const moves of sets) {
+    const score = routeMovesetScore(mon, moves, foeTeams);
+    if (
+      !best ||
+      score > best.score + 1e-12 ||
+      (Math.abs(score - best.score) <= 1e-12 && moves.join('/').localeCompare(best.moves.join('/')) < 0)
+    ) {
+      best = { moves: [...moves], score };
+    }
+  }
+  return {
+    moves: best?.moves || individual.slice(0, 4).map(entry => entry.name),
+    legalMoveCount: pool.length,
+    shortlist: candidates,
+    evaluatedMovesets: sets.length,
+    proxyScore: Number(best?.score || 0),
+  };
+}
+
+export function orderPlayerTeamForLead(team, foeTeam) {
+  const lead = Array.isArray(foeTeam) ? foeTeam[0] : null;
+  if (!lead) return [...team];
+  return [...team].sort((a, b) =>
+    previewMatchupUtility(b, lead) - previewMatchupUtility(a, lead) ||
+    String(a.species).localeCompare(String(b.species))
+  );
 }
 
 function seedArray(seed) {
@@ -759,6 +1534,86 @@ function scoreMove(active, target, requestedMove) {
   return power * statRatio * effectiveness * stab * accuracy * priority * strategic;
 }
 
+
+function estimateBattleDamage(active, target, requestedMove) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!active || !target || !move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
+  if (!dex.getImmunity(move.type, target)) return 0;
+  const effectiveness = 2 ** dex.getEffectiveness(move, target);
+  const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
+  const priority = move.priority > 0 ? 1.03 : 1;
+  const strategic = moveStrategicMultiplier(move);
+  if (typeof move.damage === 'number') {
+    return Math.max(0, Number(move.damage) * effectiveness * accuracy * priority * strategic);
+  }
+  const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
+  const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
+  const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
+  const level = Math.max(1, Number(active.level || 1));
+  const power = Math.max(1, effectiveMovePower(move));
+  const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
+  let damage = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
+  damage *= stab * effectiveness * 0.925 * accuracy * priority * strategic;
+  if (move.category === 'Physical' && active.status === 'brn' && active.ability !== 'Guts') damage *= 0.5;
+  return Math.max(0, damage);
+}
+
+function bestExpectedDamage(mon, target) {
+  if (!mon || !target) return 0;
+  let best = 0;
+  for (const slot of mon.moveSlots || []) {
+    const requested = { move: slot.id || slot.move, disabled: slot.disabled || false };
+    best = Math.max(best, estimateBattleDamage(mon, target, requested));
+  }
+  return best;
+}
+
+function smartStatusMoveScore(active, target, requestedMove) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!move.exists || move.category !== 'Status') return -Infinity;
+  const hpRatio = active?.maxhp > 0 ? active.hp / active.maxhp : 0;
+  const incoming = bestExpectedDamage(target, active);
+  const likelyIncomingKo = incoming >= Number(active?.hp || 0);
+  const recovery = new Set(['recover','roost','milkdrink','synthesis','slackoff','softboiled']);
+  if (recovery.has(move.id)) {
+    if (hpRatio >= 0.72 || likelyIncomingKo) return 1;
+    return 85 + (1 - hpRatio) * 90;
+  }
+  if (move.status) {
+    if (target?.status) return 0;
+    return 58;
+  }
+  const setupIds = new Set(['swordsdance','dragondance','calmmind','nastyplot','agility','curse','bulkup']);
+  if (setupIds.has(move.id)) {
+    if (hpRatio < 0.45 || likelyIncomingKo) return 4;
+    return 68 + hpRatio * 22;
+  }
+  if (move.id === 'reflect' || move.id === 'lightscreen') return 52;
+  if (move.id === 'substitute') return hpRatio < 0.55 ? 1 : 42;
+  return 8;
+}
+
+function smartMoveScore(active, target, requestedMove) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!move.exists || requestedMove?.disabled) return -Infinity;
+  if (move.category === 'Status') return smartStatusMoveScore(active, target, requestedMove);
+  const damage = estimateBattleDamage(active, target, requestedMove);
+  const targetHp = Math.max(1, Number(target?.hp || target?.maxhp || 1));
+  const targetMaxHp = Math.max(1, Number(target?.maxhp || targetHp));
+  const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
+  const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
+  const priority = Number(move.priority || 0);
+  const actsFirst = priority > 0 || activeSpeed >= targetSpeed;
+  const ko = damage >= targetHp;
+  let score = 100 * damage / targetMaxHp;
+  if (ko) score += actsFirst ? 420 : 220;
+  if (priority > 0 && targetHp <= damage * 1.2) score += 45;
+  const incoming = bestExpectedDamage(target, active);
+  if (!actsFirst && incoming >= Number(active?.hp || 0) && !ko) score *= 0.3;
+  return score;
+}
+
 function battleMonMoveScore(mon, target) {
   if (!mon || !target) return 0;
   const slots = mon.moveSlots || [];
@@ -776,6 +1631,63 @@ function matchupUtility(mon, foeMon) {
   const incoming = battleMonMoveScore(foeMon, mon);
   const hpRatio = mon.maxhp > 0 ? mon.hp / mon.maxhp : 0;
   return (offense * (0.5 + hpRatio)) / Math.max(35, incoming);
+}
+
+
+function smartMatchupUtility(mon, foeMon) {
+  if (!mon || !foeMon || mon.fainted) return -Infinity;
+  const outgoing = bestExpectedDamage(mon, foeMon);
+  const incoming = bestExpectedDamage(foeMon, mon);
+  const foeHp = Math.max(1, Number(foeMon.hp || foeMon.maxhp || 1));
+  const ownHp = Math.max(1, Number(mon.hp || mon.maxhp || 1));
+  const ownMaxHp = Math.max(1, Number(mon.maxhp || ownHp));
+  const hpRatio = ownHp / ownMaxHp;
+  const offenseFraction = outgoing / foeHp;
+  const dangerFraction = incoming / ownHp;
+  const ownSpeed = Math.max(1, Number(mon.getStat?.('spe') || mon.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(foeMon.getStat?.('spe') || foeMon.storedStats?.spe || 1));
+  const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
+  const survivalFactor = dangerFraction >= 1 ? 0.35 : 1 / Math.max(0.35, dangerFraction);
+  return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
+}
+
+function bestSmartForcedSwitch(request, side, foeActive) {
+  if (!request?.side?.pokemon || !side || !foeActive) return null;
+  let best = null;
+  for (let idx = 0; idx < side.pokemon.length; idx += 1) {
+    const mon = side.pokemon[idx];
+    const reqMon = request.side.pokemon[idx];
+    if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
+    const utility = smartMatchupUtility(mon, foeActive);
+    if (!best || utility > best.utility) best = { idx, utility };
+  }
+  return best?.idx ?? null;
+}
+
+function bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest) {
+  if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
+  if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
+  const currentDamage = bestExpectedDamage(active, foeActive);
+  const currentIncoming = bestExpectedDamage(foeActive, active);
+  const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
+  if (currentDamage >= Number(foeActive.hp || 1) && currentSpeed >= foeSpeed) return null;
+  const currentUtility = smartMatchupUtility(active, foeActive);
+  let best = null;
+  for (let idx = 0; idx < side.pokemon.length; idx += 1) {
+    const mon = side.pokemon[idx];
+    const reqMon = request.side.pokemon[idx];
+    if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
+    const incoming = bestExpectedDamage(foeActive, mon);
+    const utility = smartMatchupUtility(mon, foeActive);
+    const survivesEntry = incoming < Number(mon.hp || 0);
+    if (!best || utility > best.utility) best = { idx, utility, survivesEntry };
+  }
+  if (!best) return null;
+  const likelyCurrentKo = currentIncoming >= Number(active.hp || 0) && currentSpeed <= foeSpeed;
+  if (likelyCurrentKo && best.survivesEntry && best.utility > currentUtility * 0.9) return `switch ${best.idx + 1}`;
+  if (best.survivesEntry && best.utility > currentUtility * 1.28) return `switch ${best.idx + 1}`;
+  return null;
 }
 
 function bestVoluntarySwitch(request, side, foeActive, active, activeRequest, policy = {}) {
@@ -820,6 +1732,14 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
   const useHgssNpcAi = sideId === 'p2' && aiOptions?.mode === 'hgss';
 
   if (request.forceSwitch) {
+    if (sideId === 'p1' && aiOptions?.mode === 'smart' && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
+      const foeActive = foe?.active?.find(Boolean);
+      const slot = bestSmartForcedSwitch(request, side, foeActive);
+      if (slot !== null && slot !== undefined) {
+        if (stats) stats.forcedSwitches = Number(stats.forcedSwitches || 0) + 1;
+        return `switch ${slot + 1}`;
+      }
+    }
     if (useHgssNpcAi && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
       const foeActive = foe?.active?.find(Boolean);
       const slot = chooseHgssPostKoSwitch(request, side, foeActive);
@@ -854,7 +1774,16 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
       const active = activeBattleMons[i];
       if (sideId === 'p1' && request.active.length === 1) {
         const p1Mode = aiOptions?.mode || 'greedy';
-        if (p1Mode !== 'no-switch') {
+        if (p1Mode === 'smart') {
+          const turn = Number(battle?.turn || 0);
+          const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
+          const underSwitchCap = Number(stats?.voluntarySwitches || 0) < 10;
+          const cooldownReady = turn - lastSwitchTurn >= 1;
+          if (underSwitchCap && cooldownReady) {
+            const switchChoice = bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest);
+            if (switchChoice) return switchChoice;
+          }
+        } else if (p1Mode !== 'no-switch') {
           const aggressive = p1Mode === 'aggressive';
           const turn = Number(battle?.turn || 0);
           const lastSwitchTurn = Number(stats?.lastVoluntarySwitchTurn ?? -999);
@@ -869,9 +1798,7 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
               foeActive,
               active,
               activeRequest,
-              aggressive
-                ? { ratioThreshold: 1.15, offenseCeiling: 220, utilityCeiling: 1.5 }
-                : {},
+              aggressive ? { ratioThreshold: 1.15, offenseCeiling: 220, utilityCeiling: 1.5 } : {},
             );
             if (switchChoice) return switchChoice;
           }
@@ -910,8 +1837,15 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
         return `move ${moveIdx + 1}`;
       }
 
+      const playerMode = sideId === 'p1' ? (aiOptions?.mode || 'greedy') : 'greedy';
       const legal = activeRequest.moves
-        .map((move, idx) => ({ idx, move, score: active && foeActive ? scoreMove(active, foeActive, move) : 1 }))
+        .map((move, idx) => ({
+          idx,
+          move,
+          score: active && foeActive
+            ? (playerMode === 'smart' ? smartMoveScore(active, foeActive, move) : scoreMove(active, foeActive, move))
+            : 1,
+        }))
         .filter(entry => !entry.move.disabled);
       if (!legal.length) return 'move 1';
       legal.sort((a, b) => b.score - a.score || a.idx - b.idx);
@@ -983,14 +1917,18 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   const p2Profile = options.p2Trainer ? trainerAiProfile(options.p2Trainer) : null;
   const p2Mode = options.p2AiMode || (p2Profile ? 'hgss' : 'greedy');
   const p1Mode = options.p1AiMode || 'greedy';
-  if (!['greedy', 'aggressive', 'no-switch'].includes(p1Mode)) {
+  if (!['greedy', 'aggressive', 'no-switch', 'smart'].includes(p1Mode)) {
     throw new Error(`Unknown p1AiMode: ${p1Mode}`);
   }
+  const preparedP1Team =
+    p1Mode === 'smart' && options.p1SmartLead !== false
+      ? orderPlayerTeamForLead(p1Team, p2Team)
+      : p1Team;
   const p1KeyByDisplayName = new Map(
-    p1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
+    preparedP1Team.map(mon => [String(mon.name || mon.species), String(mon._candidateKey || mon.species)])
   );
   const p1Usage = Object.fromEntries(
-    p1Team.map(mon => [String(mon._candidateKey || mon.species), emptyBattleUsage()])
+    preparedP1Team.map(mon => [String(mon._candidateKey || mon.species), emptyBattleUsage()])
   );
   let p1ActiveKey = null;
   let p1LeadSeen = false;
@@ -1019,6 +1957,8 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     p2Stats,
     { mode: p2Mode, profile: p2Profile },
   ).catch(() => undefined);
+  let p1Faints = 0;
+  let p2Faints = 0;
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
@@ -1048,6 +1988,10 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
         if (event === 'faint' && actor.startsWith('p1')) {
           const key = p1UsageKey(actor, p1KeyByDisplayName);
           if (key && p1Usage[key]) p1Usage[key].faints += 1;
+          p1Faints += 1;
+        }
+        if (event === 'faint' && actor.startsWith('p2')) {
+          p2Faints += 1;
         }
         if (line.startsWith('|turn|')) {
           turns = Number(parts[2] || turns);
@@ -1062,7 +2006,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   })();
 
   await streams.omniscient.write(`>start ${JSON.stringify({ formatid: 'gen4customgame', seed: seedArray(seed) })}\n` +
-    `>player p1 ${JSON.stringify({ name: 'Player', team: Teams.pack(p1Team) })}\n` +
+    `>player p1 ${JSON.stringify({ name: 'Player', team: Teams.pack(preparedP1Team) })}\n` +
     `>player p2 ${JSON.stringify({ name: 'HGSS', team: Teams.pack(p2Team) })}`);
 
   const result = await resultPromise;
@@ -1070,9 +2014,16 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   await Promise.allSettled([p1Task, p2Task]);
   return {
     ...result,
+    p1Faints,
+    p2Faints,
+    opponentDefeatFraction: Math.min(1, p2Faints / Math.max(1, p2Team.length)),
+    battleProgressScore: result.winner === 'Player'
+      ? 1
+      : Math.min(1, p2Faints / Math.max(1, p2Team.length)),
     p1Usage,
     p1AiMode: p1Mode,
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
+    p1ForcedSwitches: p1Stats.forcedSwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
     p2ForcedSwitches: p2Stats.forcedSwitches,
     p2MoveDecisions: p2Stats.moveDecisions,
@@ -1094,6 +2045,9 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2ForcedSwitches = 0;
   let totalP2MoveDecisions = 0;
   let totalP2TrainerItemUses = 0;
+  let totalP1Faints = 0;
+  let totalP2Faints = 0;
+  let totalBattleProgress = 0;
   const p1Usage = {};
   let p1AiMode = options.p1AiMode || 'greedy';
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
@@ -1101,13 +2055,16 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let p2AiFlagNames = [];
   let p2TrainerItems = [];
   for (let i = 0; i < runs; i += 1) {
-    const result = await runBattle(p1Team, p2Team, seedBase + i, options);
+    const result = await cachedRunBattle(p1Team, p2Team, seedBase + i, options);
     totalTurns += result.turns || 0;
     totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
     totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;
     totalP2ForcedSwitches += result.p2ForcedSwitches || 0;
     totalP2MoveDecisions += result.p2MoveDecisions || 0;
     totalP2TrainerItemUses += result.p2TrainerItemsUsed?.length || 0;
+    totalP1Faints += Number(result.p1Faints || 0);
+    totalP2Faints += Number(result.p2Faints || 0);
+    totalBattleProgress += Number(result.battleProgressScore || 0);
     for (const [key, usage] of Object.entries(result.p1Usage || {})) {
       const aggregate = p1Usage[key] || {
         runsAvailable: 0,
@@ -1159,6 +2116,9 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageP2ForcedSwitches: totalP2ForcedSwitches / runs,
     averageP2MoveDecisions: totalP2MoveDecisions / runs,
     averageP2TrainerItemUses: totalP2TrainerItemUses / runs,
+    averageP1Faints: totalP1Faints / runs,
+    averageOpponentFaints: totalP2Faints / runs,
+    battleProgressScore: totalBattleProgress / runs,
     p1Usage,
     p1AiMode,
     p2AiMode,

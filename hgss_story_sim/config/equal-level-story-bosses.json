@@ -1,0 +1,168 @@
+{
+  "sourceCommit": "9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "notes": "Equal-level practical route benchmark: Johto 8 Gyms -> first Elite Four + Lance -> Kanto 8 Gyms -> rematch Elite Four + Lance -> Red. Stage remains an acquisition checkpoint; rematch Elite Four share stage 20 after Blue.",
+  "bosses": [
+    {
+      "stage": 0,
+      "key": "TRAINER_LEADER_FALKNER_FALKNER",
+      "label": "Falkner",
+      "kind": "gym"
+    },
+    {
+      "stage": 1,
+      "key": "TRAINER_LEADER_BUGSY_BUGSY",
+      "label": "Bugsy",
+      "kind": "gym"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_LEADER_WHITNEY",
+      "label": "Whitney",
+      "kind": "gym"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_LEADER_MORTY_MORTY",
+      "label": "Morty",
+      "kind": "gym"
+    },
+    {
+      "stage": 4,
+      "key": "TRAINER_LEADER_CHUCK_CHUCK",
+      "label": "Chuck",
+      "kind": "gym"
+    },
+    {
+      "stage": 5,
+      "key": "TRAINER_LEADER_JASMINE_JASMINE",
+      "label": "Jasmine",
+      "kind": "gym"
+    },
+    {
+      "stage": 6,
+      "key": "TRAINER_LEADER_PRYCE_PRYCE",
+      "label": "Pryce",
+      "kind": "gym"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_LEADER_CLAIR_CLAIR",
+      "label": "Clair",
+      "kind": "gym"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_ELITE_FOUR_WILL_WILL",
+      "label": "Will",
+      "kind": "elite4"
+    },
+    {
+      "stage": 9,
+      "key": "TRAINER_ELITE_FOUR_KOGA_KOGA",
+      "label": "Koga",
+      "kind": "elite4"
+    },
+    {
+      "stage": 10,
+      "key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO",
+      "label": "Bruno",
+      "kind": "elite4"
+    },
+    {
+      "stage": 11,
+      "key": "TRAINER_ELITE_FOUR_KAREN_KAREN",
+      "label": "Karen",
+      "kind": "elite4"
+    },
+    {
+      "stage": 12,
+      "key": "TRAINER_CHAMPION_LANCE",
+      "label": "Lance",
+      "kind": "champion"
+    },
+    {
+      "stage": 13,
+      "key": "TRAINER_LEADER_LT_SURGE_LT__SURGE",
+      "label": "Lt. Surge",
+      "kind": "gym"
+    },
+    {
+      "stage": 14,
+      "key": "TRAINER_LEADER_SABRINA_SABRINA",
+      "label": "Sabrina",
+      "kind": "gym"
+    },
+    {
+      "stage": 15,
+      "key": "TRAINER_LEADER_ERIKA_ERIKA",
+      "label": "Erika",
+      "kind": "gym"
+    },
+    {
+      "stage": 16,
+      "key": "TRAINER_LEADER_JANINE_JANINE",
+      "label": "Janine",
+      "kind": "gym"
+    },
+    {
+      "stage": 17,
+      "key": "TRAINER_LEADER_MISTY_MISTY",
+      "label": "Misty",
+      "kind": "gym"
+    },
+    {
+      "stage": 18,
+      "key": "TRAINER_LEADER_BROCK_BROCK",
+      "label": "Brock",
+      "kind": "gym"
+    },
+    {
+      "stage": 19,
+      "key": "TRAINER_LEADER_BLAINE_BLAINE",
+      "label": "Blaine",
+      "kind": "gym"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_LEADER_BLUE_BLUE",
+      "label": "Blue",
+      "kind": "gym"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_WILL_WILL_2",
+      "label": "Will 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_KOGA_KOGA_2",
+      "label": "Koga 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO_2",
+      "label": "Bruno 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_KAREN_KAREN_2",
+      "label": "Karen 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_CHAMPION_LANCE_2",
+      "label": "Lance 2",
+      "kind": "champion-rematch"
+    },
+    {
+      "stage": 21,
+      "key": "TRAINER_PKMN_TRAINER_RED_RED",
+      "label": "Red",
+      "kind": "final"
+    }
+  ]
+}

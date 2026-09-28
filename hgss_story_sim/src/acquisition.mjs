@@ -280,15 +280,239 @@ function familyRoot(speciesConst, parentByTarget) {
   return constantToName(current, 'SPECIES_');
 }
 
+
+function normalizeEvolutionPolicy(value) {
+  const policy = String(value || 'level-only').toLowerCase();
+  if (!['level-only', 'trade-aware'].includes(policy)) {
+    throw new Error('evolutionPolicy must be level-only or trade-aware');
+  }
+  return policy;
+}
+
+function evolutionCheckpointIndex(bosses, source = {}) {
+  if (source.beforeBoss) {
+    const index = (bosses || []).findIndex(boss => String(boss.label) === String(source.beforeBoss));
+    if (index >= 0) return index;
+  }
+  if (source.afterBoss) {
+    const index = (bosses || []).findIndex(boss => String(boss.label) === String(source.afterBoss));
+    if (index >= 0) return index + 1;
+  }
+  const stage = Number(source.availableFrom ?? 0);
+  const index = (bosses || []).findIndex(boss => Number(boss.stage) >= stage);
+  return index >= 0 ? index : (bosses || []).length;
+}
+
+function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows, bosses) {
+  const result = new Map();
+  for (const [item, row] of Object.entries(baseAccess?.items || {})) {
+    result.set(item, {
+      item,
+      availableFrom: Number(row.availableFrom),
+      checkpointIndex: evolutionCheckpointIndex(bosses, row),
+      beforeBoss: row.beforeBoss || null,
+      afterBoss: row.afterBoss || null,
+      repeatable: Boolean(row.repeatable),
+      count: Math.max(1, Number(row.count || 1)),
+      source: row.source || null,
+      note: row.note || '',
+    });
+  }
+
+  const personalBySpecies = new Map(
+    (personalRows || []).map(row => [`SPECIES_${row.species}`, row])
+  );
+  for (const wild of earliest.values()) {
+    const personal = personalBySpecies.get(wild.speciesConst);
+    for (const item of personal?.items || []) {
+      if (!item || item === 'ITEM_NONE') continue;
+      const candidate = {
+        item,
+        availableFrom: Number(wild.availableFrom),
+        checkpointIndex: evolutionCheckpointIndex(bosses, { availableFrom: wild.availableFrom }),
+        repeatable: true,
+        count: null,
+        source: {
+          type: 'wild-held',
+          species: constantToName(wild.speciesConst, 'SPECIES_'),
+          maps: (wild.sources || []).map(source => source.map).filter(Boolean),
+        },
+        note: 'Rare held-item probability is intentionally not penalized; legality only.',
+      };
+      const existing = result.get(item);
+      if (
+        !existing ||
+        candidate.checkpointIndex < Number(existing.checkpointIndex) ||
+        (
+          candidate.checkpointIndex === Number(existing.checkpointIndex) &&
+          candidate.repeatable && !existing.repeatable
+        )
+      ) {
+        result.set(item, candidate);
+      }
+    }
+  }
+  return result;
+}
+
+function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlockStage, itemAccess, order) {
+  const fromSpecies = constantToName(fromConst, 'SPECIES_');
+  const targetSpecies = constantToName(evo.target, 'SPECIES_');
+  if (evo.method === 'EVO_LEVEL' && Number.isFinite(Number(evo.param))) {
+    const nextBattle = bosses.find(
+      boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(evo.param)
+    );
+    return {
+      order,
+      stage: Number(nextBattle?.stage ?? availableFrom),
+      level: Number(evo.param),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'level-evolution',
+      evolutionMethod: evo.method,
+      reason: `level ${evo.param}`,
+    };
+  }
+  if (evo.method === 'EVO_TRADE') {
+    return {
+      order,
+      stage: Math.max(Number(availableFrom || 0), Number(tradeUnlockStage || 0)),
+      checkpointIndex: evolutionCheckpointIndex(bosses, {
+        availableFrom: Math.max(Number(availableFrom || 0), Number(tradeUnlockStage || 0)),
+      }),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'trade-evolution',
+      evolutionMethod: evo.method,
+      requiredItem: null,
+      reason: 'trade',
+    };
+  }
+  if (evo.method === 'EVO_TRADE_ITEM') {
+    const access = itemAccess.get(String(evo.param));
+    if (!access || !Number.isFinite(Number(access.availableFrom))) return null;
+    return {
+      order,
+      stage: Math.max(
+        Number(availableFrom || 0),
+        Number(tradeUnlockStage || 0),
+        Number(access.availableFrom),
+      ),
+      checkpointIndex: Number(access.checkpointIndex),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'trade-item-evolution',
+      evolutionMethod: evo.method,
+      requiredItem: String(evo.param),
+      itemRepeatable: Boolean(access.repeatable),
+      itemSource: access.source || null,
+      reason: `trade holding ${evo.param}`,
+    };
+  }
+  return null;
+}
+
+function buildTradeAwareEvolutionPaths(
+  speciesConst,
+  availableFrom,
+  bosses,
+  evoByBase,
+  evolutionAccess,
+  itemAccess,
+) {
+  const tradeUnlockStage = Number(evolutionAccess?.tradeUnlockStage || 0);
+
+  function walk(currentConst, transitions, seen) {
+    if (seen.has(currentConst) || transitions.length >= 8) return [transitions];
+    const all = evoByBase.get(currentConst) || [];
+    const levelEvos = all.filter(evo =>
+      evo.method === 'EVO_LEVEL' && Number.isFinite(Number(evo.param))
+    );
+    const edges = [];
+    // Preserve prior conservative behavior: only an unambiguous plain level
+    // evolution is auto-followed.
+    if (levelEvos.length === 1) edges.push(levelEvos[0]);
+    for (const evo of all) {
+      if (evo.method === 'EVO_TRADE' || evo.method === 'EVO_TRADE_ITEM') edges.push(evo);
+    }
+
+    const usable = edges
+      .map(evo => ({
+        evo,
+        transition: evolutionTransitionFor(
+          evo,
+          currentConst,
+          availableFrom,
+          bosses,
+          tradeUnlockStage,
+          itemAccess,
+          transitions.length,
+        ),
+      }))
+      .filter(row => row.transition);
+
+    if (!usable.length) return [transitions];
+
+    // If this species also has an unsupported branch (stone/friendship/etc.),
+    // retain the prior conservative form as a distinct search variant instead
+    // of forcing the trade branch.
+    const supportedTargets = new Set(usable.map(row => String(row.evo.target)));
+    const hasUnsupportedAlternative = all.some(evo => !supportedTargets.has(String(evo.target)));
+    const output = hasUnsupportedAlternative ? [transitions] : [];
+    for (const row of usable) {
+      output.push(...walk(
+        row.evo.target,
+        [...transitions, row.transition],
+        new Set([...seen, currentConst]),
+      ));
+    }
+    return output;
+  }
+
+  return walk(speciesConst, [], new Set());
+}
+
+function expandTradeAwareCandidate(
+  candidate,
+  speciesConst,
+  bosses,
+  evoByBase,
+  evolutionAccess,
+  itemAccess,
+) {
+  const paths = buildTradeAwareEvolutionPaths(
+    speciesConst,
+    candidate.availableFrom,
+    bosses,
+    evoByBase,
+    evolutionAccess,
+    itemAccess,
+  );
+  return paths.map((path, index) => {
+    const terminalSpecies = path.length ? path[path.length - 1].species : candidate.species;
+    return {
+      ...candidate,
+      speciesByStage: path,
+      evolutionPolicy: 'trade-aware',
+      evolutionVariantId: terminalSpecies,
+      terminalSpecies,
+      searchKey: `${candidate.familyId || candidate.species}::${candidate.species}->${terminalSpecies}#${index + 1}`,
+    };
+  });
+}
+
 export async function buildCanonicalCandidatePool({
   commit,
   bosses,
   access,
   version = 'HEARTGOLD',
+  evolutionPolicy = 'level-only',
+  evolutionAccess = null,
 }) {
   if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
     throw new Error('version must be HEARTGOLD or SOULSILVER');
   }
+  const resolvedEvolutionPolicy = normalizeEvolutionPolicy(evolutionPolicy);
   const [encounterJson, headbuttJson, evoJson, personalJson] = await Promise.all([
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/fielddata/encountdata/gs_enc_data.json`),
     fetchJson(`${PRET_RAW_ROOT}/${commit}/files/arc/headbutt.json`),
@@ -390,6 +614,13 @@ export async function buildCanonicalCandidatePool({
     }
   }
 
+  const evolutionItemAccess = effectiveEvolutionItemAccess(
+    evolutionAccess,
+    earliest,
+    personalJson.baseStats || [],
+    bosses,
+  );
+
   const candidates = [];
   for (const row of earliest.values()) {
     candidates.push({
@@ -403,6 +634,7 @@ export async function buildCanonicalCandidatePool({
       entryLevelMax: row.entryLevelMax,
       speciesByStage: buildLevelEvolutionStages(row.speciesConst, row.availableFrom, bosses, evoByBase),
       sources: row.sources,
+      _originSpeciesConst: row.speciesConst,
     });
   }
 
@@ -424,6 +656,7 @@ export async function buildCanonicalCandidatePool({
       entryLevelMin: Number.isFinite(manualLevel) ? manualLevel : null,
       entryLevelMax: Number.isFinite(manualLevel) ? manualLevel : null,
       speciesByStage: buildLevelEvolutionStages(speciesConst, manual.availableFrom, bosses, evoByBase),
+      _originSpeciesConst: speciesConst,
       sources: [{
         type: manual.source,
         map: manual.map || null,
@@ -453,21 +686,44 @@ export async function buildCanonicalCandidatePool({
     }
   }
 
+  if (resolvedEvolutionPolicy === 'trade-aware') {
+    const expanded = candidates.flatMap(candidate =>
+      expandTradeAwareCandidate(
+        candidate,
+        candidate._originSpeciesConst || `SPECIES_${candidate.species.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`,
+        bosses,
+        evoByBase,
+        evolutionAccess || {},
+        evolutionItemAccess,
+      )
+    );
+    candidates.splice(0, candidates.length, ...expanded);
+  }
+
   candidates.sort((a, b) =>
     a.availableFrom - b.availableFrom ||
     a.familyId.localeCompare(b.familyId) ||
-    a.species.localeCompare(b.species)
+    String(a.searchKey || a.species).localeCompare(String(b.searchKey || b.species))
   );
 
   return {
     version,
     sourceCommit: commit,
     accessMode: access.mode,
+    evolutionPolicy: resolvedEvolutionPolicy,
+    evolutionAccess: {
+      tradeUnlockStage: Number(evolutionAccess?.tradeUnlockStage || 0),
+      items: Object.fromEntries(
+        [...evolutionItemAccess.entries()].map(([item, row]) => [item, row])
+      ),
+    },
     notes: [
       'Wild availability is derived from pinned pret/pokeheartgold encounter data.',
       'Headbutt availability and encounter levels are derived from files/arc/headbutt.json once Headbutt is unlocked.',
       'Story-stage map access is curated in story-access.canonical.json.',
-      'Only unambiguous EVO_LEVEL evolutions are auto-applied; friendship, stone, trade, move, and location evolutions remain conservative.',
+      resolvedEvolutionPolicy === 'trade-aware'
+        ? 'Unambiguous EVO_LEVEL plus source-backed EVO_TRADE/EVO_TRADE_ITEM evolutions are applied; item trades wait for their earliest modeled item source.'
+        : 'Only unambiguous EVO_LEVEL evolutions are auto-applied; friendship, stone, trade, move, and location evolutions remain conservative.',
       'Headbutt/static/gift exceptions are represented as manual acquisitions with provenance notes.',
       'Wild candidate entry-level ranges are derived from the same encounter slots and retained for catch-up/grinding metrics.',
       'Species growth rates are read from files/poketool/personal/personal.json for EXP-aware burden metrics.',

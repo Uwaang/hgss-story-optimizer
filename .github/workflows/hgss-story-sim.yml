@@ -418,6 +418,1296 @@ jobs:
           path: hgss_story_sim/results/boss-interaction-hg-cyndaquil.json
           if-no-files-found: error
 
+
+  equal_level_story_pilot:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Syntax check
+        run: node --check src/cli.mjs
+      - name: HG Cyndaquil equal-level route pilot
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --team=Cyndaquil,Chinchou,Abra,Magikarp,Pidgey,Qwilfish \
+            --levels=30,40,50,57,60 \
+            --runs=3 \
+            > results/hg-cyndaquil-equal-level-route-pilot.json
+      - name: Upload equal-level pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: hg-cyndaquil-equal-level-route-pilot
+          path: hgss_story_sim/results/hg-cyndaquil-equal-level-route-pilot.json
+          if-no-files-found: error
+
+
+  equal_level_story_level_matrix:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [57]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache.json
+      HGSS_BATTLE_CACHE_NAMESPACE: eql-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Restore equal-level battle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            eql-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-lv${{ matrix.level }}-
+      - name: Search equal-level team
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD \
+            --starter=Cyndaquil \
+            --level=${{ matrix.level }} \
+            --candidate-cap=24 \
+            --beam-width=24 \
+            --proxy-finalists=14 \
+            --screen-runs=1 \
+            --final-cap=6 \
+            --final-runs=8 \
+            --hybrid-runs=2 \
+            --hybrid-pre-cap=72 \
+            > results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
+      - name: Upload level search
+        uses: actions/upload-artifact@v4
+        with:
+          name: hg-cyndaquil-equal-level-search-lv${{ matrix.level }}
+          path: hgss_story_sim/results/hg-cyndaquil-equal-level-search-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+
+  overnight_cache_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache-ab.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-cache-ab-
+      - name: Run cache A/B
+        run: |
+          mkdir -p results
+          t0=$(date +%s)
+          node src/cli.mjs equal-level-story-search --level=57 --candidate-cap=24 --beam-width=24 --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8 --hybrid-runs=2 --hybrid-pre-cap=72 --size4-mode=bridge --size4-multiplier=2 > results/cache-a.json
+          t1=$(date +%s)
+          node src/cli.mjs equal-level-story-search --level=57 --candidate-cap=24 --beam-width=24 --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8 --hybrid-runs=2 --hybrid-pre-cap=72 --size4-mode=bridge --size4-multiplier=2 > results/cache-b.json
+          t2=$(date +%s)
+          jq 'del(.battleCache)' results/cache-a.json > /tmp/a.json
+          jq 'del(.battleCache)' results/cache-b.json > /tmp/b.json
+          diff -u /tmp/a.json /tmp/b.json
+          printf '{"firstSeconds":%s,"secondSeconds":%s}\n' "$((t1-t0))" "$((t2-t1))" > results/cache-timing.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-cache-ab
+          path: hgss_story_sim/results/cache-*.json
+          if-no-files-found: error
+
+  overnight_search_designs:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - experiment: wide96
+            size4_mode: bridge
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: wide192
+            size4_mode: bridge
+            size4_multiplier: 8
+            size4_pre_cap: 192
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: actual96
+            size4_mode: actual
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 4
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+          - experiment: completion96
+            size4_mode: completion
+            size4_multiplier: 4
+            size4_pre_cap: 96
+            completion_choices: 6
+            completion_runs: 1
+            beam_width: 24
+            hybrid_pre_cap: 144
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/${{ matrix.experiment }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
+      - name: Search design
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --level=57 --candidate-cap=24 --beam-width=${{ matrix.beam_width }}             --proxy-finalists=18 --screen-runs=2 --final-cap=8 --final-runs=16             --hybrid-runs=2 --hybrid-pre-cap=${{ matrix.hybrid_pre_cap }}             --size4-mode=${{ matrix.size4_mode }} --size4-multiplier=${{ matrix.size4_multiplier }}             --size4-pre-cap=${{ matrix.size4_pre_cap }}             --completion-choices=${{ matrix.completion_choices }} --completion-runs=${{ matrix.completion_runs }}             > results/${{ matrix.experiment }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-search-${{ matrix.experiment }}
+          path: hgss_story_sim/results/${{ matrix.experiment }}.json
+          if-no-files-found: error
+
+  overnight_level_sweep:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 60, 61, 63, 65]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/completion-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-completion-lv${{ matrix.level }}-
+      - name: Completion lookahead level sweep
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --level=${{ matrix.level }} --candidate-cap=24 --beam-width=24             --proxy-finalists=18 --screen-runs=2 --final-cap=8 --final-runs=16             --hybrid-runs=2 --hybrid-pre-cap=120             --size4-mode=completion --size4-multiplier=4 --size4-pre-cap=72             --completion-choices=4 --completion-runs=1             > results/completion-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-completion-lv${{ matrix.level }}
+          path: hgss_story_sim/results/completion-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  overnight_fixed_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: hybrid55
+            level: 55
+            team: Cyndaquil,Geodude,Slowpoke,Magnemite,Magikarp,Heracross
+          - label: hybrid57
+            level: 57
+            team: Cyndaquil,Rhyhorn,Slowpoke,Magnemite,Magikarp,Lapras
+          - label: hybrid60
+            level: 60
+            team: Cyndaquil,Geodude,Slowpoke,Magnemite,Magikarp,Heracross
+          - label: known-red57
+            level: 57
+            team: Cyndaquil,Wooper,Larvitar,Magnemite,Mareep,Rhyhorn
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/validation-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-validation-${{ matrix.label }}-
+      - name: High-run boss validation
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses="Lance 2" --runs=200 > results/${{ matrix.label }}-lance2-200.json
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses=Red --runs=500 > results/${{ matrix.label }}-red-500.json
+          node src/cli.mjs equal-level-story-evaluate --team=${{ matrix.team }} --level=${{ matrix.level }} --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=100 > results/${{ matrix.label }}-hard100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-validation-${{ matrix.label }}
+          path: hgss_story_sim/results/${{ matrix.label }}-*.json
+          if-no-files-found: error
+
+  overnight_validate_sweep_top:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight]')
+    needs: overnight_level_sweep
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 60, 61, 63, 65]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/sweep-validate-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: overnight-completion-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            overnight-battle-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/package.json') }}-sweep-validate-lv${{ matrix.level }}-
+      - name: Validate discovered top team
+        run: |
+          mkdir -p results
+          src=input/completion-lv${{ matrix.level }}.json
+          team=$(jq -r '.final[0].team | join(",")' "$src")
+          test -n "$team" && test "$team" != "null"
+          printf '%s\n' "$team" > results/team.txt
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses="Lance 2" --runs=200 > results/lance2-200.json
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses=Red --runs=500 > results/red-500.json
+          node src/cli.mjs equal-level-story-evaluate --team="$team" --level=${{ matrix.level }} --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=100 > results/hard100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-top-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+
+  evo_ab_audit:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Audit trade-aware evolution legality
+        run: |
+          mkdir -p results
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/trade-aware-pool.json
+          jq '{
+            evolutionPolicy,
+            evolutionAccess,
+            focus: [.candidates[] | select(
+              .species == "Gastly" or .species == "Abra" or .species == "Geodude" or
+              .species == "Rhyhorn" or .species == "Slowpoke" or .species == "Onix" or
+              .species == "Scyther" or .species == "Horsea" or .species == "Porygon"
+            ) | {
+              species, familyId, searchKey, terminalSpecies, availableFrom, speciesByStage
+            }]
+          }' results/trade-aware-pool.json > results/evolution-audit.json
+      - name: Assert pure-trade and post-Blue timing
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware \
+            --team=Cyndaquil,Gastly,Abra,Geodude,Magnemite,Rhyhorn \
+            --level=65 --bosses="Morty,Blue,Will 2" --runs=1 \
+            > results/evolution-materialization.json
+          jq -e '
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Gengar")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Alakazam")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Morty") | .availableMons | index("Golem")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Blue") | .availableMons | index("Rhydon")) != null and
+            (.evaluations[0].rows[] | select(.boss=="Blue") | .availableMons | index("Rhyperior")) == null and
+            (.evaluations[0].rows[] | select(.boss=="Will 2") | .availableMons | index("Rhyperior")) != null
+          ' results/evolution-materialization.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-audit
+          path: |
+            hgss_story_sim/results/evolution-audit.json
+            hgss_story_sim/results/evolution-materialization.json
+          if-no-files-found: error
+
+  evo_ab_policy_baseline:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [57, 59, 63, 65]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/level-only-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-level-only-lv${{ matrix.level }}-
+      - name: Level-only A/B baseline
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=level-only             --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32             --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32             --hybrid-runs=4 --hybrid-pre-cap=256             --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256             --completion-choices=6 --completion-runs=2             > results/level-only-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-level-only-lv${{ matrix.level }}
+          path: hgss_story_sim/results/level-only-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  evo_ab_trade_sweep:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 61, 63, 65, 67, 70]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/trade-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-trade-lv${{ matrix.level }}-
+      - name: Trade-aware wide-progress sweep
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32             --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32             --hybrid-runs=4 --hybrid-pre-cap=256             --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256             --completion-choices=6 --completion-runs=2             > results/trade-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-trade-lv${{ matrix.level }}
+          path: hgss_story_sim/results/trade-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  evo_ab_search_designs:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - experiment: completion384-lv59
+            level: 59
+            size4_mode: completion
+            beam_width: 32
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 256
+          - experiment: completion384-lv65
+            level: 65
+            size4_mode: completion
+            beam_width: 32
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 256
+          - experiment: actual384-lv59
+            level: 59
+            size4_mode: actual
+            beam_width: 32
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 256
+          - experiment: actual384-lv65
+            level: 65
+            size4_mode: actual
+            beam_width: 32
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 256
+          - experiment: wide384-lv59
+            level: 59
+            size4_mode: bridge
+            beam_width: 48
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 384
+          - experiment: wide384-lv65
+            level: 65
+            size4_mode: bridge
+            beam_width: 48
+            size4_multiplier: 8
+            size4_pre_cap: 384
+            hybrid_pre_cap: 384
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/${{ matrix.experiment }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.experiment }}-
+      - name: Search architecture comparison
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=${{ matrix.level }} --candidate-cap=36 --beam-width=${{ matrix.beam_width }}             --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32             --hybrid-runs=4 --hybrid-pre-cap=${{ matrix.hybrid_pre_cap }}             --size4-mode=${{ matrix.size4_mode }} --size4-multiplier=${{ matrix.size4_multiplier }}             --size4-pre-cap=${{ matrix.size4_pre_cap }}             --completion-choices=6 --completion-runs=2             > results/${{ matrix.experiment }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-search-${{ matrix.experiment }}
+          path: hgss_story_sim/results/${{ matrix.experiment }}.json
+          if-no-files-found: error
+
+  evo_ab_seed_stability:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - level: 59
+            seed_offset: 100000
+          - level: 59
+            seed_offset: 200000
+          - level: 65
+            seed_offset: 100000
+          - level: 65
+            seed_offset: 200000
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/seed-lv${{ matrix.level }}-${{ matrix.seed_offset }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Seed-stability search
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32             --proxy-finalists=20 --screen-runs=3 --final-cap=10 --final-runs=20             --hybrid-runs=4 --hybrid-pre-cap=256             --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256             --seed-offset=${{ matrix.seed_offset }}             > results/seed-lv${{ matrix.level }}-${{ matrix.seed_offset }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-seed-lv${{ matrix.level }}-${{ matrix.seed_offset }}
+          path: hgss_story_sim/results/seed-lv${{ matrix.level }}-${{ matrix.seed_offset }}.json
+          if-no-files-found: error
+
+  evo_ab_direct_trade_probe:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [level-only, trade-aware]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/direct-${{ matrix.policy }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Direct trade-evolution A/B
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=${{ matrix.policy }}             --team=Cyndaquil,Abra,Geodude,Gastly,Magnemite,Lapras             --level=59 --runs=64             > results/direct-${{ matrix.policy }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-direct-${{ matrix.policy }}
+          path: hgss_story_sim/results/direct-${{ matrix.policy }}.json
+          if-no-files-found: error
+
+  evo_ab_validate_trade_top:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    needs: evo_ab_trade_sweep
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [55, 57, 59, 61, 63, 65, 67, 70]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/top-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Restore validation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top-lv${{ matrix.level }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-ab-trade-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - name: High-run validation of trade-aware top team
+        run: |
+          mkdir -p results
+          src=input/trade-lv${{ matrix.level }}.json
+          keys=$(jq -r '.final[0].teamKeys | join(",")' "$src")
+          test -n "$keys" && test "$keys" != "null"
+          printf '%s\n' "$keys" > results/team-keys.txt
+          node src/cli.mjs equal-level-story-evaluate             --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }}             --bosses="Lance 2" --runs=500 > results/lance2-500.json
+          node src/cli.mjs equal-level-story-evaluate             --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }}             --bosses=Red --runs=1500 > results/red-1500.json
+          node src/cli.mjs equal-level-story-evaluate             --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }}             --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=250 > results/hard250.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-top-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+  evo_ab_validate_top3_key_levels:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    needs: evo_ab_trade_sweep
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [59, 63, 65, 70]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Restore top3 preparation cache
+        uses: actions/cache@v4
+        with:
+          path: hgss_story_sim/.cache/preparations
+          key: evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top3-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-ab-v2-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/package.json') }}-top3-lv${{ matrix.level }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-ab-trade-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - name: Validate top three finalists on hard bosses
+        run: |
+          mkdir -p results
+          src=input/trade-lv${{ matrix.level }}.json
+          for idx in 0 1 2; do
+            keys=$(jq -r ".final[$idx].teamKeys | join(\",\")" "$src")
+            test -n "$keys" && test "$keys" != "null"
+            printf '%s\n' "$keys" > "results/team-$idx-keys.txt"
+            HGSS_BATTLE_CACHE_PATH=".cache/battles/top3-lv${{ matrix.level }}-$idx.json"               node src/cli.mjs equal-level-story-evaluate                 --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }}                 --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500                 > "results/team-$idx-hard500.json"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-top3-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+
+  evo_ab_preparation_cache_probe:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[evo-ab]')
+    timeout-minutes: 360
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/cache-probe.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-ab-v2
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/cache-probe.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-ab-prep-v2
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Preparation cache A/B
+        run: |
+          mkdir -p results
+          t0=$(date +%s)
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=59 --candidate-cap=24 --beam-width=24             --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8             --hybrid-runs=2 --hybrid-pre-cap=96             --size4-mode=bridge --size4-multiplier=4 --size4-pre-cap=96             > results/prep-cache-a.json
+          t1=$(date +%s)
+          node src/cli.mjs equal-level-story-search             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware             --level=59 --candidate-cap=24 --beam-width=24             --proxy-finalists=14 --screen-runs=1 --final-cap=6 --final-runs=8             --hybrid-runs=2 --hybrid-pre-cap=96             --size4-mode=bridge --size4-multiplier=4 --size4-pre-cap=96             > results/prep-cache-b.json
+          t2=$(date +%s)
+          jq 'del(.battleCache,.preparationCache)' results/prep-cache-a.json > /tmp/prep-a.json
+          jq 'del(.battleCache,.preparationCache)' results/prep-cache-b.json > /tmp/prep-b.json
+          diff -u /tmp/prep-a.json /tmp/prep-b.json
+          jq -n             --argjson first "$((t1-t0))"             --argjson second "$((t2-t1))"             --argjson aHits "$(jq '.preparationCache.hits // 0' results/prep-cache-a.json)"             --argjson bHits "$(jq '.preparationCache.hits // 0' results/prep-cache-b.json)"             --argjson bRestored "$(jq '.preparationCache.restored // 0' results/prep-cache-b.json)"             '{firstSeconds:$first,secondSeconds:$second,firstPreparationHits:$aHits,secondPreparationHits:$bHits,secondRestored:$bRestored}'             > results/prep-cache-timing.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-ab-preparation-cache-probe
+          path: hgss_story_sim/results/prep-cache-*.json
+          if-no-files-found: error
+
+  evo_ab_postfix_targeted_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: lv70-pupitar-top2
+            level: 70
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Slowpoke::Slowpoke->Slowking#2,Larvitar::Pupitar->Tyranitar#1'
+          - label: lv70-larvitar-top3
+            level: 70
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Slowpoke::Slowpoke->Slowking#2,Larvitar::Larvitar->Tyranitar#1'
+          - label: lv65-seed100k-pupitar
+            level: 65
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Abra::Abra->Alakazam#1,Larvitar::Pupitar->Tyranitar#1'
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-target-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-target-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.label }}-${{ github.run_id }}
+          restore-keys: |
+            evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.label }}-
+      - name: Revalidate bug-affected Tyranitar candidate
+        run: |
+          mkdir -p results
+          keys='${{ matrix.team_keys }}'
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 \
+            > results/${{ matrix.label }}-hard500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses=Red --runs=1500 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          for f in results/*.json; do
+            jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' "$f" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-target-${{ matrix.label }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+  evo_ab_postfix_boundary_search:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [70, 71, 72, 73, 74, 75]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-boundary-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-boundary-lv${{ matrix.level }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-boundary-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-boundary-lv${{ matrix.level }}-
+      - name: Post-fix trade-aware boundary search
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=256 \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --completion-choices=6 --completion-runs=2 \
+            > results/postfix-boundary-lv${{ matrix.level }}.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' results/postfix-boundary-lv${{ matrix.level }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-boundary-lv${{ matrix.level }}
+          path: hgss_story_sim/results/postfix-boundary-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  evo_ab_postfix_boundary_validate:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[postfix-boundary]')
+    needs: evo_ab_postfix_boundary_search
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [70, 71, 72, 73, 74, 75]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-top-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-top-lv${{ matrix.level }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-postfix-boundary-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - name: High-run validation of post-fix boundary top team
+        run: |
+          mkdir -p results
+          src=input/postfix-boundary-lv${{ matrix.level }}.json
+          keys=$(jq -r '.final[0].teamKeys | join(",")' "$src")
+          test -n "$keys" && test "$keys" != "null"
+          printf '%s\n' "$keys" > results/team-keys.txt
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Lance 2" --runs=500 > results/lance2-500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses=Red --runs=1500 > results/red-1500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=250 > results/hard250.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          for f in results/*.json; do
+            jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' "$f" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-boundary-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+  ampharos_magneton_direct_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[ampharos-ab]')
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: magneton
+            team: Cyndaquil,Slowpoke,Rhyhorn,Magnemite,Jynx,Wooper
+          - variant: ampharos
+            team: Cyndaquil,Slowpoke,Rhyhorn,Mareep,Jynx,Wooper
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/ampharos-ab-${{ matrix.variant }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: ampharos-ab-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/ampharos-ab-${{ matrix.variant }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: ampharos-ab-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Lv63 full-route direct A/B
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=63 --runs=200 --seed-offset=630000 \
+            > results/${{ matrix.variant }}-route200.json
+      - name: Lv63 hard-boss direct A/B
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=63 \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=631000 \
+            > results/${{ matrix.variant }}-hard500.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ampharos-magneton-ab-${{ matrix.variant }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  ampharos_magneton_beam_trace:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[electric-trace]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Trace Lv63 electric-slot beam survival
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-electric-trace \
+            --level=63 --candidate-cap=36 --beam-width=32 --size4-multiplier=8 \
+            > results/electric-trace-lv63.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ampharos-magneton-beam-trace-lv63
+          path: hgss_story_sim/results/electric-trace-lv63.json
+          if-no-files-found: error
+
+  lv72_73_cross_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[lv73-cross]')
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: lv72team-at72
+            level: 72
+            team: Cyndaquil,Wooper,Rhyhorn,Heracross,Magnemite,Gastly
+          - label: lv72team-at73
+            level: 73
+            team: Cyndaquil,Wooper,Rhyhorn,Heracross,Magnemite,Gastly
+          - label: lv73team-at72
+            level: 72
+            team: Cyndaquil,Wooper,Rhyhorn,Magnemite,Geodude,Abra
+          - label: lv73team-at73
+            level: 73
+            team: Cyndaquil,Wooper,Rhyhorn,Magnemite,Geodude,Abra
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/lv72-73-cross-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: lv72-73-cross-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/lv72-73-cross-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: lv72-73-cross-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Cross-evaluate late-game hard bosses
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=723000 \
+            > results/${{ matrix.label }}-hard500.json
+      - name: Cross-evaluate Red high-run
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=${{ matrix.level }} \
+            --bosses="Red" --runs=1500 --seed-offset=724000 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lv72-73-cross-${{ matrix.label }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  size5_completion_lookahead_ab:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[size5-lookahead]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [63, 72]
+        size5_mode: [actual, completion]
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/size5-lookahead-${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: size5-lookahead-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/size5-lookahead-${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: size5-lookahead-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Search with size-five mode
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} \
+            --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=256 \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --size5-mode=${{ matrix.size5_mode }} \
+            --completion-choices=6 --completion-runs=2 \
+            --seed-offset=505000 \
+            > results/size5-lookahead-lv${{ matrix.level }}-${{ matrix.size5_mode }}.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size5-lookahead-lv${{ matrix.level }}-${{ matrix.size5_mode }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  short_preflight_completion_proxy:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[short-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - level: 63
+            target_families: Cyndaquil,Magnemite,Geodude,Abra,Wooper,Rhyhorn
+          - level: 72
+            target_families: Cyndaquil,Magnemite,Geodude,Abra,Wooper,Rhyhorn
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Completion-aware proxy trace
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-electric-trace \
+            --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32 \
+            --size4-multiplier=8 --hybrid-pre-cap=256 \
+            --completion-proxy-only=true \
+            --target-families="${{ matrix.target_families }}" \
+            > results/completion-proxy-trace-lv${{ matrix.level }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: completion-proxy-trace-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  short_preflight_lv72_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[short-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: direct-quagsire
+            team_keys: Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1
+          - label: pupitar-tyranitar
+            team_keys: Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Abra::Abra->Alakazam#1,Larvitar::Pupitar->Tyranitar#1
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/short-preflight-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: short-preflight-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/short-preflight-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: short-preflight-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate late hard bosses
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" --level=72 \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=728000 \
+            > results/${{ matrix.label }}-hard500.json
+      - name: Validate Red
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" --level=72 \
+            --bosses="Red" --runs=1500 --seed-offset=729000 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: short-preflight-lv72-${{ matrix.label }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  overnight_hybrid_recall_sweep:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[overnight-recall]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - level: 63
+            hybrid_pre_cap: 1024
+            seed_offset: 505000
+            label: lv63-cap1024-seed505
+          - level: 63
+            hybrid_pre_cap: 2048
+            seed_offset: 505000
+            label: lv63-cap2048-seed505
+          - level: 63
+            hybrid_pre_cap: 2048
+            seed_offset: 605000
+            label: lv63-cap2048-seed605
+          - level: 72
+            hybrid_pre_cap: 1024
+            seed_offset: 505000
+            label: lv72-cap1024-seed505
+          - level: 72
+            hybrid_pre_cap: 2048
+            seed_offset: 505000
+            label: lv72-cap2048-seed505
+          - level: 72
+            hybrid_pre_cap: 2048
+            seed_offset: 605000
+            label: lv72-cap2048-seed605
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/overnight-recall-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: overnight-recall-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/overnight-recall-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: overnight-recall-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Wider hard-boss screening search
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} \
+            --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=${{ matrix.hybrid_pre_cap }} \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --size5-mode=actual \
+            --seed-offset=${{ matrix.seed_offset }} \
+            > results/overnight-recall-${{ matrix.label }}.json
+      - name: Write compact summary
+        run: |
+          jq '{
+            commonLevel,
+            search: {
+              beamWidth: .search.beamWidth,
+              hybridPreCap: .search.teamProxyModel.hybridPreCap,
+              hybridRuns: .search.teamProxyModel.hybridRuns,
+              seedOffset: .search.teamProxyModel.seedOffset
+            },
+            finalPareto: [.finalPareto[] | {
+              team, teamKeys, totalGrindExp, score,
+              bottom5BossWinRate, storyClearGeometricScore,
+              storyClearCoverageScore,
+              red: ([.bosses[] | select(.boss=="Red") | .winRate][0] // null),
+              lance2: ([.bosses[] | select(.boss=="Lance 2") | .winRate][0] // null)
+            }],
+            final: [.final[] | {
+              team, teamKeys, totalGrindExp, score,
+              bottom5BossWinRate, storyClearGeometricScore,
+              storyClearCoverageScore,
+              red: ([.bosses[] | select(.boss=="Red") | .winRate][0] // null),
+              lance2: ([.bosses[] | select(.boss=="Lance 2") | .winRate][0] // null)
+            }]
+          }' results/overnight-recall-${{ matrix.label }}.json \
+            > results/overnight-recall-${{ matrix.label }}-summary.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/overnight-recall-${{ matrix.label }}.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-recall-${{ matrix.label }}
+          path: hgss_story_sim/results/overnight-recall-${{ matrix.label }}*.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
@@ -439,6 +1729,10 @@ jobs:
           node --check src/availability.mjs
           node --check src/battle.mjs
           node --check src/cli.mjs
+      - name: Trade-evolution checkpoint legality smoke
+        run: node src/cli.mjs evolution-checkpoint-smoke
+      - name: Trade evolution legality smoke test
+        run: node src/cli.mjs evolution-legality-smoke
       - name: Validate source-backed availability
         run: npm run validate
       - name: Growth EXP table smoke test

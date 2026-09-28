@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { candidateBossUtility, candidateMovePool, candidateMoveUtility, hgssTrainerToShowdownTeam, materializeCandidateTeam, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { applyPlayerRouteBuild, battleCacheStats, candidateBossUtility, candidateMovePool, candidateMoveUtility, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -290,14 +291,25 @@ async function loadStory() {
   return { config, source, bosses: extractBosses(source, config) };
 }
 
-async function loadCanonicalPool(version, story = null) {
+async function loadEqualLevelStory() {
+  const config = await readJson('config/equal-level-story-bosses.json');
+  const source = await loadPretTrainerData(config.sourceCommit);
+  return { config, source, bosses: extractBosses(source, config) };
+}
+
+async function loadCanonicalPool(version, story = null, evolutionPolicy = 'level-only') {
   const context = story || await loadStory();
-  const access = await readJson('config/story-access.canonical.json');
+  const [access, evolutionAccess] = await Promise.all([
+    readJson('config/story-access.canonical.json'),
+    readJson('config/evolution-access.hgss.json'),
+  ]);
   return buildCanonicalCandidatePool({
     commit: context.config.sourceCommit,
     bosses: context.bosses,
     access,
     version,
+    evolutionPolicy,
+    evolutionAccess,
   });
 }
 
@@ -463,9 +475,11 @@ function storyStarterFromCandidates(candidates) {
 
 function storyBattlesForCandidates(bosses, candidates) {
   const starter = storyStarterFromCandidates(candidates);
-  return bosses.filter(boss =>
-    !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
-  );
+  return bosses
+    .filter(boss =>
+      !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
+    )
+    .map((boss, index) => ({ ...boss, _routeIndex: index }));
 }
 
 function summarizeCaptureSearch(candidates) {
@@ -817,6 +831,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     finalTeam,
     finalLevels,
     routeBattleCount: routeBosses.length,
+    fullRouteBattleCount: routeBosses.length,
     catchUpLevels: catchUp.total,
     catchUpUnknown: catchUp.unknown,
     catchUpExp: catchUp.totalExp,
@@ -910,8 +925,9 @@ async function evaluateCandidates(
 async function cmdPool() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const full = arg('full', 'false') === 'true';
+  const evolutionPolicy = String(arg('evolution-policy', 'level-only')).toLowerCase();
   const story = await loadStory();
-  const pool = await loadCanonicalPool(version, story);
+  const pool = await loadCanonicalPool(version, story, evolutionPolicy);
 
   if (full) {
     console.log(JSON.stringify(pool, null, 2));
@@ -926,12 +942,17 @@ async function cmdPool() {
     version: pool.version,
     sourceCommit: pool.sourceCommit,
     accessMode: pool.accessMode,
+    evolutionPolicy: pool.evolutionPolicy || evolutionPolicy,
+    evolutionAccess: pool.evolutionAccess || null,
     candidateCount: pool.candidates.length,
     newCandidatesByStage: byStage,
     firstTwenty: pool.candidates.slice(0, 20).map(mon => ({
       species: mon.species,
       availableFrom: mon.availableFrom,
       familyId: mon.familyId,
+      searchKey: candidateIdentity(mon),
+      terminalSpecies: mon.terminalSpecies || null,
+      evolutionVariantId: mon.evolutionVariantId || null,
       growthRate: mon.growthRate ?? null,
       catchRate: mon.catchRate ?? null,
       captureSearch: mon.captureSearch ?? null,
@@ -1039,6 +1060,10 @@ function * combinations(values, choose, start = 0, prefix = []) {
 
 
 function candidateIdentity(candidate) {
+  return candidate.searchKey || candidate.familyId || candidate.species;
+}
+
+function candidateFamilyIdentity(candidate) {
   return candidate.familyId || candidate.species;
 }
 
@@ -1169,6 +1194,8 @@ function searchResultRow(team, evaluation) {
       wins: row.wins,
       losses: row.losses,
       winRate: row.winRate,
+      battleProgressScore: Number(row.battleProgressScore ?? row.winRate ?? 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints || 0),
       playerLead: row.playerLead || null,
       skipped: row.skipped || false,
     })),
@@ -5707,6 +5734,2330 @@ async function cmdTmSmoke() {
   }, null, 2));
 }
 
+
+function equalLevelCapturePlan(candidate, commonLevel) {
+  const targetLevel = Math.max(1, Math.min(100, Math.floor(Number(commonLevel || 1))));
+  const fallbackMin = Number(candidate.entryLevelMin);
+  const fallbackMax = Number(candidate.entryLevelMax);
+  let captureLevel = null;
+  let captureSource = null;
+
+  for (const source of candidate.sources || []) {
+    const minLevel = Number.isFinite(Number(source.minLevel))
+      ? Number(source.minLevel)
+      : fallbackMin;
+    const maxLevel = Number.isFinite(Number(source.maxLevel))
+      ? Number(source.maxLevel)
+      : fallbackMax;
+    if (Number.isFinite(minLevel) && minLevel > targetLevel) continue;
+    let legalLevel = null;
+    if (Number.isFinite(maxLevel)) legalLevel = Math.min(targetLevel, maxLevel);
+    else if (Number.isFinite(minLevel)) legalLevel = Math.max(minLevel, targetLevel);
+    if (!Number.isFinite(legalLevel) || legalLevel > targetLevel) continue;
+    if (captureLevel === null || legalLevel > captureLevel) {
+      captureLevel = legalLevel;
+      captureSource = source;
+    }
+  }
+
+  if (captureLevel === null && Number.isFinite(fallbackMin) && fallbackMin <= targetLevel) {
+    captureLevel = Number.isFinite(fallbackMax)
+      ? Math.min(targetLevel, fallbackMax)
+      : fallbackMin;
+    captureSource = candidate.captureSearch?.source || null;
+  }
+
+  if (captureLevel === null) {
+    return {
+      legal: false,
+      reason: 'no source-backed capture level at or below common level',
+      targetLevel,
+      captureLevel: null,
+      grindExp: null,
+    };
+  }
+
+  const startExp = expAtLevel(candidate.growthRate, captureLevel);
+  const targetExp = expAtLevel(candidate.growthRate, targetLevel);
+  return {
+    legal: startExp !== null && targetExp !== null,
+    reason: startExp === null || targetExp === null ? 'unknown growth rate' : null,
+    targetLevel,
+    captureLevel,
+    grindExp: startExp === null || targetExp === null
+      ? null
+      : Math.max(0, targetExp - startExp),
+    source: captureSource,
+  };
+}
+
+function equalLevelTeamExpCost(candidates, commonLevel) {
+  const members = candidates.map(candidate => ({
+    familyId: candidateIdentity(candidate),
+    species: candidate.species,
+    growthRate: candidate.growthRate || null,
+    availableFrom: Number(candidate.availableFrom || 0),
+    ...equalLevelCapturePlan(candidate, commonLevel),
+  }));
+  const legal = members.every(member => member.legal);
+  const unknown = members.filter(member => member.grindExp === null).length;
+  return {
+    legal,
+    commonLevel: Number(commonLevel),
+    totalGrindExp: legal && !unknown
+      ? members.reduce((sum, member) => sum + Number(member.grindExp || 0), 0)
+      : null,
+    unknown,
+    members,
+  };
+}
+
+
+const EQUAL_LEVEL_HELD_ITEMS = [
+  '', 'Leftovers', 'Life Orb', 'Expert Belt',
+  'Choice Band', 'Choice Specs', 'Choice Scarf',
+  'Focus Sash', 'Sitrus Berry', 'Muscle Band',
+  'Wise Glasses', 'Lum Berry',
+];
+
+function equalLevelHeldItemPolicy(stage) {
+  const targetStage = Number(stage);
+  if (targetStage < 20) {
+    return {
+      items: [''],
+      finiteCaps: {},
+      note: 'Conservative story policy: no held-item optimization before Blue/rematch-E4 stage.',
+    };
+  }
+  return {
+    items: EQUAL_LEVEL_HELD_ITEMS.filter(item => targetStage >= 21 || item !== 'Expert Belt'),
+    finiteCaps: {
+      'Choice Specs': 1,
+      'Life Orb': 1,
+      Leftovers: 1,
+      'Wise Glasses': 1,
+    },
+    note: targetStage < 21
+      ? 'Post-Kanto rematch policy; Expert Belt is still unavailable before Mt. Silver.'
+      : 'Red-stage held-item policy.',
+  };
+}
+
+function optimizeEqualLevelHeldItemTeam(team, enemyTeam, boss) {
+  const policy = equalLevelHeldItemPolicy(boss?.stage);
+  if (policy.items.length === 1 && policy.items[0] === '') {
+    return { team: team.map(mon => ({ ...mon, item: '' })), policy };
+  }
+  const bannedBySlot = team.map(() => new Set());
+
+  function buildSlot(index, extraExcluded = []) {
+    const excluded = new Set([...bannedBySlot[index], ...extraExcluded]);
+    const items = policy.items.filter(item => !excluded.has(item));
+    return optimizePlayerHeldItemForBoss(team[index], enemyTeam, { items });
+  }
+
+  const built = team.map((_, index) => buildSlot(index));
+  for (const [item, capRaw] of Object.entries(policy.finiteCaps || {})) {
+    const cap = Math.max(0, Number(capRaw || 0));
+    const holders = built
+      .map((mon, index) => ({ mon, index }))
+      .filter(entry => entry.mon.item === item);
+    if (holders.length <= cap) continue;
+
+    const ranked = holders.map(entry => {
+      const alternative = buildSlot(entry.index, [item]);
+      return {
+        ...entry,
+        alternative,
+        loss: Number(entry.mon._heldItemOptimization?.proxyScore || 0) -
+          Number(alternative._heldItemOptimization?.proxyScore || 0),
+      };
+    }).sort((a, b) =>
+      Number(b.loss) - Number(a.loss) ||
+      String(a.mon.species).localeCompare(String(b.mon.species))
+    );
+    const keep = new Set(ranked.slice(0, cap).map(entry => entry.index));
+    for (const entry of ranked) {
+      if (keep.has(entry.index)) continue;
+      bannedBySlot[entry.index].add(item);
+      built[entry.index] = buildSlot(entry.index);
+    }
+  }
+
+  return {
+    team: built,
+    policy: {
+      ...policy,
+      selected: Object.fromEntries(built.map(mon => [mon._candidateKey || mon.species, mon.item || ''])),
+    },
+  };
+}
+
+function equalLevelRouteMovesAtStage(
+  mon,
+  candidate,
+  boss,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  routeMoves,
+) {
+  const key = candidateIdentity(candidate);
+  const assignedMachines = [
+    ...(singleUsePlan[key] || []),
+    ...(purchasablePlan[key] || []),
+  ];
+  const legal = new Set(candidateMovePool(
+    mon.species,
+    mon.level,
+    Number(boss.stage),
+    moveAccess,
+    assignedMachines,
+    candidate.species,
+  ));
+  const selected = [];
+  for (const move of routeMoves || []) {
+    if (legal.has(move) && !selected.includes(move)) selected.push(move);
+    if (selected.length >= 4) break;
+  }
+  for (const move of mon.moves || []) {
+    if (selected.length >= 4) break;
+    if (legal.has(move) && !selected.includes(move)) selected.push(move);
+  }
+  if (!selected.length) selected.push('Tackle');
+  if (selected.length > 4) {
+    throw new Error(`equal-level route moves exceeded four slots for ${mon.species}: ${selected.join(', ')}`);
+  }
+  return { ...mon, moves: selected };
+}
+
+function buildEqualLevelRouteBuildPlan(
+  candidates,
+  routeBosses,
+  commonLevel,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  levels,
+) {
+  const plan = {};
+  for (const candidate of candidates) {
+    const key = candidateIdentity(candidate);
+    const samples = [];
+    for (const boss of routeBosses) {
+      if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) continue;
+      const mon = materializeCandidateTeam(
+        [candidate],
+        boss.stage,
+        commonLevel,
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
+      )[0];
+      if (!mon) continue;
+      samples.push({ boss, mon, foeTeam: hgssTrainerToShowdownTeam(boss.trainer, boss) });
+    }
+    if (!samples.length) continue;
+
+    let build = optimizePlayerRouteBuild(samples, { iv: 16 });
+    const last = samples[samples.length - 1];
+    let finalMon = applyPlayerRouteBuild(last.mon, build);
+    const assignedMachines = [
+      ...(singleUsePlan[key] || []),
+      ...(purchasablePlan[key] || []),
+    ];
+    const routeMoves = optimizePlayerRouteMoves(
+      finalMon,
+      samples.map(sample => sample.foeTeam),
+      {
+        stage: Number(last.boss.stage),
+        moveAccess,
+        extraMachines: assignedMachines,
+        originSpeciesName: candidate.species,
+        shortlistCap: 12,
+      },
+    );
+
+    const refinedSamples = samples.map(sample => {
+      let mon = applyPlayerRouteBuild(sample.mon, build);
+      mon = equalLevelRouteMovesAtStage(
+        mon,
+        candidate,
+        sample.boss,
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        routeMoves.moves,
+      );
+      return { mon, foeTeam: sample.foeTeam };
+    });
+    build = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
+    plan[key] = {
+      ...build,
+      routeMoves: routeMoves.moves,
+      routeMoveOptimization: routeMoves,
+    };
+  }
+  return plan;
+}
+
+const EQUAL_LEVEL_PREPARATION_CACHE_PATH = process.env.HGSS_PREPARATION_CACHE_PATH
+  ? path.resolve(process.cwd(), process.env.HGSS_PREPARATION_CACHE_PATH)
+  : null;
+const EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE = String(
+  process.env.HGSS_PREPARATION_CACHE_NAMESPACE || 'equal-level-preparation-v1'
+);
+const equalLevelPreparationCache = new Map();
+let equalLevelPreparationCacheLoaded = false;
+let equalLevelPreparationCacheDirty = 0;
+const equalLevelPreparationCacheCounters = {
+  hits: 0,
+  misses: 0,
+  restored: 0,
+  writes: 0,
+};
+
+function equalLevelPreparationKey(candidates, routeBosses, commonLevel, moveAccess) {
+  const payload = JSON.stringify({
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    team: candidates.map(candidate => ({
+      key: candidateIdentity(candidate),
+      speciesByStage: candidate.speciesByStage || [],
+    })).sort((a, b) => a.key.localeCompare(b.key)),
+    route: routeBosses.map(boss => [
+      String(boss.key || boss.label),
+      Number(boss.stage),
+      Number(boss._routeIndex),
+    ]),
+    commonLevel: Number(commonLevel),
+    resourceProfile: moveAccess?.resourceProfile || null,
+    spendPolicy: moveAccess?.spendPolicy || null,
+  });
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+async function ensureEqualLevelPreparationCacheLoaded() {
+  if (equalLevelPreparationCacheLoaded) return;
+  equalLevelPreparationCacheLoaded = true;
+  if (!EQUAL_LEVEL_PREPARATION_CACHE_PATH) return;
+  try {
+    const parsed = JSON.parse(await fs.readFile(EQUAL_LEVEL_PREPARATION_CACHE_PATH, 'utf8'));
+    if (
+      parsed?.namespace === EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE &&
+      parsed?.entries &&
+      typeof parsed.entries === 'object'
+    ) {
+      for (const [key, value] of Object.entries(parsed.entries)) {
+        equalLevelPreparationCache.set(key, value);
+      }
+      equalLevelPreparationCacheCounters.restored = equalLevelPreparationCache.size;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[preparation-cache] restore failed:', error.message);
+    }
+  }
+}
+
+async function flushEqualLevelPreparationCache() {
+  await ensureEqualLevelPreparationCacheLoaded();
+  if (!EQUAL_LEVEL_PREPARATION_CACHE_PATH || equalLevelPreparationCacheDirty <= 0) {
+    return equalLevelPreparationCacheStats();
+  }
+  await fs.mkdir(path.dirname(EQUAL_LEVEL_PREPARATION_CACHE_PATH), { recursive: true });
+  const temp = EQUAL_LEVEL_PREPARATION_CACHE_PATH + '.tmp-' + process.pid;
+  await fs.writeFile(temp, JSON.stringify({
+    schemaVersion: 1,
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    entries: Object.fromEntries(equalLevelPreparationCache),
+  }));
+  await fs.rename(temp, EQUAL_LEVEL_PREPARATION_CACHE_PATH);
+  equalLevelPreparationCacheCounters.writes += equalLevelPreparationCacheDirty;
+  equalLevelPreparationCacheDirty = 0;
+  return equalLevelPreparationCacheStats();
+}
+
+function equalLevelPreparationCacheStats() {
+  return {
+    enabled: Boolean(EQUAL_LEVEL_PREPARATION_CACHE_PATH),
+    path: EQUAL_LEVEL_PREPARATION_CACHE_PATH,
+    namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
+    entries: equalLevelPreparationCache.size,
+    ...equalLevelPreparationCacheCounters,
+    dirty: equalLevelPreparationCacheDirty,
+  };
+}
+
+async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess, options = {}) {
+  const expCost = equalLevelTeamExpCost(candidates, commonLevel);
+  if (!expCost.legal) {
+    return {
+      commonLevel: Number(commonLevel),
+      legal: false,
+      reason: 'one or more team members cannot exist at the requested common level',
+      equalLevelExp: expCost,
+    };
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, candidates);
+  const requestedBossLabels = Array.isArray(options.bossLabels)
+    ? new Set(options.bossLabels.map(String))
+    : null;
+  const battleBosses = requestedBossLabels
+    ? routeBosses.filter(boss => requestedBossLabels.has(String(boss.label)))
+    : routeBosses;
+  const routeBattleIndex = new Map(
+    routeBosses.map((boss, index) => [
+      String(boss.key || boss.label) + '@' + Number(boss.stage),
+      index,
+    ])
+  );
+  await ensureEqualLevelPreparationCacheLoaded();
+  const preparationKey = equalLevelPreparationKey(
+    candidates,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+  );
+  let prepared = equalLevelPreparationCache.get(preparationKey);
+  const preparationCacheHit = Boolean(prepared);
+  if (prepared) {
+    equalLevelPreparationCacheCounters.hits += 1;
+  } else {
+    equalLevelPreparationCacheCounters.misses += 1;
+    const levels = Object.fromEntries(
+      candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
+    );
+    const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+    const singleUsePlan = planSingleUseMachines(
+      candidates,
+      routeBosses,
+      moveAccess,
+      { levelsByBattle },
+    );
+    const purchasable = planPurchasableMachines(
+      candidates,
+      routeBosses,
+      moveAccess,
+      singleUsePlan,
+      { levelsByBattle },
+    );
+    const purchasablePlan = purchasable.assignments;
+    const routeBuildPlan = buildEqualLevelRouteBuildPlan(
+      candidates,
+      routeBosses,
+      commonLevel,
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      levels,
+    );
+    prepared = {
+      levels,
+      levelsByBattle,
+      singleUsePlan,
+      purchasable,
+      purchasablePlan,
+      routeBuildPlan,
+    };
+    equalLevelPreparationCache.set(preparationKey, prepared);
+    equalLevelPreparationCacheDirty += 1;
+  }
+  const {
+    levels,
+    singleUsePlan,
+    purchasable,
+    purchasablePlan,
+    routeBuildPlan,
+  } = prepared;
+  const candidatesByKey = new Map(
+    candidates.map(candidate => [candidateIdentity(candidate), candidate])
+  );
+  const rows = [];
+  let weightedWins = 0;
+  let weightedRuns = 0;
+
+  for (const [battleIndex, boss] of battleBosses.entries()) {
+    const ordered = orderCandidatesForBoss(candidates, boss, levels);
+    let playerTeam = materializeCandidateTeam(
+      ordered,
+      boss.stage,
+      commonLevel,
+      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
+    );
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+
+    playerTeam = playerTeam.map(mon => {
+      const key = mon._candidateKey || mon.species;
+      const candidate = candidatesByKey.get(key);
+      const build = routeBuildPlan[key];
+      let built = applyPlayerRouteBuild(mon, build);
+      if (candidate && build?.routeMoves) {
+        built = equalLevelRouteMovesAtStage(
+          built,
+          candidate,
+          boss,
+          moveAccess,
+          singleUsePlan,
+          purchasablePlan,
+          build.routeMoves,
+        );
+      }
+      return built;
+    });
+    const heldItems = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
+    playerTeam = heldItems.team;
+
+    if (!playerTeam.length) {
+      weightedRuns += runs;
+      rows.push({
+        boss: boss.label,
+        stage: Number(boss.stage),
+        aceLevel: Number(boss.aceLevel),
+        runs,
+        wins: 0,
+        losses: runs,
+        ties: 0,
+        winRate: 0,
+        skipped: true,
+        reason: 'no team member available by this story stage',
+      });
+      continue;
+    }
+
+    const stableBattleIndex = routeBattleIndex.get(
+      String(boss.key || boss.label) + '@' + Number(boss.stage)
+    ) ?? battleIndex;
+    const result = await simulateMatchup(
+      playerTeam,
+      enemyTeam,
+      runs,
+      7100001 + Number(commonLevel) * 100000 + Number(boss.stage) * 1000 +
+        stableBattleIndex + Number(options.seedOffset || 0),
+      { p2Trainer: boss, p1AiMode: 'smart' },
+    );
+    weightedWins += Number(result.wins || 0);
+    weightedRuns += Number(result.runs || runs);
+    rows.push({
+      boss: boss.label,
+      stage: Number(boss.stage),
+      aceLevel: Number(boss.aceLevel),
+      playerLead: playerTeam[0]?.species || null,
+      availableMons: playerTeam.map(mon => mon.species),
+      playerLevels: Object.fromEntries(playerTeam.map(mon => [mon.species, mon.level])),
+      playerBuilds: Object.fromEntries(playerTeam.map(mon => [
+        mon._candidateKey || mon.species,
+        {
+          species: mon.species,
+          nature: mon.nature,
+          ability: mon.ability,
+          item: mon.item || '',
+          ivs: mon.ivs,
+          evs: mon.evs,
+          moves: mon.moves,
+        },
+      ])),
+      heldItemPolicy: heldItems.policy,
+      ...result,
+    });
+  }
+
+  const score = weightedRuns ? weightedWins / weightedRuns : 0;
+  const worstBossWinRate = rows.length
+    ? Math.min(...rows.map(row => Number(row.winRate || 0)))
+    : 0;
+  const finalBoss = routeBosses[routeBosses.length - 1] || null;
+  const finalTeam = finalBoss
+    ? materializeCandidateTeam(
+        orderCandidatesForBoss(candidates, finalBoss, levels),
+        finalBoss.stage,
+        commonLevel,
+        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss: finalBoss },
+      ).map(mon => mon.species)
+    : [];
+
+  return {
+    commonLevel: Number(commonLevel),
+    legal: true,
+    score,
+    worstBossWinRate,
+    bottom5BossWinRate: lowerTailBossWinRate(rows),
+    storyClearGeometricScore: storyClearGeometricScore(rows),
+    storyClearCoverageScore: storyClearCoverageScore(rows),
+    routeBattleCount: battleBosses.length,
+    fullRouteBattleCount: routeBosses.length,
+    equalLevelExp: expCost,
+    finalTeam,
+    singleUsePlan,
+    purchasablePlan,
+    routeBuildPlan,
+    preparationCache: {
+      ...equalLevelPreparationCacheStats(),
+      reused: preparationCacheHit,
+      key: preparationKey,
+    },
+    playerModel: {
+      iv: 16,
+      evNatureAbility: 'fixed per evolution family for all 27 battles',
+      routeMoves: 'one target four-move set per family, unlocked only when legal by stage',
+      heldItems: 'no optimization before stage20; boss-specific stage20+ swaps with finite-copy caps',
+      battleAi: 'smart',
+    },
+    purchaseCosts: purchasable.costs,
+    rows,
+  };
+}
+
+
+function equalLevelCandidateProxy(candidate, bosses, commonLevel) {
+  const values = bosses.map(boss => {
+    if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) return 0;
+    return Math.log1p(Math.max(0, Number(candidateBossUtility(candidate, boss, commonLevel) || 0)));
+  });
+  const ordered = [...values].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(5, ordered.length));
+  return {
+    mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
+    bottom5: bottom.length ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length : 0,
+    max: values.length ? Math.max(...values) : 0,
+  };
+}
+
+const equalLevelFoeUtilityCache = new Map();
+
+function equalLevelCandidateFoeUtility(candidate, boss, foe, foeIndex, commonLevel) {
+  if (Number(candidate.availableFrom || 0) > Number(boss.stage || 0)) return 0;
+  const bossKey = String(boss.key || boss.label || boss.stage || 'boss');
+  const foeKey = [
+    String(foe?.species || foeIndex),
+    Number(foe?.level || boss.aceLevel || commonLevel),
+  ].join('@');
+  const key = [
+    candidateIdentity(candidate),
+    bossKey,
+    foeKey,
+    Number(commonLevel),
+  ].join('|');
+  if (equalLevelFoeUtilityCache.has(key)) return equalLevelFoeUtilityCache.get(key);
+
+  const singleFoeBoss = {
+    ...boss,
+    aceLevel: Number(foe?.level || boss.aceLevel || commonLevel),
+    trainer: {
+      ...(boss.trainer || {}),
+      party: [foe],
+    },
+  };
+  const value = Math.log1p(Math.max(
+    0,
+    Number(candidateBossUtility(candidate, singleFoeBoss, commonLevel) || 0),
+  ));
+  equalLevelFoeUtilityCache.set(key, value);
+  return value;
+}
+
+function equalLevelBossTeamCoverage(team, boss, commonLevel) {
+  const available = (team || []).filter(candidate =>
+    Number(candidate.availableFrom || 0) <= Number(boss.stage || 0)
+  );
+  const foes = boss?.trainer?.party || [];
+  if (!available.length) {
+    return {
+      score: 0,
+      mean: 0,
+      bottom: 0,
+      foeScores: [],
+    };
+  }
+  if (!foes.length) {
+    const values = available
+      .map(candidate => Math.log1p(Math.max(
+        0,
+        Number(candidateBossUtility(candidate, boss, commonLevel) || 0),
+      )))
+      .sort((a, b) => b - a);
+    const score = Number(values[0] || 0) +
+      0.30 * Number(values[1] || 0) +
+      0.10 * Number(values[2] || 0);
+    return {
+      score,
+      mean: score,
+      bottom: score,
+      foeScores: [score],
+    };
+  }
+
+  const foeScores = foes.map((foe, foeIndex) => {
+    const values = available
+      .map(candidate => equalLevelCandidateFoeUtility(
+        candidate,
+        boss,
+        foe,
+        foeIndex,
+        commonLevel,
+      ))
+      .sort((a, b) => b - a);
+    // Primary counter matters most, but second/third answers reward roster
+    // depth and make complementary 5-6 member teams visible to the beam.
+    return Number(values[0] || 0) +
+      0.30 * Number(values[1] || 0) +
+      0.10 * Number(values[2] || 0);
+  });
+  const mean = foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length;
+  const ordered = [...foeScores].sort((a, b) => a - b);
+  const bottomCount = Math.min(2, ordered.length);
+  const bottom = ordered.slice(0, bottomCount)
+    .reduce((sum, value) => sum + value, 0) / Math.max(1, bottomCount);
+
+  // Reward broad coverage, not one extreme counter. The lower-tail term makes
+  // a team improve when a fifth/sixth member patches a specific opposing mon.
+  return {
+    score: 0.72 * mean + 0.28 * bottom,
+    mean,
+    bottom,
+    foeScores,
+  };
+}
+
+function equalLevelTeamProxy(team, bosses, commonLevel) {
+  const bossScores = bosses.map(boss =>
+    equalLevelBossTeamCoverage(team, boss, commonLevel).score
+  );
+  const ordered = [...bossScores].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(5, ordered.length));
+  const mean = bossScores.length
+    ? bossScores.reduce((sum, value) => sum + value, 0) / bossScores.length
+    : 0;
+  const bottom5 = bottom.length
+    ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length
+    : 0;
+  return {
+    mean,
+    bottom5,
+    composite: 0.62 * mean + 0.38 * bottom5,
+    model: 'foe-coverage-v2',
+  };
+}
+
+function equalLevelHardBosses(bosses) {
+  const labels = new Set(['Clair', 'Lance', 'Misty', 'Blue', 'Lance 2', 'Red']);
+  return (bosses || []).filter(boss => labels.has(String(boss.label)));
+}
+
+function equalLevelBossTeamProxy(team, boss, commonLevel) {
+  return equalLevelBossTeamCoverage(team, boss, commonLevel).score;
+}
+
+function selectEqualLevelCandidateRows(candidates, starter, bosses, commonLevel, cap) {
+  const starterKey = candidateIdentity(starter);
+  const rows = candidates
+    .filter(candidate =>
+      (candidate.exclusiveGroup !== 'starter' || candidateIdentity(candidate) === starterKey) &&
+      equalLevelCapturePlan(candidate, commonLevel).legal
+    )
+    .map(candidate => {
+      const exp = equalLevelCapturePlan(candidate, commonLevel);
+      return {
+        candidate,
+        proxy: equalLevelCandidateProxy(candidate, bosses, commonLevel),
+        grindExp: Number(exp.grindExp || 0),
+      };
+    });
+  const selected = new Map();
+  const add = row => {
+    if (!row || selected.size >= cap) return;
+    selected.set(candidateIdentity(row.candidate), row);
+  };
+
+  add(rows.find(row => candidateIdentity(row.candidate) === starterKey));
+
+  // Reserve candidate capacity for actual hard-wall specialists before generic
+  // mean-utility/cheap-EXP candidates consume the pool. Add them round-robin
+  // so no early-listed boss monopolizes the cap.
+  const hardBosses = equalLevelHardBosses(bosses);
+  const specialistsByBoss = new Map();
+  for (const boss of hardBosses) {
+    specialistsByBoss.set(
+      String(boss.label),
+      [...rows]
+        .filter(row => Number(row.candidate.availableFrom || 0) <= Number(boss.stage || 0))
+        .sort((a, b) =>
+          Number(candidateBossUtility(b.candidate, boss, commonLevel) || 0) -
+            Number(candidateBossUtility(a.candidate, boss, commonLevel) || 0) ||
+          a.grindExp - b.grindExp ||
+          a.candidate.species.localeCompare(b.candidate.species)
+        )
+    );
+  }
+  const specialistDepth = 4;
+  for (let rank = 0; rank < specialistDepth && selected.size < cap; rank += 1) {
+    for (const boss of hardBosses) {
+      add(specialistsByBoss.get(String(boss.label))?.[rank]);
+      if (selected.size >= cap) break;
+    }
+  }
+
+  const byUtility = [...rows].sort((a, b) =>
+    b.proxy.mean - a.proxy.mean ||
+    b.proxy.max - a.proxy.max ||
+    a.grindExp - b.grindExp ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+  for (const row of byUtility.slice(0, Math.max(8, Math.ceil(cap * 0.55)))) add(row);
+
+  const useful = rows.filter(row => row.proxy.mean > 0);
+  const byExp = [...useful].sort((a, b) =>
+    a.grindExp - b.grindExp ||
+    b.proxy.mean - a.proxy.mean ||
+    a.candidate.species.localeCompare(b.candidate.species)
+  );
+  for (const row of byExp.slice(0, Math.max(4, Math.ceil(cap * 0.2)))) add(row);
+  for (const row of byUtility) add(row);
+
+  return {
+    rows: [...selected.values()],
+    specialists: Object.fromEntries(
+      hardBosses.map(boss => [
+        String(boss.label),
+        (specialistsByBoss.get(String(boss.label)) || []).slice(0, specialistDepth).map(row => ({
+          species: row.candidate.species,
+          familyId: candidateIdentity(row.candidate),
+          utility: Number(candidateBossUtility(row.candidate, boss, commonLevel) || 0),
+          grindExp: row.grindExp,
+          selected: selected.has(candidateIdentity(row.candidate)),
+        })),
+      ])
+    ),
+  };
+}
+
+function selectEqualLevelProxyBeam(states, width, hardBosses = [], commonLevel = 50) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  // Preserve multiple hard-wall complete/near-complete teams. At size 5-6,
+  // complementary roster structure matters much more than a single ace.
+  const teamSize = Number(states[0]?.team?.length || 0);
+  const hardBossQuota = teamSize >= 5 ? 3 : 2;
+  for (const boss of hardBosses || []) {
+    const ranked = [...states].sort((a, b) =>
+      equalLevelBossTeamProxy(b.team, boss, commonLevel) -
+        equalLevelBossTeamProxy(a.team, boss, commonLevel) ||
+      b.proxy.composite - a.proxy.composite ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      key(a).localeCompare(key(b))
+    );
+    for (const state of ranked.slice(0, hardBossQuota)) add(state);
+  }
+
+  const byComposite = [...states].sort((a, b) =>
+    b.proxy.composite - a.proxy.composite ||
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  const byBottom = [...states].sort((a, b) =>
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    b.proxy.mean - a.proxy.mean ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    b.proxy.composite - a.proxy.composite ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byComposite.slice(0, Math.ceil(width * 0.55))) add(state);
+  for (const state of byBottom.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.2))) add(state);
+  for (const state of byComposite) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
+
+function equalLevelHybridSummary(evaluation) {
+  const rows = evaluation?.rows || [];
+  const rates = rows.map(row => Number(row.winRate || 0));
+  const progress = rows.map(row => Number(
+    row.battleProgressScore ?? row.winRate ?? 0
+  ));
+  const mean = rates.length
+    ? rates.reduce((sum, value) => sum + value, 0) / rates.length
+    : 0;
+  const progressMean = progress.length
+    ? progress.reduce((sum, value) => sum + value, 0) / progress.length
+    : 0;
+  const ordered = [...rates].sort((a, b) => a - b);
+  const bottom = ordered.slice(0, Math.min(2, ordered.length));
+  const bottom2 = bottom.length
+    ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length
+    : 0;
+  const progressOrdered = [...progress].sort((a, b) => a - b);
+  const progressBottom = progressOrdered.slice(0, Math.min(2, progressOrdered.length));
+  const progressBottom2 = progressBottom.length
+    ? progressBottom.reduce((sum, value) => sum + value, 0) / progressBottom.length
+    : 0;
+  const cleared = rates.filter(value => value > 0).length;
+  return {
+    mean,
+    bottom2,
+    progressMean,
+    progressBottom2,
+    cleared,
+    total: rates.length,
+    score:
+      0.25 * mean +
+      0.15 * bottom2 +
+      0.35 * progressMean +
+      0.15 * progressBottom2 +
+      0.10 * (rates.length ? cleared / rates.length : 0),
+    bosses: Object.fromEntries(rows.map(row => [String(row.boss), Number(row.winRate || 0)])),
+    progressBosses: Object.fromEntries(
+      rows.map(row => [String(row.boss), Number(row.battleProgressScore ?? row.winRate ?? 0)])
+    ),
+  };
+}
+
+async function attachEqualLevelHybridScreens(
+  states,
+  story,
+  commonLevel,
+  moveAccess,
+  hardBosses,
+  runs,
+  seedOffset = 0,
+) {
+  const labels = hardBosses.map(boss => String(boss.label));
+  const output = [];
+  for (const state of states) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      state.team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      { bossLabels: labels, seedOffset },
+    );
+    output.push({
+      ...state,
+      hybridEvaluation: evaluation,
+      hybrid: equalLevelHybridSummary(evaluation),
+    });
+  }
+  return output;
+}
+
+function selectEqualLevelHybridBeam(states, width, hardBosses = []) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  // Actual battle results get first claim on beam slots. Preserve several
+  // states per hard boss so a Red specialist and a Lance-2 specialist can
+  // coexist rather than one aggregate score erasing the other.
+  for (const boss of hardBosses) {
+    const label = String(boss.label);
+    const ranked = [...states].sort((a, b) =>
+      Number(b.hybrid?.progressBosses?.[label] || 0) - Number(a.hybrid?.progressBosses?.[label] || 0) ||
+      Number(b.hybrid?.bosses?.[label] || 0) - Number(a.hybrid?.bosses?.[label] || 0) ||
+      Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+      Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+      Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+      key(a).localeCompare(key(b))
+    );
+    for (const state of ranked.slice(0, 3)) add(state);
+  }
+
+  const byHybrid = [...states].sort((a, b) =>
+    Number(b.hybrid?.progressBottom2 || 0) - Number(a.hybrid?.progressBottom2 || 0) ||
+    Number(b.hybrid?.progressMean || 0) - Number(a.hybrid?.progressMean || 0) ||
+    Number(b.hybrid?.cleared || 0) - Number(a.hybrid?.cleared || 0) ||
+    Number(b.hybrid?.bottom2 || 0) - Number(a.hybrid?.bottom2 || 0) ||
+    Number(b.hybrid?.mean || 0) - Number(a.hybrid?.mean || 0) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byProxy = [...states].sort((a, b) =>
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(b.proxy?.bottom5 || 0) - Number(a.proxy?.bottom5 || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byHybrid.slice(0, Math.ceil(width * 0.60))) add(state);
+  for (const state of byProxy.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.15))) add(state);
+  for (const state of byHybrid) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
+function selectCompletionRolloutCandidates(
+  state,
+  screened,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  cap,
+) {
+  const families = new Set(state.team.map(candidateIdentity));
+  const remaining = screened.filter(candidate => !families.has(candidateIdentity(candidate)));
+  const candidates = [];
+  for (let i = 0; i < remaining.length; i += 1) {
+    for (let j = i + 1; j < remaining.length; j += 1) {
+      const team = [...state.team, remaining[i], remaining[j]];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      const expCost = equalLevelTeamExpCost(team, commonLevel);
+      if (!expCost.legal || expCost.totalGrindExp === null) continue;
+      candidates.push({
+        team,
+        proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+        expCost,
+      });
+    }
+  }
+  const selected = new Map();
+  const key = row => familySetKey(row.team);
+  const add = row => {
+    if (!row || selected.size >= cap) return;
+    selected.set(key(row), row);
+  };
+  const byRoute = [...candidates].sort((a, b) =>
+    b.proxy.composite - a.proxy.composite ||
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  for (const row of byRoute.slice(0, 2)) add(row);
+  for (const boss of hardBosses) {
+    const ranked = [...candidates].sort((a, b) =>
+      equalLevelBossTeamProxy(b.team, boss, commonLevel) -
+        equalLevelBossTeamProxy(a.team, boss, commonLevel) ||
+      b.proxy.composite - a.proxy.composite ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      key(a).localeCompare(key(b))
+    );
+    add(ranked[0]);
+  }
+  const byExp = [...candidates].sort((a, b) =>
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    b.proxy.composite - a.proxy.composite ||
+    key(a).localeCompare(key(b))
+  );
+  add(byExp[0]);
+  for (const row of byRoute) add(row);
+  return [...selected.values()].slice(0, cap);
+}
+
+function selectSingleCompletionRolloutCandidates(
+  state,
+  screened,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  cap,
+) {
+  const families = new Set(state.team.map(candidateIdentity));
+  const candidates = [];
+  for (const candidate of screened) {
+    if (families.has(candidateIdentity(candidate))) continue;
+    const team = [...state.team, candidate];
+    if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+    const expCost = equalLevelTeamExpCost(team, commonLevel);
+    if (!expCost.legal || expCost.totalGrindExp === null) continue;
+    candidates.push({
+      team,
+      proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+      expCost,
+    });
+  }
+
+  const selected = new Map();
+  const key = row => familySetKey(row.team);
+  const add = row => {
+    if (!row || selected.size >= cap) return;
+    selected.set(key(row), row);
+  };
+  const byRoute = [...candidates].sort((a, b) =>
+    b.proxy.composite - a.proxy.composite ||
+    b.proxy.bottom5 - a.proxy.bottom5 ||
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    key(a).localeCompare(key(b))
+  );
+  for (const row of byRoute.slice(0, 2)) add(row);
+  for (const boss of hardBosses) {
+    const ranked = [...candidates].sort((a, b) =>
+      equalLevelBossTeamProxy(b.team, boss, commonLevel) -
+        equalLevelBossTeamProxy(a.team, boss, commonLevel) ||
+      b.proxy.composite - a.proxy.composite ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      key(a).localeCompare(key(b))
+    );
+    add(ranked[0]);
+  }
+  const byExp = [...candidates].sort((a, b) =>
+    a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+    b.proxy.composite - a.proxy.composite ||
+    key(a).localeCompare(key(b))
+  );
+  add(byExp[0]);
+  for (const row of byRoute) add(row);
+  return [...selected.values()].slice(0, cap);
+}
+
+function compareCompletionHybridRows(a, b) {
+  return (
+    Number(b.hybrid?.progressBottom2 || 0) - Number(a.hybrid?.progressBottom2 || 0) ||
+    Number(b.hybrid?.progressMean || 0) - Number(a.hybrid?.progressMean || 0) ||
+    Number(b.hybrid?.cleared || 0) - Number(a.hybrid?.cleared || 0) ||
+    Number(b.hybrid?.bottom2 || 0) - Number(a.hybrid?.bottom2 || 0) ||
+    Number(b.hybrid?.mean || 0) - Number(a.hybrid?.mean || 0) ||
+    Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+    Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+    Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+}
+
+function attachEqualLevelCompletionProxyPotentials(
+  states,
+  screened,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+) {
+  const labels = hardBosses.map(boss => String(boss.label));
+  return states.map(state => {
+    const families = new Set(state.team.map(candidateIdentity));
+    let bestRoute = null;
+    const bossBest = Object.fromEntries(labels.map(label => [label, 0]));
+    const bossBestTeams = Object.fromEntries(labels.map(label => [label, []]));
+
+    for (const candidate of screened) {
+      if (families.has(candidateIdentity(candidate))) continue;
+      const team = [...state.team, candidate];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      const expCost = equalLevelTeamExpCost(team, commonLevel);
+      if (!expCost.legal || expCost.totalGrindExp === null) continue;
+      const proxy = equalLevelTeamProxy(team, routeBosses, commonLevel);
+      const row = { team, proxy, expCost };
+
+      if (
+        !bestRoute ||
+        Number(proxy.composite || 0) > Number(bestRoute.proxy.composite || 0) ||
+        (
+          Math.abs(Number(proxy.composite || 0) - Number(bestRoute.proxy.composite || 0)) <= 1e-12 &&
+          (
+            Number(proxy.bottom5 || 0) > Number(bestRoute.proxy.bottom5 || 0) ||
+            (
+              Math.abs(Number(proxy.bottom5 || 0) - Number(bestRoute.proxy.bottom5 || 0)) <= 1e-12 &&
+              Number(expCost.totalGrindExp) < Number(bestRoute.expCost.totalGrindExp)
+            )
+          )
+        )
+      ) {
+        bestRoute = row;
+      }
+
+      for (const boss of hardBosses) {
+        const label = String(boss.label);
+        const score = Number(equalLevelBossTeamProxy(team, boss, commonLevel) || 0);
+        if (score > Number(bossBest[label] || 0)) {
+          bossBest[label] = score;
+          bossBestTeams[label] = team.map(mon => mon.species);
+        }
+      }
+    }
+
+    return {
+      ...state,
+      completionProxy: {
+        composite: Number(bestRoute?.proxy?.composite || 0),
+        mean: Number(bestRoute?.proxy?.mean || 0),
+        bottom5: Number(bestRoute?.proxy?.bottom5 || 0),
+        bestExp: bestRoute?.expCost?.totalGrindExp ?? Infinity,
+        bestTeam: bestRoute?.team?.map(mon => mon.species) || [],
+        bosses: bossBest,
+        bossBestTeams,
+      },
+    };
+  });
+}
+
+function selectEqualLevelCompletionProxyBeam(states, width, hardBosses = []) {
+  if (states.length <= width) return states;
+  const selected = new Map();
+  const key = state => state.team.map(candidateIdentity).sort().join('|');
+  const add = state => {
+    if (!state || selected.size >= width) return;
+    selected.set(key(state), state);
+  };
+
+  for (const boss of hardBosses) {
+    const label = String(boss.label);
+    const ranked = [...states].sort((a, b) =>
+      Number(b.completionProxy?.bosses?.[label] || 0) -
+        Number(a.completionProxy?.bosses?.[label] || 0) ||
+      Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+      Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+      key(a).localeCompare(key(b))
+    );
+    for (const state of ranked.slice(0, 3)) add(state);
+  }
+
+  const byComposite = [...states].sort((a, b) =>
+    Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+    Number(b.completionProxy?.bottom5 || 0) - Number(a.completionProxy?.bottom5 || 0) ||
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byBottom = [...states].sort((a, b) =>
+    Number(b.completionProxy?.bottom5 || 0) - Number(a.completionProxy?.bottom5 || 0) ||
+    Number(b.completionProxy?.mean || 0) - Number(a.completionProxy?.mean || 0) ||
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    key(a).localeCompare(key(b))
+  );
+  const byExp = [...states].sort((a, b) =>
+    Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity) ||
+    Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+    key(a).localeCompare(key(b))
+  );
+
+  for (const state of byComposite.slice(0, Math.ceil(width * 0.55))) add(state);
+  for (const state of byBottom.slice(0, Math.ceil(width * 0.25))) add(state);
+  for (const state of byExp.slice(0, Math.ceil(width * 0.20))) add(state);
+  for (const state of byComposite) add(state);
+  return [...selected.values()].slice(0, width);
+}
+
+async function attachEqualLevelSingleCompletionRollouts(
+  states,
+  screened,
+  story,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  moveAccess,
+  completionCap,
+  runs,
+  seedOffset = 0,
+) {
+  const output = [];
+  for (const state of states) {
+    const completions = selectSingleCompletionRolloutCandidates(
+      state,
+      screened,
+      routeBosses,
+      hardBosses,
+      commonLevel,
+      completionCap,
+    );
+    const evaluated = await attachEqualLevelHybridScreens(
+      completions,
+      story,
+      commonLevel,
+      moveAccess,
+      hardBosses,
+      runs,
+      seedOffset,
+    );
+    const ranked = [...evaluated].sort(compareCompletionHybridRows);
+    const best = ranked[0] || null;
+    output.push({
+      ...state,
+      hybrid: best?.hybrid || {
+        mean: 0,
+        bottom2: 0,
+        progressMean: 0,
+        progressBottom2: 0,
+        cleared: 0,
+        total: hardBosses.length,
+        score: 0,
+        bosses: {},
+        progressBosses: {},
+      },
+      completionRollout: {
+        evaluated: evaluated.length,
+        bestTeam: best?.team?.map(candidate => candidate.species) || [],
+        bestScore: Number(best?.hybrid?.score || 0),
+      },
+    });
+  }
+  return output;
+}
+
+async function attachEqualLevelCompletionRollouts(
+  states,
+  screened,
+  story,
+  routeBosses,
+  hardBosses,
+  commonLevel,
+  moveAccess,
+  completionCap,
+  runs,
+  seedOffset = 0,
+) {
+  const labels = hardBosses.map(boss => String(boss.label));
+  const output = [];
+  for (const state of states) {
+    const completions = selectCompletionRolloutCandidates(
+      state,
+      screened,
+      routeBosses,
+      hardBosses,
+      commonLevel,
+      completionCap,
+    );
+    const evaluated = await attachEqualLevelHybridScreens(
+      completions,
+      story,
+      commonLevel,
+      moveAccess,
+      hardBosses,
+      runs,
+      seedOffset,
+    );
+    const bossBest = Object.fromEntries(labels.map(label => [label, 0]));
+    let bestOverall = null;
+    for (const row of evaluated) {
+      if (!bestOverall || Number(row.hybrid?.score || 0) > Number(bestOverall.hybrid?.score || 0)) {
+        bestOverall = row;
+      }
+      for (const label of labels) {
+        bossBest[label] = Math.max(
+          Number(bossBest[label] || 0),
+          Number(row.hybrid?.progressBosses?.[label] ?? row.hybrid?.bosses?.[label] ?? 0),
+        );
+      }
+    }
+    const rates = Object.values(bossBest);
+    const ordered = [...rates].sort((a, b) => a - b);
+    const bottom = ordered.slice(0, Math.min(2, ordered.length));
+    const mean = rates.length ? rates.reduce((sum, value) => sum + value, 0) / rates.length : 0;
+    const bottom2 = bottom.length ? bottom.reduce((sum, value) => sum + value, 0) / bottom.length : 0;
+    const cleared = rates.filter(value => value > 0).length;
+    output.push({
+      ...state,
+      hybrid: {
+        mean,
+        bottom2,
+        cleared,
+        total: rates.length,
+        score: 0.55 * mean + 0.30 * bottom2 +
+          0.15 * (rates.length ? cleared / rates.length : 0),
+        bosses: bossBest,
+      },
+      completionRollout: {
+        evaluated: evaluated.length,
+        bestTeam: bestOverall?.team?.map(candidate => candidate.species) || [],
+        bestScore: Number(bestOverall?.hybrid?.score || 0),
+      },
+    });
+  }
+  return output;
+}
+
+function equalLevelEvaluationCompare(a, b) {
+  return (
+    Number(b.storyClearCoverageScore || 0) - Number(a.storyClearCoverageScore || 0) ||
+    Number(b.bottom5BossWinRate || 0) - Number(a.bottom5BossWinRate || 0) ||
+    Number(b.storyClearGeometricScore || 0) - Number(a.storyClearGeometricScore || 0) ||
+    Number(b.score || 0) - Number(a.score || 0) ||
+    Number(a.equalLevelExp?.totalGrindExp || Infinity) -
+      Number(b.equalLevelExp?.totalGrindExp || Infinity)
+  );
+}
+
+function equalLevelSearchRow(team, evaluation, proxy = null) {
+  return {
+    team: team.map(candidate => candidate.species),
+    teamKeys: team.map(candidateIdentity),
+    evolutionVariants: team.map(candidate => ({
+      species: candidate.species,
+      familyId: candidateFamilyIdentity(candidate),
+      searchKey: candidateIdentity(candidate),
+      terminalSpecies: candidate.terminalSpecies || null,
+      speciesByStage: candidate.speciesByStage || [],
+    })),
+    finalTeam: evaluation.finalTeam || [],
+    commonLevel: Number(evaluation.commonLevel),
+    totalGrindExp: evaluation.equalLevelExp?.totalGrindExp ?? null,
+    score: Number(evaluation.score || 0),
+    worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+    bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+    storyClearGeometricScore: Number(evaluation.storyClearGeometricScore || 0),
+    storyClearCoverageScore: Number(evaluation.storyClearCoverageScore || 0),
+    proxy,
+    bosses: (evaluation.rows || []).map(row => ({
+      boss: row.boss,
+      wins: row.wins,
+      losses: row.losses,
+      ties: row.ties,
+      winRate: row.winRate,
+      battleProgressScore: Number(row.battleProgressScore ?? row.winRate ?? 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
+      playerLead: row.playerLead || null,
+      availableMons: row.availableMons || [],
+    })),
+    expMembers: evaluation.equalLevelExp?.members || [],
+  };
+}
+
+function equalLevelParetoRows(rows) {
+  return rows.filter((row, index) => !rows.some((other, otherIndex) => {
+    if (index === otherIndex) return false;
+    const atLeastAsGood =
+      Number(other.storyClearCoverageScore || 0) >= Number(row.storyClearCoverageScore || 0) &&
+      Number(other.bottom5BossWinRate || 0) >= Number(row.bottom5BossWinRate || 0) &&
+      Number(other.storyClearGeometricScore || 0) >= Number(row.storyClearGeometricScore || 0) &&
+      Number(other.score || 0) >= Number(row.score || 0) &&
+      Number(other.totalGrindExp || Infinity) <= Number(row.totalGrindExp || Infinity);
+    const strictlyBetter =
+      Number(other.storyClearCoverageScore || 0) > Number(row.storyClearCoverageScore || 0) ||
+      Number(other.bottom5BossWinRate || 0) > Number(row.bottom5BossWinRate || 0) ||
+      Number(other.storyClearGeometricScore || 0) > Number(row.storyClearGeometricScore || 0) ||
+      Number(other.score || 0) > Number(row.score || 0) ||
+      Number(other.totalGrindExp || Infinity) < Number(row.totalGrindExp || Infinity);
+    return atLeastAsGood && strictlyBetter;
+  }));
+}
+
+
+const KNOWN_RED_WINNER_FAMILY_SPECIES = [
+  'Cyndaquil', 'Wooper', 'Larvitar', 'Magnemite', 'Mareep', 'Rhyhorn',
+];
+
+function knownRedWinnerFamilies(poolCandidates) {
+  const rows = [];
+  for (const species of KNOWN_RED_WINNER_FAMILY_SPECIES) {
+    const candidate = poolCandidates.find(row => row.species === species);
+    if (!candidate) continue;
+    rows.push({
+      requestedSpecies: species,
+      familyId: candidateFamilyIdentity(candidate),
+    });
+  }
+  return rows;
+}
+
+function familySetKey(team) {
+  return team.map(candidateIdentity).sort().join('|');
+}
+
+function familyOnlySetKey(team) {
+  return team.map(candidateFamilyIdentity).sort().join('|');
+}
+
+function traceKnownTargetStates(states, targetFamilyIds, redBoss, commonLevel) {
+  const targetSet = new Set(targetFamilyIds);
+  const targetOnly = (states || []).filter(state =>
+    state.team.every(candidate => targetSet.has(candidateFamilyIdentity(candidate)))
+  );
+  const exactKey = [...targetFamilyIds].sort().join('|');
+  const exact = (states || []).find(state => familyOnlySetKey(state.team) === exactKey) || null;
+  let compositeRank = null;
+  let redProxyRank = null;
+  if (exact) {
+    const byComposite = [...states].sort((a, b) =>
+      b.proxy.composite - a.proxy.composite ||
+      b.proxy.bottom5 - a.proxy.bottom5 ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    );
+    compositeRank = byComposite.findIndex(state => state === exact) + 1;
+    if (redBoss) {
+      const byRed = [...states].sort((a, b) =>
+        equalLevelBossTeamProxy(b.team, redBoss, commonLevel) -
+          equalLevelBossTeamProxy(a.team, redBoss, commonLevel) ||
+        b.proxy.composite - a.proxy.composite ||
+        a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
+      redProxyRank = byRed.findIndex(state => state === exact) + 1;
+    }
+  }
+  return {
+    totalStates: Number(states?.length || 0),
+    targetOnlyStates: targetOnly.length,
+    maxTargetMembers: Math.max(
+      0,
+      ...(states || []).map(state =>
+        state.team.filter(candidate => targetSet.has(candidateFamilyIdentity(candidate))).length
+      )
+    ),
+    exactTargetPresent: Boolean(exact),
+    exactCompositeRank: compositeRank,
+    exactRedProxyRank: redProxyRank,
+    exactProxy: exact?.proxy || null,
+    exactRedProxy: exact && redBoss
+      ? equalLevelBossTeamProxy(exact.team, redBoss, commonLevel)
+      : null,
+    exactExp: exact?.expCost?.totalGrindExp ?? null,
+  };
+}
+
+async function cmdEqualLevelElectricTrace() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '63')))));
+  const candidateCap = Math.max(8, Math.floor(Number(arg('candidate-cap', '36'))));
+  const beamWidth = Math.max(4, Math.floor(Number(arg('beam-width', '32'))));
+  const size4Multiplier = Math.max(1, Math.floor(Number(arg('size4-multiplier', '8'))));
+  const hybridRuns = Math.max(1, Math.floor(Number(arg('hybrid-runs', '4'))));
+  const hybridPreCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('hybrid-pre-cap', '256'))),
+  );
+  const completionProxyOnly = String(arg('completion-proxy-only', 'false')).toLowerCase() === 'true';
+  const targetFamilySpecies = String(arg('target-families', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const starter = findStarterCandidate(pool.candidates, 'Cyndaquil');
+  const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
+  const hardBosses = equalLevelHardBosses(routeBosses);
+  const screening = selectEqualLevelCandidateRows(
+    pool.candidates,
+    starter,
+    routeBosses,
+    commonLevel,
+    candidateCap,
+  );
+  const screened = screening.rows.map(row => row.candidate);
+  const targetFamilyIds = targetFamilySpecies.map(species => {
+    const candidate = pool.candidates.find(row => row.species === species);
+    if (!candidate) throw new Error('Unknown target family species: ' + species);
+    return candidateFamilyIdentity(candidate);
+  });
+  const targetFamilySet = new Set(targetFamilyIds);
+  const summarizeTargetParents = states => ({
+    count: (states || []).filter(state =>
+      state.team.every(candidate => targetFamilySet.has(candidateFamilyIdentity(candidate)))
+    ).length,
+    maxTargetMembers: Math.max(
+      0,
+      ...(states || []).map(state =>
+        state.team.filter(candidate => targetFamilySet.has(candidateFamilyIdentity(candidate))).length
+      )
+    ),
+  });
+
+  const classify = state => {
+    const hasMagneton = state.team.some(candidate =>
+      String(candidate.terminalSpecies || '') === 'Magneton'
+    );
+    const hasAmpharos = state.team.some(candidate =>
+      String(candidate.terminalSpecies || '') === 'Ampharos'
+    );
+    if (hasMagneton && hasAmpharos) return 'both';
+    if (hasMagneton) return 'magnetonOnly';
+    if (hasAmpharos) return 'ampharosOnly';
+    return 'neither';
+  };
+  const summarize = states => {
+    const groups = Object.fromEntries(
+      ['magnetonOnly', 'ampharosOnly', 'both', 'neither'].map(name => [name, []])
+    );
+    for (const state of states) groups[classify(state)].push(state);
+    return Object.fromEntries(Object.entries(groups).map(([name, rows]) => {
+      const byComposite = [...rows].sort((a, b) =>
+        Number(b.proxy?.composite || 0) - Number(a.proxy?.composite || 0) ||
+        Number(b.proxy?.bottom5 || 0) - Number(a.proxy?.bottom5 || 0) ||
+        Number(a.expCost?.totalGrindExp || Infinity) - Number(b.expCost?.totalGrindExp || Infinity) ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
+      const byHybrid = [...rows].filter(row => row.hybrid).sort((a, b) =>
+        Number(b.hybrid?.progressBottom2 || 0) - Number(a.hybrid?.progressBottom2 || 0) ||
+        Number(b.hybrid?.progressMean || 0) - Number(a.hybrid?.progressMean || 0) ||
+        Number(b.hybrid?.score || 0) - Number(a.hybrid?.score || 0) ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      );
+      return [name, {
+        count: rows.length,
+        bestComposite: byComposite[0]?.proxy?.composite ?? null,
+        bestBottom5: byComposite[0]?.proxy?.bottom5 ?? null,
+        bestExp: byComposite[0]?.expCost?.totalGrindExp ?? null,
+        bestTeam: byComposite[0]?.team?.map(candidate => candidate.species) || [],
+        bestHybridScore: byHybrid[0]?.hybrid?.score ?? null,
+        bestProgressMean: byHybrid[0]?.hybrid?.progressMean ?? null,
+        bestProgressBottom2: byHybrid[0]?.hybrid?.progressBottom2 ?? null,
+        bestHybridTeam: byHybrid[0]?.team?.map(candidate => candidate.species) || [],
+      }];
+    }));
+  };
+
+  let beam = [{
+    team: [starter],
+    proxy: equalLevelTeamProxy([starter], routeBosses, commonLevel),
+    expCost: equalLevelTeamExpCost([starter], commonLevel),
+  }];
+  const stages = [];
+  for (let size = 2; size <= 6; size += 1) {
+    const expanded = [];
+    const seen = new Set();
+    for (const state of beam) {
+      const identities = new Set(state.team.map(candidateIdentity));
+      for (const candidate of screened) {
+        if (identities.has(candidateIdentity(candidate))) continue;
+        const team = [...state.team, candidate];
+        if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+        const key = team.map(candidateIdentity).sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const expCost = equalLevelTeamExpCost(team, commonLevel);
+        if (!expCost.legal || expCost.totalGrindExp === null) continue;
+        expanded.push({
+          team,
+          proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+          expCost,
+        });
+      }
+    }
+    if (size <= 4) {
+      const width = size === 4
+        ? Math.min(expanded.length, beamWidth * size4Multiplier)
+        : beamWidth;
+      const selected = selectEqualLevelProxyBeam(
+        expanded,
+        width,
+        hardBosses,
+        commonLevel,
+      );
+      stages.push({
+        size,
+        mode: size === 4 ? 'proxy-wide-bridge' : 'proxy',
+        expanded: summarize(expanded),
+        selected: summarize(selected),
+        expandedCount: expanded.length,
+        selectedCount: selected.length,
+      });
+      beam = selected;
+      continue;
+    }
+
+    const preselected = selectEqualLevelProxyBeam(
+      expanded,
+      Math.min(expanded.length, hybridPreCap),
+      hardBosses,
+      commonLevel,
+    );
+
+    if (size === 5 && completionProxyOnly) {
+      const completionAnnotated = attachEqualLevelCompletionProxyPotentials(
+        expanded,
+        screened,
+        routeBosses,
+        hardBosses,
+        commonLevel,
+      );
+      const completionPreselected = selectEqualLevelCompletionProxyBeam(
+        completionAnnotated,
+        Math.min(completionAnnotated.length, hybridPreCap),
+        hardBosses,
+      );
+      stages.push({
+        size,
+        mode: 'completion-aware-proxy-preselection-trace',
+        expanded: summarize(expanded),
+        baselinePreselected: summarize(preselected),
+        completionAwarePreselected: summarize(completionPreselected),
+        expandedCount: expanded.length,
+        baselinePreselectedCount: preselected.length,
+        completionAwarePreselectedCount: completionPreselected.length,
+        targetFamilies: targetFamilySpecies,
+        targetParents: {
+          expanded: summarizeTargetParents(expanded),
+          baselinePreselected: summarizeTargetParents(preselected),
+          completionAwarePreselected: summarizeTargetParents(completionPreselected),
+        },
+        completionTop: [...completionPreselected]
+          .sort((a, b) =>
+            Number(b.completionProxy?.composite || 0) - Number(a.completionProxy?.composite || 0) ||
+            Number(a.completionProxy?.bestExp || Infinity) - Number(b.completionProxy?.bestExp || Infinity)
+          )
+          .slice(0, 20)
+          .map(state => ({
+            parent: state.team.map(candidate => candidate.species),
+            bestTeam: state.completionProxy?.bestTeam || [],
+            composite: Number(state.completionProxy?.composite || 0),
+            bottom5: Number(state.completionProxy?.bottom5 || 0),
+            bestExp: state.completionProxy?.bestExp ?? null,
+          })),
+      });
+      beam = completionPreselected;
+      break;
+    }
+
+    const screenedHybrid = await attachEqualLevelHybridScreens(
+      preselected,
+      story,
+      commonLevel,
+      moveAccess,
+      hardBosses,
+      hybridRuns,
+      0,
+    );
+    const selected = selectEqualLevelHybridBeam(
+      screenedHybrid,
+      beamWidth,
+      hardBosses,
+    );
+    stages.push({
+      size,
+      mode: 'hybrid-real-battle',
+      expanded: summarize(expanded),
+      preselected: summarize(preselected),
+      hybridEvaluated: summarize(screenedHybrid),
+      selected: summarize(selected),
+      expandedCount: expanded.length,
+      preselectedCount: preselected.length,
+      selectedCount: selected.length,
+    });
+    beam = selected;
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: completionProxyOnly
+      ? 'trace completion-aware proxy preselection before expensive size-five battle screening'
+      : 'trace Magneton/Ampharos survival through equal-level proxy beam stages',
+    commonLevel,
+    candidateCap,
+    beamWidth,
+    size4Multiplier,
+    hybridRuns,
+    hybridPreCap,
+    screenedElectricCandidates: screening.rows
+      .filter(row => ['Magneton', 'Ampharos'].includes(String(row.candidate.terminalSpecies || '')))
+      .map(row => ({
+        species: row.candidate.species,
+        terminalSpecies: row.candidate.terminalSpecies,
+        searchKey: candidateIdentity(row.candidate),
+        proxy: row.proxy,
+        grindExp: row.grindExp,
+      })),
+    stages,
+  }, null, 2));
+}
+
+async function cmdEqualLevelStorySearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '57')))));
+  const candidateCap = Math.max(8, Math.floor(Number(arg('candidate-cap', '24'))));
+  const beamWidth = Math.max(4, Math.floor(Number(arg('beam-width', '24'))));
+  const proxyFinalists = Math.max(4, Math.floor(Number(arg('proxy-finalists', '12'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
+  const finalCap = Math.max(1, Math.floor(Number(arg('final-cap', '5'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '10'))));
+  const hybridRuns = Math.max(1, Math.floor(Number(arg('hybrid-runs', '2'))));
+  const hybridPreCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('hybrid-pre-cap', String(beamWidth * 3)))),
+  );
+  const size4Mode = String(arg('size4-mode', 'bridge')).toLowerCase();
+  if (!['bridge', 'actual', 'completion'].includes(size4Mode)) {
+    throw new Error('size4-mode must be bridge, actual, or completion');
+  }
+  const size5Mode = String(arg('size5-mode', 'actual')).toLowerCase();
+  if (!['actual', 'completion'].includes(size5Mode)) {
+    throw new Error('size5-mode must be actual or completion');
+  }
+  const size4Multiplier = Math.max(1, Math.floor(Number(arg('size4-multiplier', '2'))));
+  const size4PreCap = Math.max(
+    beamWidth * size4Multiplier,
+    Math.floor(Number(arg('size4-pre-cap', String(beamWidth * size4Multiplier)))),
+  );
+  const completionChoices = Math.max(1, Math.floor(Number(arg('completion-choices', '6'))));
+  const completionRuns = Math.max(1, Math.floor(Number(arg('completion-runs', '1'))));
+  const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
+  const evolutionPolicy = String(arg('evolution-policy', 'level-only')).toLowerCase();
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('equal-level-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
+  }
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const starter = findStarterCandidate(pool.candidates, starterName);
+  const routeBosses = storyBattlesForCandidates(story.bosses, [starter]);
+  const screening = selectEqualLevelCandidateRows(
+    pool.candidates,
+    starter,
+    routeBosses,
+    commonLevel,
+    candidateCap,
+  );
+  const screenedRows = screening.rows;
+  const screened = screenedRows.map(row => row.candidate);
+  const hardBosses = equalLevelHardBosses(routeBosses);
+  const redBoss = routeBosses.find(boss => String(boss.label) === 'Red') || null;
+  const knownFamilies = knownRedWinnerFamilies(pool.candidates);
+  const knownFamilyIds = knownFamilies.map(row => row.familyId);
+  const knownScreenedByFamily = new Map(
+    screenedRows.map(row => [candidateFamilyIdentity(row.candidate), row.candidate])
+  );
+  const knownScreenedTeam = knownFamilyIds.map(familyId => knownScreenedByFamily.get(familyId)).filter(Boolean);
+  const knownTrace = {
+    requestedFamilies: knownFamilies,
+    screened: knownFamilies.map(row => ({
+      ...row,
+      candidateSpecies: knownScreenedByFamily.get(row.familyId)?.species || null,
+      present: knownScreenedByFamily.has(row.familyId),
+    })),
+    stages: [],
+  };
+  const starterKey = candidateIdentity(starter);
+  if (!screened.some(candidate => candidateIdentity(candidate) === starterKey)) {
+    throw new Error('starter was lost during equal-level candidate screening');
+  }
+
+  let beam = [{
+    team: [starter],
+    proxy: equalLevelTeamProxy([starter], routeBosses, commonLevel),
+    expCost: equalLevelTeamExpCost([starter], commonLevel),
+  }];
+
+  for (let size = 2; size <= 6; size += 1) {
+    const expanded = [];
+    const seen = new Set();
+    for (const state of beam) {
+      const families = new Set(state.team.map(candidateIdentity));
+      for (const candidate of screened) {
+        const candidateKey = candidateIdentity(candidate);
+        if (families.has(candidateKey)) continue;
+        const team = [...state.team, candidate];
+        if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+        const key = team.map(candidateIdentity).sort().join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const expCost = equalLevelTeamExpCost(team, commonLevel);
+        if (!expCost.legal || expCost.totalGrindExp === null) continue;
+        expanded.push({
+          team,
+          proxy: equalLevelTeamProxy(team, routeBosses, commonLevel),
+          expCost,
+        });
+      }
+    }
+    const beforeSelection = traceKnownTargetStates(
+      expanded,
+      knownFamilyIds,
+      redBoss,
+      commonLevel,
+    );
+
+    let selectionMode = 'proxy';
+    let hybridPreselected = null;
+    if (size === 4) {
+      const size4Width = Math.min(expanded.length, beamWidth * size4Multiplier);
+      if (size4Mode === 'bridge') {
+        beam = selectEqualLevelProxyBeam(
+          expanded,
+          size4Width,
+          hardBosses,
+          commonLevel,
+        );
+        selectionMode = 'proxy-wide-bridge';
+      } else {
+        hybridPreselected = selectEqualLevelProxyBeam(
+          expanded,
+          Math.min(expanded.length, size4PreCap),
+          hardBosses,
+          commonLevel,
+        );
+        if (size4Mode === 'actual') {
+          const screenedHybrid = await attachEqualLevelHybridScreens(
+            hybridPreselected,
+            story,
+            commonLevel,
+            moveAccess,
+            hardBosses,
+            hybridRuns,
+            seedOffset,
+          );
+          beam = selectEqualLevelHybridBeam(screenedHybrid, size4Width, hardBosses);
+          selectionMode = 'size4-actual-battle';
+        } else {
+          const rolloutStates = await attachEqualLevelCompletionRollouts(
+            hybridPreselected,
+            screened,
+            story,
+            routeBosses,
+            hardBosses,
+            commonLevel,
+            moveAccess,
+            completionChoices,
+            completionRuns,
+            seedOffset,
+          );
+          beam = selectEqualLevelHybridBeam(rolloutStates, size4Width, hardBosses);
+          selectionMode = 'size4-completion-lookahead';
+        }
+      }
+    } else if (size >= 5) {
+      hybridPreselected = selectEqualLevelProxyBeam(
+        expanded,
+        Math.min(expanded.length, hybridPreCap),
+        hardBosses,
+        commonLevel,
+      );
+      if (size === 5 && size5Mode === 'completion') {
+        const rolloutStates = await attachEqualLevelSingleCompletionRollouts(
+          hybridPreselected,
+          screened,
+          story,
+          routeBosses,
+          hardBosses,
+          commonLevel,
+          moveAccess,
+          completionChoices,
+          completionRuns,
+          seedOffset,
+        );
+        beam = selectEqualLevelHybridBeam(rolloutStates, beamWidth, hardBosses);
+        selectionMode = 'size5-completion-lookahead';
+      } else {
+        const screenedHybrid = await attachEqualLevelHybridScreens(
+          hybridPreselected,
+          story,
+          commonLevel,
+          moveAccess,
+          hardBosses,
+          hybridRuns,
+          seedOffset,
+        );
+        beam = selectEqualLevelHybridBeam(screenedHybrid, beamWidth, hardBosses);
+        selectionMode = 'hybrid-real-battle';
+      }
+    } else {
+      beam = selectEqualLevelProxyBeam(expanded, beamWidth, hardBosses, commonLevel);
+    }
+
+    const afterSelection = traceKnownTargetStates(
+      beam,
+      knownFamilyIds,
+      redBoss,
+      commonLevel,
+    );
+    knownTrace.stages.push({
+      size,
+      selectionMode,
+      hybridPreselected: hybridPreselected
+        ? traceKnownTargetStates(hybridPreselected, knownFamilyIds, redBoss, commonLevel)
+        : null,
+      beforeSelection,
+      afterSelection,
+    });
+    if (!beam.length) break;
+  }
+
+  const proxyStates = [...beam]
+    .sort((a, b) =>
+      b.proxy.composite - a.proxy.composite ||
+      b.proxy.bottom5 - a.proxy.bottom5 ||
+      a.expCost.totalGrindExp - b.expCost.totalGrindExp ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    )
+    .slice(0, proxyFinalists);
+
+  knownTrace.proxyFinalists = traceKnownTargetStates(
+    proxyStates,
+    knownFamilyIds,
+    redBoss,
+    commonLevel,
+  );
+
+  const screenedFinalists = [];
+  for (const state of proxyStates) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      state.team,
+      story,
+      commonLevel,
+      screenRuns,
+      moveAccess,
+      { seedOffset },
+    );
+    screenedFinalists.push({ ...state, evaluation });
+  }
+  screenedFinalists.sort((a, b) =>
+    equalLevelEvaluationCompare(a.evaluation, b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const finalStates = [];
+  for (const state of screenedFinalists.slice(0, finalCap)) {
+    const evaluation = finalRuns === screenRuns
+      ? state.evaluation
+      : await evaluateEqualLevelStoryTeam(
+          state.team,
+          story,
+          commonLevel,
+          finalRuns,
+          moveAccess,
+          { seedOffset },
+        );
+    finalStates.push({ ...state, evaluation });
+  }
+  finalStates.sort((a, b) =>
+    equalLevelEvaluationCompare(a.evaluation, b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  knownTrace.screenedFinalists = {
+    total: screenedFinalists.length,
+    exactTargetPresent: screenedFinalists.some(state =>
+      familyOnlySetKey(state.team) === [...knownFamilyIds].sort().join('|')
+    ),
+  };
+  knownTrace.finalStates = {
+    total: finalStates.length,
+    exactTargetPresent: finalStates.some(state =>
+      familyOnlySetKey(state.team) === [...knownFamilyIds].sort().join('|')
+    ),
+  };
+
+  let knownRedWinnerEvaluation = null;
+  if (
+    knownFamilyIds.length === KNOWN_RED_WINNER_FAMILY_SPECIES.length &&
+    knownScreenedTeam.length === KNOWN_RED_WINNER_FAMILY_SPECIES.length
+  ) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      knownScreenedTeam,
+      story,
+      commonLevel,
+      finalRuns,
+      moveAccess,
+      { seedOffset },
+    );
+    knownRedWinnerEvaluation = equalLevelSearchRow(
+      knownScreenedTeam,
+      evaluation,
+      equalLevelTeamProxy(knownScreenedTeam, routeBosses, commonLevel),
+    );
+  }
+
+  const screenRows = screenedFinalists.map(state =>
+    equalLevelSearchRow(state.team, state.evaluation, state.proxy)
+  );
+  const finalRows = finalStates.map(state =>
+    equalLevelSearchRow(state.team, state.evaluation, state.proxy)
+  );
+
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  const cacheStats = battleCacheStats();
+  const preparationCacheStats = equalLevelPreparationCacheStats();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'HG+Cyndaquil equal-level story team search without EXP scheduling',
+    version,
+    starter: starterName,
+    commonLevel,
+    resourceProfile: 'all',
+    spendPolicy: 'unbounded',
+    evolutionPolicy,
+    evolutionAccess: pool.evolutionAccess,
+    search: {
+      candidatePool: pool.candidates.length,
+      candidateCap,
+      screenedCandidates: screenedRows.map(row => ({
+        species: row.candidate.species,
+        familyId: candidateFamilyIdentity(row.candidate),
+        searchKey: candidateIdentity(row.candidate),
+        terminalSpecies: row.candidate.terminalSpecies || null,
+        speciesByStage: row.candidate.speciesByStage || [],
+        proxy: row.proxy,
+        grindExp: row.grindExp,
+      })),
+      specialistCandidates: screening.specialists,
+      teamProxyModel: {
+        version: 'foe-coverage-v2+hybrid-progress-v2',
+        perFoeMemberWeights: [1, 0.30, 0.10],
+        bossScore: '0.72 * mean foe coverage + 0.28 * bottom-2 foe coverage',
+        routeScore: '0.62 * mean boss score + 0.38 * bottom-5 boss score',
+        size4Mode,
+        size4Multiplier,
+        size4Width: beamWidth * size4Multiplier,
+        size4PreCap,
+        completionChoices,
+        completionRuns,
+        hybridFromTeamSize: 5,
+        hybridPreCap,
+        hybridRuns,
+        seedOffset,
+        hybridBosses: hardBosses.map(boss => String(boss.label)),
+        hybridSelection: 'battle progress (opponent faints) first, then wins; proxy and EXP retained as diversity axes',
+      },
+      beamWidth,
+      proxyFinalists,
+      screenRuns,
+      finalCap,
+      finalRuns,
+    },
+    battleCache: cacheStats,
+    preparationCache: preparationCacheStats,
+    knownRedWinnerDiagnostic: {
+      trace: knownTrace,
+      directEvaluation: knownRedWinnerEvaluation,
+    },
+    preliminaryPareto: equalLevelParetoRows(screenRows),
+    finalPareto: equalLevelParetoRows(finalRows),
+    final: finalRows,
+  }, null, 2));
+}
+
+async function cmdEqualLevelStoryEvaluate() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const evolutionPolicy = String(arg('evolution-policy', 'level-only')).toLowerCase();
+  const levels = String(arg('levels', arg('level', '50')))
+    .split(',')
+    .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))))
+    .filter(Number.isFinite);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
+
+  if (version !== 'HEARTGOLD') {
+    throw new Error('equal-level-story-evaluate pilot currently supports HEARTGOLD only');
+  }
+  if (starterName !== 'Cyndaquil') {
+    throw new Error('equal-level-story-evaluate pilot currently supports Cyndaquil only');
+  }
+  if (teamNames.length !== 6 && teamKeys.length !== 6) {
+    throw new Error('equal-level-story-evaluate requires six --team species or six --team-keys');
+  }
+  if (!levels.length) throw new Error('equal-level-story-evaluate requires at least one valid level');
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const bySpecies = new Map();
+  for (const candidate of pool.candidates) {
+    if (!bySpecies.has(candidate.species)) bySpecies.set(candidate.species, candidate);
+  }
+  const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const team = teamKeys.length
+    ? teamKeys.map(key => {
+        const candidate = byKey.get(key);
+        if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
+        return candidate;
+      })
+    : teamNames.map(name => {
+        const candidate = bySpecies.get(name);
+        if (!candidate) throw new Error('Canonical candidate not found: ' + name);
+        return candidate;
+      });
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Requested team violates family/exclusive-group constraints');
+  }
+  const starter = findStarterCandidate(pool.candidates, starterName);
+  if (!team.some(candidate => candidateIdentity(candidate) === candidateIdentity(starter))) {
+    throw new Error('Requested team must contain the Cyndaquil starter family');
+  }
+
+  const evaluations = [];
+  for (const commonLevel of levels) {
+    evaluations.push(await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        bossLabels: bossLabels.length ? bossLabels : null,
+        seedOffset,
+      },
+    ));
+  }
+
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  const cacheStats = battleCacheStats();
+  const preparationCacheStats = equalLevelPreparationCacheStats();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'HG+Cyndaquil fixed-team equal-level story evaluation without EXP scheduling',
+    version,
+    starter: starterName,
+    team: team.map(candidate => candidate.species),
+    teamKeys: team.map(candidateIdentity),
+    evolutionPolicy,
+    evolutionAccess: pool.evolutionAccess,
+    levels,
+    runsPerBoss: runs,
+    bosses: bossLabels,
+    seedOffset,
+    battleCache: cacheStats,
+    preparationCache: preparationCacheStats,
+    resourceProfile: 'all',
+    spendPolicy: 'unbounded',
+    evaluations,
+  }, null, 2));
+}
+
+async function cmdEvolutionLegalitySmoke() {
+  const story = await loadEqualLevelStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const route = storyBattlesForCandidates(story.bosses, []);
+  const bossByLabel = new Map(route.map(boss => [String(boss.label), boss]));
+
+  function variant(origin, terminal) {
+    const row = pool.candidates.find(candidate =>
+      candidate.species === origin && candidate.terminalSpecies === terminal
+    );
+    if (!row) throw new Error(`Missing trade-aware evolution variant: ${origin}->${terminal}`);
+    return row;
+  }
+
+  function materialized(origin, terminal, bossLabel, level = 65) {
+    const candidate = variant(origin, terminal);
+    const boss = bossByLabel.get(bossLabel);
+    if (!boss) throw new Error(`Unknown boss for evolution smoke: ${bossLabel}`);
+    const levels = { [candidateIdentity(candidate)]: level };
+    return materializeCandidateTeam(
+      [candidate],
+      boss.stage,
+      level,
+      { levelsByCandidate: levels, boss },
+    )[0]?.species || null;
+  }
+
+  const checks = [
+    {
+      name: 'pure-trade-gengar',
+      actual: materialized('Gastly', 'Gengar', 'Morty', 57),
+      expected: 'Gengar',
+    },
+    {
+      name: 'pure-trade-alakazam',
+      actual: materialized('Abra', 'Alakazam', 'Whitney', 57),
+      expected: 'Alakazam',
+    },
+    {
+      name: 'pure-trade-golem',
+      actual: materialized('Geodude', 'Golem', 'Whitney', 57),
+      expected: 'Golem',
+    },
+    {
+      name: 'metal-coat-before-source',
+      actual: materialized('Onix', 'Steelix', 'Whitney', 57),
+      expected: 'Onix',
+    },
+    {
+      name: 'metal-coat-after-source',
+      actual: materialized('Onix', 'Steelix', 'Morty', 57),
+      expected: 'Steelix',
+    },
+    {
+      name: 'protector-before-blue-clear',
+      actual: materialized('Rhyhorn', 'Rhyperior', 'Blue', 65),
+      expected: 'Rhydon',
+    },
+    {
+      name: 'protector-after-blue-clear',
+      actual: materialized('Rhyhorn', 'Rhyperior', 'Will 2', 65),
+      expected: 'Rhyperior',
+    },
+  ];
+  const failures = checks.filter(row => row.actual !== row.expected);
+  if (failures.length) {
+    throw new Error('Evolution legality smoke failed: ' + JSON.stringify(failures));
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    evolutionPolicy: pool.evolutionPolicy,
+    checks,
+    focusItemAccess: {
+      metalCoat: pool.evolutionAccess?.items?.ITEM_METAL_COAT || null,
+      protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
+      kingsRock: pool.evolutionAccess?.items?.ITEM_KINGS_ROCK || null,
+      dragonScale: pool.evolutionAccess?.items?.ITEM_DRAGON_SCALE || null,
+    },
+  }, null, 2));
+}
+
+async function cmdEvolutionCheckpointSmoke() {
+  const story = await loadEqualLevelStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const bosses = storyBattlesForCandidates(story.bosses, []);
+  const byLabel = new Map(bosses.map(boss => [String(boss.label), boss]));
+
+  function variant(origin, terminal) {
+    const candidate = pool.candidates.find(row =>
+      row.species === origin && row.terminalSpecies === terminal
+    );
+    if (!candidate) throw new Error('Missing evolution variant: ' + origin + '->' + terminal);
+    return candidate;
+  }
+
+  function speciesAt(origin, terminal, bossLabel, level) {
+    const candidate = variant(origin, terminal);
+    const boss = byLabel.get(bossLabel);
+    const mon = materializeCandidateTeam(
+      [candidate],
+      boss.stage,
+      level,
+      {
+        levelsByCandidate: { [candidateIdentity(candidate)]: level },
+        boss,
+      },
+    )[0];
+    return mon?.species || null;
+  }
+
+  const rows = [
+    { check: 'Gastly->Gengar', actual: speciesAt('Gastly', 'Gengar', 'Morty', 57), expected: 'Gengar' },
+    { check: 'Abra->Alakazam', actual: speciesAt('Abra', 'Alakazam', 'Whitney', 57), expected: 'Alakazam' },
+    { check: 'Geodude->Golem', actual: speciesAt('Geodude', 'Golem', 'Morty', 57), expected: 'Golem' },
+    { check: 'Rhyperior blocked for Blue', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Blue', 65), expected: 'Rhydon' },
+    { check: 'Rhyperior legal for Will 2', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Will 2', 65), expected: 'Rhyperior' },
+  ];
+  const failures = rows.filter(row => row.actual !== row.expected);
+  if (failures.length) {
+    throw new Error('Evolution checkpoint smoke failed: ' + JSON.stringify(failures));
+  }
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    evolutionPolicy: pool.evolutionPolicy,
+    rows,
+    protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
+  }, null, 2));
+}
+
 async function cmdSmoke() {
   const story = await loadStory();
   const falkner = story.bosses[0];
@@ -5770,6 +8121,11 @@ const commands = {
   'counterfactual-specialist-probe': cmdCounterfactualSpecialistProbe,
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
+  'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'equal-level-electric-trace': cmdEqualLevelElectricTrace,
+  'equal-level-story-search': cmdEqualLevelStorySearch,
+  'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
+  'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
   'tutor-smoke': cmdTutorSmoke,
@@ -5781,7 +8137,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, equal-level-story-search, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
