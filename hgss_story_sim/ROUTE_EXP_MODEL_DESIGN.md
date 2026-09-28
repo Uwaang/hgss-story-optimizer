@@ -1,0 +1,843 @@
+# Route EXP Budget Model Design
+
+Status: design proposal  
+Branch: `design/route-exp-budget-model`  
+Scope: Pokémon HeartGold fixed-team story optimization  
+Relationship to current work: complements, rather than replaces, the equal-level benchmark
+
+## 1. Why this model is needed
+
+The current equal-level benchmark asks a useful but narrower question:
+
+> If every currently available member of a candidate final team is set to the same common level N, how well does that team perform across the story, and how much catch-up EXP is required to bring each member from its source-backed capture level to N?
+
+This isolates team composition and late-game battle strength well. It is also convenient for search because every available member is compared at one common level.
+
+However, it is not a simulation of natural story progression.
+
+At common level 63, for example, Falkner is fought by all candidate members available at that checkpoint at level 63. A member that joins later is absent before its acquisition point, but immediately appears at level 63 after joining. The cost model then charges only the EXP needed from its source-backed capture level to 63.
+
+That creates three important blind spots:
+
+1. Early bosses become saturated because the player's available Pokémon are vastly overleveled relative to the story.
+2. A late high-level catch is represented only through lower catch-up EXP, not through its actual level relative to the rest of the team at the moment it joins.
+3. EXP earned before a late member joins is not conserved as a time-ordered resource. The model does not represent the trade-off between investing early EXP in existing members and saving later training effort for a new catch.
+
+The route EXP model is intended to answer the broader question:
+
+> Given the EXP that could actually have been earned by each point in the story, the source-backed level at which each Pokémon joins, and the requirement that EXP already spent cannot be reassigned, what level distribution and team composition best complete the story?
+
+No arbitrary bonus or penalty should be attached to early or late availability. Its value should emerge from the resource flow itself.
+
+---
+
+## 2. Design principles
+
+### 2.1 EXP conservation, not availability heuristics
+
+Do not assign scores such as:
+
+- +X for being available before Gym 2
+- -Y for joining after the Elite Four
+- +Z for having a high capture level
+
+Instead, model:
+
+- when the member becomes available;
+- the level/EXP state at which it enters;
+- how much route EXP has been earned by that checkpoint;
+- how much of that EXP has already been allocated;
+- what additional optional grinding is required.
+
+A late level-45 Pupitar can therefore be good or bad for principled reasons. It may save training because it arrives at level 45, while the five earlier members benefited from all pre-capture route EXP. It may also be bad if it arrives too late to contribute to many difficult battles or requires too much post-capture investment.
+
+### 2.2 Individual levels are first-class state
+
+There is no team "average level" used for battle.
+
+A checkpoint may legitimately look like:
+
+```
+Typhlosion 43
+Golem      41
+Magneton   40
+Slowbro    39
+Heracross  42
+Pupitar    45   <- newly caught
+```
+
+Those exact individual levels are materialized into the battle simulator.
+
+### 2.3 Keep equal-level as a separate benchmark
+
+The equal-level benchmark remains useful for:
+
+- composition screening;
+- late-game power analysis;
+- controlled A/B comparisons;
+- finding level breakpoints;
+- generating search seeds.
+
+The route EXP model should not silently change its semantics. It should be a separate evaluation/search mode so both answers remain available.
+
+Suggested names:
+
+- `equal-level-story-search`
+- `route-exp-story-search`
+
+### 2.4 Source-backed inputs only
+
+Capture level, availability, evolution timing, move timing, and EXP supply should be derived from source-backed game data where possible.
+
+When exact data is unavailable, the model should expose the approximation explicitly instead of hiding it inside a score.
+
+### 2.5 Start with a resource envelope; add micro-mechanics later
+
+A fully exact Gen IV EXP simulation would require battle participation, switching, Exp. Share ownership/use, fainted Pokémon rules, traded-Pokémon multipliers, and potentially wild grinding choices.
+
+That is a much larger problem.
+
+The first implementation should therefore model a route EXP **envelope**: the total EXP earned by each checkpoint is conserved and may be allocated among members available at that time.
+
+A later precision layer can restrict this allocation according to exact battle participation and Exp. Share mechanics.
+
+---
+
+## 3. Terminology
+
+### Checkpoint
+
+A point in story order at which state is evaluated.
+
+Initially, use the existing boss route as the checkpoint sequence:
+
+```
+Falkner -> Bugsy -> Whitney -> ... -> Lance -> Kanto -> Blue -> E4 rematch -> Red
+```
+
+The route may later include finer-grained checkpoints between bosses when acquisition/evolution/resource events require them.
+
+### Natural route EXP
+
+EXP earned from the configured set of non-optional or expected story battles before a checkpoint.
+
+It must be cumulative and monotonic.
+
+### Optional grind EXP
+
+Additional EXP intentionally earned beyond the natural route supply.
+
+This is a cost, not free budget.
+
+### Member EXP state
+
+For member i at checkpoint t:
+
+```
+xp[i,t]
+level[i,t] = levelFromExp(growthRate[i], xp[i,t])
+```
+
+EXP is the canonical state. Level is derived.
+
+### Capture endowment
+
+When a member joins at source-backed capture level L:
+
+```
+xp[i,join] >= expAtLevel(growthRate[i], L)
+```
+
+This capture EXP is not charged against route EXP. It is the state at which the caught Pokémon enters the party.
+
+---
+
+## 4. Core state model
+
+For a fixed final-six candidate team, define at checkpoint t:
+
+```js
+{
+  checkpoint,
+  cumulativeNaturalExp,
+  cumulativeOptionalGrindExp,
+  members: {
+    candidateKey: {
+      available,
+      captured,
+      captureSource,
+      captureLevel,
+      exp,
+      level,
+      speciesAtCheckpoint,
+      evolutionState
+    }
+  }
+}
+```
+
+Important invariants:
+
+### Availability
+
+A member may not exist before its legal acquisition checkpoint.
+
+```
+captured[i,t] = false  if t < availableFrom[i]
+```
+
+### Capture floor
+
+At its chosen legal source:
+
+```
+xp[i,t_join] >= captureExp[i]
+```
+
+### Monotonic member EXP
+
+```
+xp[i,t+1] >= xp[i,t]
+```
+
+### No retroactive allocation
+
+EXP earned before a member joins cannot be transferred into that member.
+
+If member i joins at checkpoint k:
+
+```
+routeAllocatedTo[i,t] = 0 for all t < k
+```
+
+### Global EXP conservation
+
+For each interval t -> t+1:
+
+```
+sum_i deltaRouteXp[i,t]
+  <= naturalExpEarned[t] + optionalGrindExp[t]
+```
+
+Only members available during that interval may receive that interval's allocation.
+
+### Optional grind is explicit
+
+```
+optionalGrindExp[t] >= 0
+```
+
+Total grinding becomes a Pareto/resource objective rather than being hidden.
+
+---
+
+## 5. EXP supply model
+
+The route model requires a time-ordered EXP supply table.
+
+Proposed schema:
+
+```json
+{
+  "segments": [
+    {
+      "from": "START",
+      "to": "Falkner",
+      "mandatoryTrainerExp": 1234,
+      "expectedRouteExp": 1234,
+      "optionalWildGrind": true
+    },
+    {
+      "from": "Falkner",
+      "to": "Bugsy",
+      "mandatoryTrainerExp": 5678,
+      "expectedRouteExp": 6900,
+      "optionalWildGrind": true
+    }
+  ]
+}
+```
+
+Three possible supply profiles should be kept conceptually separate:
+
+1. **mandatory-only**  
+   EXP from battles that the route necessarily requires.
+
+2. **expected-story**  
+   Mandatory battles plus a documented expected set of ordinary route/trainer encounters.
+
+3. **grind-allowed**  
+   The natural profile plus explicit optional grind EXP chosen by the optimizer.
+
+Do not mix optional grinding into natural EXP.
+
+### What counts as capture EXP?
+
+In HGSS/Gen IV, merely catching a wild Pokémon does not grant catch EXP. The new Pokémon nevertheless enters at its capture level, so its existing EXP implied by that level is treated as an acquisition endowment.
+
+---
+
+## 6. Allocation model v1: route EXP envelope
+
+For each route segment, the optimizer decides how to distribute the newly earned EXP among currently available members.
+
+Example:
+
+```
+Before segment:
+Typhlosion 31
+Golem      29
+Magneton   28
+Heracross  30
+
+Segment natural EXP: 18,000
+
+Possible allocation:
+Typhlosion +4,000
+Golem      +6,000
+Magneton   +2,000
+Heracross  +6,000
+```
+
+The objective is not equal leveling. The optimizer may concentrate EXP if that creates a better next-checkpoint team.
+
+When a late member arrives:
+
+```
+existing:
+43 / 41 / 40 / 39 / 42
+
+capture:
+Pupitar Lv45
+
+new state:
+43 / 41 / 40 / 39 / 42 / 45
+```
+
+Nothing is averaged or normalized.
+
+### Why this is principled
+
+Early availability has both benefit and cost:
+
+- benefit: the member can contribute earlier;
+- cost: keeping it competitive may consume earlier EXP.
+
+Late availability also has both benefit and cost:
+
+- benefit: it may arrive at a high level without consuming prior route EXP;
+- cost: it contributes to fewer checkpoints and has less time to receive route EXP.
+
+The optimization determines the net effect.
+
+---
+
+## 7. Allocation constraints: v1 versus v2
+
+### v1: flexible allocation envelope
+
+v1 may allocate segment EXP to any Pokémon available in that segment.
+
+This assumes the player can deliberately train chosen members through switching/participation and therefore models the upper envelope of sensible EXP management.
+
+Advantages:
+
+- substantially simpler;
+- deterministic;
+- suitable for optimization;
+- no arbitrary availability penalty;
+- captures time ordering and late-catch effects.
+
+Limitation:
+
+- allocation is more flexible than exact Gen IV mechanics.
+
+### v2: battle-participation constrained allocation
+
+Later, use actual trainer battles and party participation.
+
+Possible constraints include:
+
+- EXP only to participants and/or Exp. Share holder;
+- per-foe EXP amounts;
+- switch splitting;
+- trainer battle multiplier;
+- traded Pokémon multiplier if relevant;
+- fainted recipient rules;
+- Exp. Share availability timing.
+
+v2 should be implemented only after v1 establishes that route-aware leveling materially changes team selection.
+
+---
+
+## 8. Battle evaluation
+
+At checkpoint t:
+
+1. Determine which final-team members have been legally acquired.
+2. Read each available member's individual EXP.
+3. Convert EXP to individual level.
+4. Resolve species/evolution state at that exact level and checkpoint.
+5. Resolve legal moves, TMs, tutors, held items, and abilities using existing timing rules.
+6. Materialize the team with `levelsByCandidate`.
+7. Run the existing Pokémon Showdown Gen IV battle engine.
+
+This already fits the lower-level battle API because `materializeCandidateTeam()` accepts per-candidate levels.
+
+No "average level" parameter should be introduced.
+
+---
+
+## 9. Evolution and move timing
+
+Evolution must depend on both:
+
+- story/checkpoint access; and
+- individual level.
+
+Examples:
+
+- Quilava cannot become Typhlosion until its actual member level meets the evolution requirement.
+- Rhyhorn may become Rhydon based on level, but Rhyperior must also wait for Protector access and allowed trade evolution timing.
+- Gengar/Alakazam/Golem may evolve once their pure trade policy allows them.
+- A move learned at level 42 is unavailable to a member currently level 40 even if another member is level 45.
+
+This is a major improvement over any team-average model.
+
+---
+
+## 10. Capture-source choice
+
+A family may have multiple legal capture sources.
+
+The optimizer must not automatically choose only the highest-level source without considering timing.
+
+A later high-level source can reduce training cost but forfeits earlier contributions.
+
+Therefore candidate identity may eventually need to include a **capture-source policy**, or the route optimizer must choose among source options.
+
+For each source s:
+
+```
+sourceOption = {
+  availableFrom,
+  minLevel,
+  maxLevel,
+  location,
+  encounter conditions
+}
+```
+
+The optimization compares alternatives such as:
+
+- catch early at level 18 and train throughout the story;
+- wait and catch the same family at level 35 later.
+
+This should emerge as a resource/performance trade-off.
+
+---
+
+## 11. Objective and Pareto dimensions
+
+Do not collapse the route problem immediately into one scalar.
+
+Recommended Pareto axes:
+
+- story clear coverage;
+- bottom-K boss performance;
+- geometric story performance;
+- Red / late-game performance as descriptive metrics;
+- total optional grind EXP;
+- possibly total natural EXP consumed by the final six;
+- optional money/resource burden where already modeled.
+
+The main cost axis should be:
+
+```
+totalOptionalGrindExp
+```
+
+Natural route EXP is not itself a penalty because it is earned during progression. However, how it is allocated determines the reachable levels.
+
+A secondary diagnostic may report:
+
+```
+unusedNaturalExp
+```
+
+if the envelope contains more EXP than the six-member team can use meaningfully.
+
+---
+
+## 12. Search architecture
+
+A full joint optimization over:
+
+- six-member team;
+- capture source;
+- EXP allocation at every checkpoint;
+- move/resource plan;
+- battle outcome
+
+is too expensive to brute-force.
+
+Use layers.
+
+### Layer A: candidate-team generation
+
+Reuse the current equal-level search as a proposal generator.
+
+Keep multiple Pareto/diverse candidates rather than only the top team.
+
+### Layer B: route EXP allocation
+
+For each proposed fixed six, optimize the individual EXP trajectory.
+
+Possible initial methods:
+
+- beam search over checkpoint level states;
+- dynamic programming with EXP quanta;
+- marginal-utility greedy allocation with local improvement;
+- mixed integer formulation later if state size permits.
+
+### Layer C: exact battle validation
+
+For promising allocation trajectories, run real Showdown battles at each checkpoint.
+
+### Layer D: local allocation refinement
+
+Near difficult bosses, test reallocations around the current plan:
+
+```
++delta EXP to member A
+-delta EXP from member B
+```
+
+provided conservation and timing constraints remain legal.
+
+---
+
+## 13. Recommended v1 allocator
+
+A pragmatic first implementation:
+
+### EXP quantum
+
+Represent allocatable EXP in chunks rather than single points.
+
+Examples:
+
+- 250 EXP early;
+- 1,000 EXP midgame;
+- 2,500 or 5,000 EXP late.
+
+Alternatively use level-boundary deltas so only allocations that reach a new level are considered.
+
+Level-boundary allocation is preferable because EXP that does not change a level has no battle effect.
+
+### Per-segment expansion
+
+At checkpoint t:
+
+1. Add newly captured members at their source-backed capture EXP.
+2. Add natural EXP from the preceding segment to the allocatable pool.
+3. Generate allocations that push one or more members to reachable next level boundaries.
+4. Materialize candidate states.
+5. Evaluate upcoming boss proxy or a small real-battle screen.
+6. Preserve a diverse beam based on:
+   - next-boss performance;
+   - lower-tail route performance;
+   - remaining/unspent EXP;
+   - individual level-distribution diversity.
+
+Do not penalize uneven levels. If `45/42/40/39/38/50` is optimal, preserve it.
+
+### Optional grind
+
+After natural EXP allocation, allow extra grind only when useful.
+
+Treat each extra level boundary as having an explicit EXP cost.
+
+This naturally generates a performance-vs-grind Pareto frontier.
+
+---
+
+## 14. Important anti-bias rule
+
+Do not use a heuristic such as "team average must be near boss ace level."
+
+That would recreate the problem in another form.
+
+Boss-relative levels should matter only through actual battle performance or a clearly documented proxy used to save compute.
+
+The optimizer must be allowed to discover strategies such as:
+
+- one overleveled carry;
+- two high-level specialists plus underleveled support;
+- broadly even leveling;
+- a newly caught high-level late member.
+
+---
+
+## 15. Relationship to current EXP code
+
+The repository already contains useful pieces:
+
+- growth-rate based `expAtLevel()`;
+- per-candidate source-backed capture levels;
+- `levelsByCandidate` support in team materialization;
+- route-ordered bosses;
+- acquisition timing;
+- evolution timing;
+- machine/resource planning;
+- existing EXP scheduling/allocator experiments elsewhere in the codebase.
+
+The route model should reuse those primitives rather than duplicate them.
+
+The main semantic change is that `levelsByBattle` becomes a genuine time-varying result instead of:
+
+```js
+routeBosses.map(() => ({ ...commonLevelForEveryCandidate }))
+```
+
+---
+
+## 16. Output schema
+
+A route-aware evaluation should expose enough state to audit the result.
+
+Example:
+
+```json
+{
+  "team": ["Cyndaquil", "Geodude", "..."],
+  "naturalExpProfile": "expected-story-v1",
+  "optionalGrindExp": 84200,
+  "checkpoints": [
+    {
+      "boss": "Falkner",
+      "naturalExpEarnedThisSegment": 3200,
+      "optionalGrindThisSegment": 0,
+      "members": [
+        {
+          "candidateKey": "...",
+          "species": "Cyndaquil",
+          "level": 13,
+          "exp": 2197,
+          "captured": true
+        }
+      ],
+      "winRate": 0.78
+    }
+  ],
+  "finalLevels": {
+    "Typhlosion": 67,
+    "Golem": 64
+  }
+}
+```
+
+A result should make it possible to answer:
+
+- When was this member caught?
+- At what level?
+- How much natural EXP did it receive?
+- How much grind EXP did it receive?
+- What level was it for every boss?
+- Which evolution was active?
+- Where did the optimizer spend EXP and why?
+
+---
+
+## 17. Validation plan
+
+Before searching the entire Pokémon pool, validate semantics with controlled cases.
+
+### Test A: late high-level catch
+
+Construct:
+
+- five early members around level N;
+- one late source at N+M.
+
+Expected:
+
+- the new member joins at N+M;
+- the other five keep their own levels;
+- no averaging occurs;
+- no earlier route EXP is allocated retroactively to the late member.
+
+### Test B: early versus late source for same family
+
+Compare:
+
+- early low-level catch;
+- later high-level catch.
+
+Expected:
+
+- early source can contribute to more bosses;
+- late source starts with more embedded EXP;
+- no handcrafted preference decides the winner.
+
+### Test C: EXP conservation
+
+For every checkpoint:
+
+```
+allocatedNaturalExp <= cumulativeNaturalExpAvailable
+```
+
+and member EXP never decreases.
+
+### Test D: no free catch-up
+
+If a level-20 member is caught and later appears at level 40, the EXP difference must come from post-capture natural EXP and/or explicit grind.
+
+### Test E: evolution legality
+
+A Pokémon cannot use a level-triggered evolution before its actual member level reaches the threshold, and cannot use an item/trade evolution before the item/checkpoint is legal.
+
+### Test F: equal-level limiting comparison
+
+Feed enough optional grind to make every available member exactly the same common level.
+
+The resulting battle materialization should approximately reproduce the current equal-level benchmark for the same team and timing policy. This provides a cross-model sanity check.
+
+---
+
+## 18. Implementation stages
+
+### Stage 0 — data audit
+
+Inventory:
+
+- trainer EXP data already extractable;
+- route ordering;
+- mandatory versus optional trainers;
+- wild encounter source levels;
+- growth curves;
+- existing EXP allocator utilities.
+
+Produce an explicit coverage report before implementing the optimizer.
+
+### Stage 1 — route EXP ledger
+
+Implement:
+
+- segment EXP supply;
+- capture endowments;
+- cumulative EXP conservation;
+- per-member EXP/level state;
+- diagnostic CLI only.
+
+No team search yet.
+
+### Stage 2 — fixed-team allocator
+
+Given a hard-coded six-member team:
+
+- choose source options;
+- allocate natural EXP across checkpoints;
+- allow optional grind;
+- emit levels by boss.
+
+Validate against controlled tests.
+
+### Stage 3 — battle-coupled allocation
+
+Use boss battle proxy / small actual runs to choose among allocation states.
+
+Produce a fixed-team performance-vs-grind Pareto frontier.
+
+### Stage 4 — integrate team search
+
+Use equal-level search and/or wider candidate generation to propose teams, then route-evaluate them.
+
+Do not immediately run route allocation for every combinatorial team.
+
+### Stage 5 — dynamic roster, optional
+
+Only after fixed-six route optimization is stable, allow temporary members and replacements.
+
+EXP invested in a retired temporary member remains spent, naturally creating opportunity cost.
+
+---
+
+## 19. Dynamic roster extension
+
+The eventual state may allow more than six families to be used over the whole story while only six are active at any time.
+
+Example:
+
+```
+early:  A B C D
+mid:    A B C D E
+late:   A B C E F G
+```
+
+If D consumed 40,000 route EXP before being dropped, that EXP remains consumed.
+
+This makes temporary utility measurable without arbitrary replacement penalties.
+
+This feature is explicitly out of scope for route EXP v1.
+
+---
+
+## 20. Decisions proposed for v1
+
+Recommended choices:
+
+- fixed final six only;
+- individual EXP states;
+- source-backed capture level/endowment;
+- source-backed availability;
+- natural route EXP envelope;
+- flexible allocation among currently available members;
+- optional grind as explicit cost;
+- actual individual levels in Showdown battles;
+- existing move/evolution/item timing reused;
+- current equal-level benchmark kept unchanged;
+- no early/late availability bonus;
+- no average-level normalization;
+- no dynamic roster yet;
+- no exact Exp. Share/participation mechanics yet.
+
+This is the smallest model that fixes the major semantic blind spot without replacing it with a different heuristic.
+
+---
+
+## 21. Main open data question
+
+The most important prerequisite is not the optimizer. It is the EXP ledger.
+
+Before implementation, verify how much of the following is already source-backed in the repository:
+
+- every mandatory trainer's party and levels;
+- base EXP yield for defeated species;
+- Gen IV trainer EXP formula;
+- story ordering of mandatory/optional trainer fights;
+- wild grinding encounter tables;
+- capture source level ranges;
+- growth-rate curves;
+- Exp. Share acquisition timing if v2 is pursued.
+
+If mandatory-route EXP cannot be reconstructed reliably, the model should expose multiple named route profiles rather than pretending there is one exact "natural EXP" number.
+
+---
+
+## 22. Interpretation after this model exists
+
+The project would then have two intentionally different outputs.
+
+### Equal-level benchmark
+
+> At common level N, which legal final-six compositions provide the strongest and most EXP-efficient battle performance?
+
+Useful for controlled team-power analysis and late-game breakpoints.
+
+### Route EXP benchmark
+
+> From the start of HGSS to Red, under a conserved source-backed EXP budget, what individual level trajectory and final-six composition gives the best story performance for the least optional grinding?
+
+This second question is much closer to the original "best story team" goal.
