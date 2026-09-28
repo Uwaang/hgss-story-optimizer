@@ -1044,7 +1044,18 @@ export function buildTeamExpSchedule({
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
   const states = [];
   const stateKeys = new Set();
-  const excludedMapTrainerKeys = new Set(routeBosses.map(boss => boss.key));
+  const trainerWindows = expWorld.expTiming?.trainerWindows || [];
+  const deferredTrainerKeys = new Set(
+    trainerWindows.flatMap(window => window.trainers || [])
+  );
+  const excludedMapTrainerKeys = new Set([
+    ...routeBosses.map(boss => boss.key),
+    ...deferredTrainerKeys,
+  ]);
+  const trainerRowByKey = new Map(
+    (expWorld.mapTrainerRows || []).map(row => [row.key, row])
+  );
+  const processedTrainerWindowKeys = new Set();
   const stageStarted = new Set();
   const processedMaps = new Set();
   const battles = [];
@@ -1187,6 +1198,26 @@ export function buildTeamExpSchedule({
     return maps;
   }
 
+  function configuredTrainerRewardsBeforeBoss(stage, bossLabel) {
+    const rows = [];
+    for (const window of trainerWindows) {
+      if (Number(window.stage) !== Number(stage) || window.beforeBoss !== bossLabel) continue;
+      for (const key of window.trainers || []) {
+        if (processedTrainerWindowKeys.has(key)) continue;
+        const trainer = trainerRowByKey.get(key);
+        if (!trainer) continue;
+        rows.push({
+          ...trainer,
+          deferredWindowId: window.id || null,
+          deferredWindowSource: window.source || null,
+          deferredWindowNote: window.note || null,
+        });
+        processedTrainerWindowKeys.add(key);
+      }
+    }
+    return rows;
+  }
+
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const stage = Number(boss.stage);
     const firstBattleInStage = !stageStarted.has(stage);
@@ -1281,6 +1312,25 @@ export function buildTeamExpSchedule({
       joinedAfterMapExp = addAvailable(stage);
     }
 
+    const trainerWindowRows = configuredTrainerRewardsBeforeBoss(stage, boss.label);
+    const trainerWindowExp = profile === 'major'
+      ? 0
+      : trainerWindowRows.reduce((sum, row) => sum + Number(row.totalExp || 0), 0);
+    const trainerWindowMoney = profile === 'major'
+      ? 0
+      : trainerWindowRows.reduce((sum, row) => sum + Number(row.prizeMoney || 0), 0);
+    if (trainerWindowExp > 0 || trainerWindowMoney > 0) {
+      const allocation = allocate(trainerWindowExp, boss, battleIndex);
+      totalAllocatedExp += allocation.allocated;
+      totalUnallocatedExp += allocation.unallocated;
+      totalMapExp += trainerWindowExp;
+      totalMapMoney += trainerWindowMoney;
+      currentMoney += trainerWindowMoney;
+      mapExpBefore += trainerWindowExp;
+      mapMoneyBefore += trainerWindowMoney;
+      mapTrainerCount += trainerWindowRows.length;
+    }
+
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const aceGapBefore = aceGapForStates(states, Number(boss.aceLevel));
     const expectedAceGapBattles = wild?.expectedExpPerBattle > 0
@@ -1317,6 +1367,15 @@ export function buildTeamExpSchedule({
       mapMoneyBefore,
       mapTrainerCount,
       mapSegments,
+      trainerWindowSegments: trainerWindowRows.map(row => ({
+        key: row.key,
+        map: row.map,
+        exp: Number(row.totalExp || 0),
+        money: Number(row.prizeMoney || 0),
+        windowId: row.deferredWindowId,
+        source: row.deferredWindowSource,
+        note: row.deferredWindowNote,
+      })),
       joinedAfterMapExp,
       moneyBefore,
       bestWildGrind: wild,
