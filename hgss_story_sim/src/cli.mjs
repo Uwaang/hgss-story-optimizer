@@ -2626,6 +2626,20 @@ async function cmdRouteExpDataAudit() {
   const world = expContext.world;
   const timingWindows = world?.expTiming?.windows || [];
 
+  const trainerWindows = world?.expTiming?.trainerWindows || [];
+  const deferredByTrainer = new Map();
+  for (const window of trainerWindows) {
+    for (const key of window.trainers || []) {
+      deferredByTrainer.set(key, {
+        id: window.id || null,
+        stage: Number(window.stage),
+        beforeBoss: window.beforeBoss || null,
+        source: window.source || null,
+        note: window.note || null,
+      });
+    }
+  }
+
   const timingByMap = new Map();
   for (const window of timingWindows) {
     for (const map of window.maps || []) {
@@ -2653,6 +2667,7 @@ async function cmdRouteExpDataAudit() {
           totalExp: Number(trainer.totalExp || 0),
           prizeMoney: Number(trainer.prizeMoney || 0),
           party: trainer.party || [],
+          deferredWindow: deferredByTrainer.get(trainer.key) || null,
         }))
         .sort((a, b) => b.totalExp - a.totalExp || a.key.localeCompare(b.key)),
     }))
@@ -2699,6 +2714,8 @@ async function cmdRouteExpDataAudit() {
       expYieldSpeciesCount: Number(world?.expYieldBySpecies?.size || 0),
       unresolvedMaps: world?.unresolvedMaps || [],
       timingWindowCount: timingWindows.length,
+      trainerWindowCount: trainerWindows.length,
+      deferredTrainerCount: deferredByTrainer.size,
     },
     stageSummary,
     maps,
@@ -2803,6 +2820,7 @@ async function cmdRouteExpStoryEvaluate() {
       bossRewardAfter: Number(ledger.rewardAfter || 0),
       joinedAfterMapExp: ledger.joinedAfterMapExp || [],
       mapSegments: ledger.mapSegments || [],
+      trainerWindowSegments: ledger.trainerWindowSegments || [],
     };
   });
 
