@@ -1091,6 +1091,19 @@ export function buildTeamExpSchedule({
     return added;
   }
 
+  function addAvailableUnmapped(stage) {
+    const added = [];
+    for (const state of pending) {
+      if (state.availableFrom !== stage || stateKeys.has(state.key)) continue;
+      const maps = candidateAcquisitionMaps(state.candidate);
+      if (maps.size) continue;
+      states.push({ ...state });
+      stateKeys.add(state.key);
+      added.push(state.key);
+    }
+    return added;
+  }
+
   function addAvailableBeforeBoss(stage, bossLabel) {
     const added = [];
     for (const state of pending) {
@@ -1226,8 +1239,14 @@ export function buildTeamExpSchedule({
 
     if (firstBattleInStage) {
       stageStarted.add(stage);
-      if (stage === 0 || sameStageJoinPolicy === 'before-map-exp') {
+      if (sameStageJoinPolicy === 'before-map-exp') {
         addAvailable(stage);
+      } else if (stage === 0 && sameStageJoinPolicy === 'map-order') {
+        // The starter/manual unmapped acquisitions exist before Route 29 EXP,
+        // but stage-0 wild members must wait until their actual source map is
+        // processed. Previously all stage-0 candidates were added here,
+        // allowing later catches to receive earlier-route EXP retroactively.
+        addAvailableUnmapped(stage);
       }
     }
 
