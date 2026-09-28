@@ -1412,6 +1412,67 @@ jobs:
           path: hgss_story_sim/results/electric-trace-lv63.json
           if-no-files-found: error
 
+  lv72_73_cross_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[lv73-cross]')
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: lv72team-at72
+            level: 72
+            team: Cyndaquil,Wooper,Rhyhorn,Heracross,Magnemite,Gastly
+          - label: lv72team-at73
+            level: 73
+            team: Cyndaquil,Wooper,Rhyhorn,Heracross,Magnemite,Gastly
+          - label: lv73team-at72
+            level: 72
+            team: Cyndaquil,Wooper,Rhyhorn,Magnemite,Geodude,Abra
+          - label: lv73team-at73
+            level: 73
+            team: Cyndaquil,Wooper,Rhyhorn,Magnemite,Geodude,Abra
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/lv72-73-cross-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: lv72-73-cross-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/lv72-73-cross-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: lv72-73-cross-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Cross-evaluate late-game hard bosses
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 --seed-offset=723000 \
+            > results/${{ matrix.label }}-hard500.json
+      - name: Cross-evaluate Red high-run
+        run: |
+          node src/cli.mjs equal-level-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team="${{ matrix.team }}" --level=${{ matrix.level }} \
+            --bosses="Red" --runs=1500 --seed-offset=724000 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Enforce four-move legality
+        run: |
+          if jq -e '.. | objects | select(has("moves")) | .moves | select(type=="array" and length > 4)' results/*.json >/dev/null; then
+            echo "Found a moves array longer than four slots" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lv72-73-cross-${{ matrix.label }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
