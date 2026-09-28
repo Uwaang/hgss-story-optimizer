@@ -1175,6 +1175,172 @@ jobs:
           path: hgss_story_sim/results/prep-cache-*.json
           if-no-files-found: error
 
+  evo_ab_postfix_targeted_validation:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: lv70-pupitar-top2
+            level: 70
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Slowpoke::Slowpoke->Slowking#2,Larvitar::Pupitar->Tyranitar#1'
+          - label: lv70-larvitar-top3
+            level: 70
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Slowpoke::Slowpoke->Slowking#2,Larvitar::Larvitar->Tyranitar#1'
+          - label: lv65-seed100k-pupitar
+            level: 65
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Heracross::Heracross->Heracross#1,Geodude::Geodude->Golem#1,Magnemite::Magnemite->Magneton#1,Abra::Abra->Alakazam#1,Larvitar::Pupitar->Tyranitar#1'
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-target-${{ matrix.label }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-target-${{ matrix.label }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.label }}-${{ github.run_id }}
+          restore-keys: |
+            evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-${{ matrix.label }}-
+      - name: Revalidate bug-affected Tyranitar candidate
+        run: |
+          mkdir -p results
+          keys='${{ matrix.team_keys }}'
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=500 \
+            > results/${{ matrix.label }}-hard500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses=Red --runs=1500 \
+            > results/${{ matrix.label }}-red1500.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          for f in results/*.json; do
+            jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' "$f" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-target-${{ matrix.label }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
+  evo_ab_postfix_boundary_search:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [70, 71, 72, 73, 74, 75]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-boundary-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-boundary-lv${{ matrix.level }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            hgss_story_sim/.cache/battles
+            hgss_story_sim/.cache/preparations
+          key: evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-boundary-lv${{ matrix.level }}-${{ github.run_id }}
+          restore-keys: |
+            evo-postfix-v1-${{ runner.os }}-${{ hashFiles('hgss_story_sim/src/battle.mjs', 'hgss_story_sim/src/trainer-ai.mjs', 'hgss_story_sim/src/acquisition.mjs', 'hgss_story_sim/src/cli.mjs', 'hgss_story_sim/config/evolution-access.hgss.json', 'hgss_story_sim/config/move-access.canonical.json', 'hgss_story_sim/package.json') }}-boundary-lv${{ matrix.level }}-
+      - name: Post-fix trade-aware boundary search
+        run: |
+          mkdir -p results
+          node src/cli.mjs equal-level-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --level=${{ matrix.level }} --candidate-cap=36 --beam-width=32 \
+            --proxy-finalists=24 --screen-runs=4 --final-cap=12 --final-runs=32 \
+            --hybrid-runs=4 --hybrid-pre-cap=256 \
+            --size4-mode=bridge --size4-multiplier=8 --size4-pre-cap=256 \
+            --completion-choices=6 --completion-runs=2 \
+            > results/postfix-boundary-lv${{ matrix.level }}.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' results/postfix-boundary-lv${{ matrix.level }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-boundary-lv${{ matrix.level }}
+          path: hgss_story_sim/results/postfix-boundary-lv${{ matrix.level }}.json
+          if-no-files-found: error
+
+  evo_ab_postfix_boundary_validate:
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story'
+    needs: evo_ab_postfix_boundary_search
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        level: [70, 71, 72, 73, 74, 75]
+    runs-on: ubuntu-latest
+    env:
+      HGSS_BATTLE_CACHE_PATH: .cache/battles/postfix-top-lv${{ matrix.level }}.json
+      HGSS_BATTLE_CACHE_NAMESPACE: evo-postfix-v1
+      HGSS_PREPARATION_CACHE_PATH: .cache/preparations/postfix-top-lv${{ matrix.level }}.json
+      HGSS_PREPARATION_CACHE_NAMESPACE: evo-postfix-prep-v1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: evo-postfix-boundary-lv${{ matrix.level }}
+          path: hgss_story_sim/input
+      - name: High-run validation of post-fix boundary top team
+        run: |
+          mkdir -p results
+          src=input/postfix-boundary-lv${{ matrix.level }}.json
+          keys=$(jq -r '.final[0].teamKeys | join(",")' "$src")
+          test -n "$keys" && test "$keys" != "null"
+          printf '%s\n' "$keys" > results/team-keys.txt
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Lance 2" --runs=500 > results/lance2-500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses=Red --runs=1500 > results/red-1500.json
+          node src/cli.mjs equal-level-story-evaluate \
+            --evolution-policy=trade-aware --team-keys="$keys" --level=${{ matrix.level }} \
+            --bosses="Will 2,Bruno 2,Blue,Lance 2,Red" --runs=250 > results/hard250.json
+      - name: Assert all player movesets have at most four moves
+        run: |
+          for f in results/*.json; do
+            jq -e '[.. | objects | select(has("moves")) | .moves | select(type == "array") | length] | all(. <= 4)' "$f" >/dev/null
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evo-postfix-boundary-validation-lv${{ matrix.level }}
+          path: hgss_story_sim/results/*
+          if-no-files-found: error
+
   smoke:
     runs-on: ubuntu-latest
     defaults:
