@@ -2606,6 +2606,172 @@ async function cmdExpBudget() {
   }, null, 2));
 }
 
+async function cmdRouteExpStoryEvaluate() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'max'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'balanced'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '4'))));
+  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+
+  if (expProfile === 'ace') {
+    throw new Error('route-exp-story-evaluate requires a route EXP profile, not ace');
+  }
+  if (teamKeys.length !== 6 && teamNames.length !== 6) {
+    throw new Error('route-exp-story-evaluate requires six --team species or six --team-keys');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+
+  const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const bySpecies = new Map();
+  for (const candidate of pool.candidates) {
+    const rows = bySpecies.get(candidate.species) || [];
+    rows.push(candidate);
+    bySpecies.set(candidate.species, rows);
+  }
+
+  const team = teamKeys.length
+    ? teamKeys.map(key => {
+        const candidate = byKey.get(key);
+        if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
+        return candidate;
+      })
+    : teamNames.map(name => {
+        const matches = bySpecies.get(name) || [];
+        if (!matches.length) throw new Error('Canonical candidate not found: ' + name);
+        if (matches.length > 1) {
+          throw new Error(
+            'Ambiguous trade-aware species ' + name + '; use --team-keys. Options: ' +
+            matches.map(candidateIdentity).join(', ')
+          );
+        }
+        return matches[0];
+      });
+
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Requested route EXP team violates family/exclusive-group constraints');
+  }
+  const starter = team.find(candidate =>
+    candidate.exclusiveGroup === 'starter' &&
+    candidate.species.toLowerCase() === starterName.toLowerCase()
+  );
+  if (!starter) throw new Error('Requested team must contain the selected starter');
+
+  const evaluation = await evaluateCandidatesWithMoveAccess(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    grindPolicy,
+    { p1AiMode: 'smart' },
+  );
+
+  const scheduleRows = evaluation.expSchedule?.battles || [];
+  const checkpoints = evaluation.rows.map((row, index) => {
+    const ledger = scheduleRows[index] || {};
+    return {
+      index,
+      boss: row.boss,
+      stage: Number(ledger.stage ?? 0),
+      aceLevel: Number(row.aceLevel || ledger.aceLevel || 0),
+      playerLevels: row.playerLevels || {},
+      availableMons: row.availableMons || [],
+      winRate: Number(row.winRate || 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
+      mapExpBefore: Number(ledger.mapExpBefore || 0),
+      bossRewardAfter: Number(ledger.rewardAfter || 0),
+      joinedAfterMapExp: ledger.joinedAfterMapExp || [],
+      mapSegments: ledger.mapSegments || [],
+    };
+  });
+
+  const falkner = checkpoints.find(row => row.boss === 'Falkner') || null;
+  const red = checkpoints.find(row => row.boss === 'Red') || null;
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    model: 'route-exp-envelope-v1',
+    version,
+    evolutionPolicy,
+    starter: starterName,
+    team: team.map(candidate => ({
+      species: candidate.species,
+      terminalSpecies: candidate.terminalSpecies || null,
+      key: candidateIdentity(candidate),
+      availableFrom: Number(candidate.availableFrom || 0),
+      entryLevelMin: candidate.entryLevelMin ?? null,
+      entryLevelMax: candidate.entryLevelMax ?? null,
+      sources: candidate.sources || [],
+    })),
+    assumptions: {
+      expProfile,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+      resourceProfile,
+      spendPolicy,
+      playerAi: 'smart',
+      routeExpInterpretation: expProfile === 'normal-route'
+        ? 'all source-visible trainer rewards on curated normal-route maps; not yet a proven mandatory-only trainer subset'
+        : expProfile === 'all-accessible'
+          ? 'all source-visible trainer rewards on every modeled accessible map; an upper route envelope'
+          : 'major scored trainer battles only',
+    },
+    dataAudit: {
+      sourceCommit: story.config.sourceCommit,
+      mapTrainerCount: Number(expContext.world?.mapTrainerRows?.length || 0),
+      mapCount: Number(expContext.world?.mapCount || 0),
+      unresolvedMaps: expContext.world?.unresolvedMaps || [],
+      timingWindowCount: Number(expContext.world?.expTiming?.windows?.length || 0),
+      expYieldSpeciesCount: Number(expContext.world?.expYieldBySpecies?.size || 0),
+    },
+    ledger: {
+      totalNaturalExp: Number(evaluation.expSchedule?.totalNaturalExp || 0),
+      totalMapExp: Number(evaluation.expSchedule?.totalMapExp || 0),
+      totalMajorExp: Number(evaluation.expSchedule?.totalMajorExp || 0),
+      totalAllocatedExp: Number(evaluation.expSchedule?.totalAllocatedExp || 0),
+      totalUnallocatedExp: Number(evaluation.expSchedule?.totalUnallocatedExp || 0),
+      totalGrindExp: Number(evaluation.expSchedule?.totalGrindExp || 0),
+      unknownEntryLevels: evaluation.expSchedule?.unknownEntryLevels || [],
+    },
+    firstGym: falkner,
+    finalBoss: red,
+    finalTeam: evaluation.finalTeam,
+    finalLevels: evaluation.finalLevels,
+    performance: {
+      score: Number(evaluation.score || 0),
+      worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+      bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+      storyClearGeometricScore: Number(evaluation.storyClearGeometricScore || 0),
+      storyClearCoverageScore: Number(evaluation.storyClearCoverageScore || 0),
+    },
+    checkpoints,
+  }, null, 2));
+}
+
 async function cmdExpBudgetSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -8101,6 +8267,7 @@ const commands = {
   'exp-envelope': cmdExpEnvelope,
   'exp-envelope-smoke': cmdExpEnvelopeSmoke,
   'exp-budget': cmdExpBudget,
+  'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
