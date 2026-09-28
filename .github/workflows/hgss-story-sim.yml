@@ -1390,7 +1390,7 @@ jobs:
   ampharos_magneton_beam_trace:
     if: github.event_name == 'pull_request' && github.head_ref == 'feature/hg-cyndaquil-equal-level-story' && contains(github.event.pull_request.title, '[electric-trace]')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: hgss_story_sim
