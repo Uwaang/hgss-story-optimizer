@@ -3,7 +3,7 @@ name: route-exp-overnight-candidate-sweep
 on:
   push:
     branches:
-      - exp/overnight-endogenous-candidates
+      - exp/overnight-candidate-sweep-v2
 
 concurrency:
   group: route-exp-overnight-candidate-sweep-${{ github.ref }}
