@@ -1935,3 +1935,42 @@ but do **not** establish:
 > the best route team is contained in those 26 equal-level survivors.
 
 The next search stage should widen candidate generation before expensive route battle evaluation.
+
+
+## 32. Direct route-aware team search
+
+The repository already exposes `route-exp-story-search`, which uses the canonical candidate pool and the route EXP evaluator directly rather than reranking only equal-level survivors.
+
+Current search architecture:
+
+1. evaluate each individual candidate under route EXP semantics;
+2. multi-objective select a candidate shortlist;
+3. start with the required Cyndaquil family;
+4. expand the beam one member at a time;
+5. evaluate every partial team with the actual route EXP schedule and route battle simulator;
+6. retain a multi-objective Pareto/diversity beam;
+7. rescore final six-member beam states at higher runs.
+
+This is semantically stronger than equal-level reranking, but computationally much more expensive because partial teams are battle-evaluated at every beam stage.
+
+The immediate preflight uses:
+
+```
+candidateCap = 16
+beamWidth    = 4
+screenRuns   = 1
+beam runs    = 1
+finalRuns    = 8
+grindBudget  = 0
+allocator    = boss-aware-soft
+objective    = story-clear
+```
+
+This preflight is not intended to establish the best team. It tests:
+
+- route-aware search end-to-end correctness;
+- candidate/source identity preservation;
+- runtime;
+- whether previously validated natural-route leaders remain reachable with a narrow beam.
+
+If successful, the next experiment should increase `candidateCap` and `beamWidth` and compare search stability/recall before committing to a large overnight route search.
