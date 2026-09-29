@@ -1077,7 +1077,6 @@ async function cmdSimulate() {
       expProfile,
       'HEARTGOLD',
       grindPolicy,
-      grindBudget: Number(expContext?.grindBudget || 0),
       entryLevelPolicy,
       sameStageJoinPolicy,
       expAllocator,
@@ -2904,6 +2903,7 @@ async function cmdRouteExpStoryEvaluate() {
     assumptions: {
       expProfile,
       grindPolicy,
+      grindBudget: Number(expContext?.grindBudget || 0),
       entryLevelPolicy,
       sameStageJoinPolicy,
       expAllocator,
