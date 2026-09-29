@@ -69,8 +69,8 @@ function mergeExpAccess(baseAccess, expAccess) {
 
 function normalizeGrindPolicy(value) {
   const policy = String(value || 'none').toLowerCase();
-  if (!['none', 'ace-paid', 'budgeted'].includes(policy)) {
-    throw new Error(`Unknown grind policy: ${value}. Use none, ace-paid, or budgeted.`);
+  if (!['none', 'ace-paid', 'budgeted', 'planned'].includes(policy)) {
+    throw new Error(`Unknown grind policy: ${value}. Use none, ace-paid, budgeted, or planned.`);
   }
   return policy;
 }
@@ -293,6 +293,12 @@ function arg(name, fallback) {
 
 async function loadStory() {
   const config = await readJson('config/story-bosses.json');
+  const source = await loadPretTrainerData(config.sourceCommit);
+  return { config, source, bosses: extractBosses(source, config) };
+}
+
+async function loadPracticalRedPrepStory() {
+  const config = await readJson('config/practical-red-prep-bosses.json');
   const source = await loadPretTrainerData(config.sourceCommit);
   return { config, source, bosses: extractBosses(source, config) };
 }
@@ -712,6 +718,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         profile: expProfile,
         grindPolicy: expContext?.grindPolicy || 'none',
         grindBudget: expContext?.grindBudget || 0,
+        grindPlanBattles: expContext?.grindPlanBattles || {},
         entryLevelPolicy: expContext?.entryLevelPolicy || 'midpoint',
         sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'map-order',
         allocator: expContext?.expAllocator || 'balanced',
