@@ -1974,3 +1974,87 @@ This preflight is not intended to establish the best team. It tests:
 - whether previously validated natural-route leaders remain reachable with a narrow beam.
 
 If successful, the next experiment should increase `candidateCap` and `beamWidth` and compare search stability/recall before committing to a large overnight route search.
+
+## 34. Practical Red-prep endogenous grind model
+
+The fixed `budgeted` optional-grind experiments remain useful as Red breakpoints, but they should not be the primary practical-story model.
+
+A route-wide fixed budget such as +1.6M EXP is progressively released before Red. This can make the party unrealistically overtrained during Johto and Kanto even though a typical player would defer most heavy grinding until the postgame.
+
+The practical model therefore separates three concepts.
+
+### 34.1 Practical route profile
+
+`config/practical-red-prep-bosses.json` keeps the canonical story route through Blue and then inserts:
+
+```
+Will 2 -> Koga 2 -> Bruno 2 -> Karen 2 -> Lance 2 -> Red
+```
+
+The rematch Elite Four is still not claimed to be mandatory for unlocking Red. It is modeled as a common Red-preparation route whose battle rewards are real EXP supply.
+
+The original `story-bosses.json` remains the minimal route and is not changed.
+
+### 34.2 Grind decision variable is battle count, not an arbitrary EXP cap
+
+The scheduler now supports a `planned` grind policy.
+
+At checkpoint t, the decision variable is:
+
+```
+g_t = expected number of repeatable wild battles before checkpoint t
+```
+
+The EXP granted by that action is source-backed:
+
+```
+grindExp_t = g_t * bestModeledWildExpPerBattle_t
+```
+
+Therefore 100 battles early and 100 battles late naturally have different EXP value. No linear or exponential release curve is needed to force this behavior.
+
+### 34.3 Story reliability and Red preparation are separated
+
+`route-exp-practical-grind` constructs a greedy endogenous frontier.
+
+For a requested story reliability target:
+
+1. begin with natural route EXP and no optional grind;
+2. visit checkpoints in route order through Lance 2;
+3. if a checkpoint is below the requested win-rate target, find the minimum additional modeled wild-battle count that reaches the target;
+4. keep that investment permanently for later checkpoints;
+5. include all natural boss rewards, including the rematch Elite Four rewards;
+6. evaluate Red with no Red-specific grind;
+7. price additional Red-only grind separately for requested Red win-rate targets.
+
+The upper bound for a checkpoint search is not an arbitrary EXP budget. It is the modeled battle count required to raise every currently available member to level 100 at the best currently modeled wild EXP source.
+
+Current pilot output reports:
+
+- per-checkpoint grind decisions;
+- expected wild battles;
+- corresponding grind EXP;
+- best modeled wild EXP source;
+- levels and win rates;
+- cumulative pre-Red grind burden;
+- baseline Red performance after the practical route;
+- additional Red grind required for each requested Red target.
+
+This is intentionally a first greedy implementation, not a proof of globally minimal grind. A later beam/dynamic-programming implementation can retain multiple partial grind plans when an early investment has different downstream value.
+
+### 34.4 Interpretation
+
+The preferred comparison is no longer:
+
+> Which team performs best when every candidate receives the same predeclared +1.6M EXP envelope?
+
+Instead:
+
+> How much optional training does this team need to make ordinary story checkpoints reliable, how much EXP does the practical rematch route supply naturally, and how much additional training is required specifically for Red?
+
+The older zero-grind and fixed-budget experiments remain useful controls:
+
+- zero grind measures natural-EXP efficiency;
+- fixed budget measures high-training performance and Red breakpoints;
+- endogenous planned grind measures practical story burden.
+
