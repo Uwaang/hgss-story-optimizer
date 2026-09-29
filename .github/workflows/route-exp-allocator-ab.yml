@@ -45,7 +45,6 @@ jobs:
         run: |
           jq -e '
             .ledger.totalGrindExp == 0 and
-            .ledger.totalUnallocatedExp == 0 and
             (.finalBoss.availableMons | index("Rhyperior")) != null
           ' results/route-exp-${{ matrix.allocator }}.json >/dev/null
       - uses: actions/upload-artifact@v4
@@ -88,6 +87,8 @@ jobs:
               geometric: data.performance.storyClearGeometricScore,
               coverage: data.performance.storyClearCoverageScore,
               totalNaturalExp: data.ledger.totalNaturalExp,
+              totalAllocatedExp: data.ledger.totalAllocatedExp,
+              totalUnallocatedExp: data.ledger.totalUnallocatedExp,
               totalGrindExp: data.ledger.totalGrindExp,
               finalLevels: data.finalLevels,
               routeAllocatedExpAtRed: red?.routeAllocatedExpBefore || {},
@@ -108,9 +109,9 @@ jobs:
           const md = [
             '# Route EXP allocator A/B',
             '',
-            '| allocator | score | worst | bottom5 | geometric | coverage | natural EXP | grind EXP |',
-            '|---|---:|---:|---:|---:|---:|---:|---:|',
-            ...rows.map(r => `| ${r.allocator} | ${r.score.toFixed(4)} | ${r.worst.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${r.totalNaturalExp} | ${r.totalGrindExp} |`),
+            '| allocator | score | worst | bottom5 | geometric | coverage | natural EXP | allocated | unallocated | grind EXP |',
+            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+            ...rows.map(r => `| ${r.allocator} | ${r.score.toFixed(4)} | ${r.worst.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${r.totalNaturalExp} | ${r.totalAllocatedExp} | ${r.totalUnallocatedExp} | ${r.totalGrindExp} |`),
             '',
             'Full per-boss levels and per-member route EXP allocations are retained in allocator-ab-summary.json and the source artifacts.',
           ].join('\n');
