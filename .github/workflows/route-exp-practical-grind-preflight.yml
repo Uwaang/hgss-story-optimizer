@@ -48,7 +48,8 @@ jobs:
             ([.storyFrontier[0].checkpoints[].boss] | index("Lance 2")) != null and
             ([.storyFrontier[0].checkpoints[].boss] | index("Red")) != null and
             (.storyFrontier[0].storyGrindBattles >= 0) and
-            ([.storyFrontier[0].redFrontier[].totalGrindBattles] | all(. >= .storyFrontier[0].storyGrindBattles))
+            (.storyFrontier[0] as $s |
+              ([$s.redFrontier[].totalGrindBattles] | all(. >= $s.storyGrindBattles)))
           ' results/practical-grind-preflight.json >/dev/null
       - uses: actions/upload-artifact@v4
         with:
