@@ -1331,6 +1331,57 @@ function evaluationDominates(a, b) {
   return atLeastAsGood && strictlyBetter;
 }
 
+// Route-story search intentionally treats acquisition friction as a legality/timing
+// constraint, not as an optimization objective. Capture encounter counts and direct
+// purchase burden remain in diagnostics, but they must not dominate a combat-strong
+// route candidate.
+function routeEvaluationDominates(a, b) {
+  const aExp = evaluationExpBurden(a);
+  const bExp = evaluationExpBurden(b);
+  const aUnknown = evaluationExpUnknown(a);
+  const bUnknown = evaluationExpUnknown(b);
+  const atLeastAsGood =
+    a.score >= b.score &&
+    a.worstBossWinRate >= b.worstBossWinRate &&
+    a.bottom5BossWinRate >= b.bottom5BossWinRate &&
+    a.storyClearGeometricScore >= b.storyClearGeometricScore &&
+    a.storyClearCoverageScore >= b.storyClearCoverageScore &&
+    aExp <= bExp &&
+    aUnknown <= bUnknown;
+  const strictlyBetter =
+    a.score > b.score ||
+    a.worstBossWinRate > b.worstBossWinRate ||
+    a.bottom5BossWinRate > b.bottom5BossWinRate ||
+    a.storyClearGeometricScore > b.storyClearGeometricScore ||
+    a.storyClearCoverageScore > b.storyClearCoverageScore ||
+    aExp < bExp ||
+    aUnknown < bUnknown;
+  return atLeastAsGood && strictlyBetter;
+}
+
+function routeAvailabilityBucket(candidate) {
+  const stage = Math.max(0, Number(candidate?.availableFrom || 0));
+  if (stage <= 6) return 'early';
+  if (stage <= 14) return 'mid';
+  return 'late';
+}
+
+function routePostAvailabilityMetrics(screenRow) {
+  const rows = screenRow?.evaluation?.rows || [];
+  const active = rows.filter(row => Array.isArray(row.availableMons) && row.availableMons.length > 0);
+  if (!active.length) return { score: 0, progress: 0, battles: 0 };
+  const score = active.reduce((sum, row) => sum + Number(row.winRate || 0), 0) / active.length;
+  const progress = active.reduce(
+    (sum, row) => sum + Number(row.battleProgressScore ?? row.winRate ?? 0),
+    0,
+  ) / active.length;
+  return { score, progress, battles: active.length };
+}
+
+function routeLateSpecialistCount(team) {
+  return (team || []).filter(candidate => routeAvailabilityBucket(candidate) === 'late').length;
+}
+
 function stateTieKey(state) {
   return state.team.map(candidateIdentity).sort().join('|');
 }
@@ -1411,6 +1462,71 @@ function selectMultiObjectiveBeam(states, width, objective = 'mean') {
   return selected.slice(0, width);
 }
 
+function selectRouteStoryBeam(states, width, objective = 'story-clear') {
+  if (states.length <= width) return states;
+
+  const front = states.filter((state, index) =>
+    !states.some((other, otherIndex) =>
+      index !== otherIndex && routeEvaluationDominates(other.evaluation, state.evaluation)
+    )
+  );
+  const selected = [];
+  const keys = new Set();
+  function add(state) {
+    if (!state || selected.length >= width) return;
+    const key = stateTieKey(state);
+    if (keys.has(key)) return;
+    keys.add(key);
+    selected.push(state);
+  }
+
+  const byObjective = [...front].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byBottom5 = [...front].sort((a, b) =>
+    b.evaluation.bottom5BossWinRate - a.evaluation.bottom5BossWinRate ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byWorst = [...front].sort((a, b) =>
+    b.evaluation.worstBossWinRate - a.evaluation.worstBossWinRate ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  // Preserve one path that actually carries late-route specialists. This uses all
+  // expanded states rather than only the Pareto front so a Mt. Silver endowment
+  // is not deleted before it can show marginal value as member 5/6.
+  const byLateSpecialists = [...states].sort((a, b) =>
+    routeLateSpecialistCount(b.team) - routeLateSpecialistCount(a.team) ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const byExp = [...front].sort((a, b) =>
+    evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  add(byObjective[0]);
+  add(byBottom5[0]);
+  add(byLateSpecialists[0]);
+  add(byWorst[0]);
+  add(byExp[0]);
+  for (const state of byObjective) add(state);
+
+  if (selected.length < width) {
+    const fallback = [...states].sort((a, b) =>
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      evaluationExpBurden(a.evaluation) - evaluationExpBurden(b.evaluation) ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    );
+    for (const state of fallback) add(state);
+  }
+  return selected.slice(0, width);
+}
+
 function candidateScreenTieKey(row) {
   return candidateIdentity(row.candidate);
 }
@@ -1463,6 +1579,97 @@ function selectCandidateScreenRows(rows, width, objective = 'mean') {
   if (selected.length < width) {
     for (const row of rows) add(row);
   }
+  return selected.slice(0, width);
+}
+
+function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') {
+  if (rows.length <= width) return rows;
+
+  const selected = [];
+  const seen = new Set();
+  const seenFamilies = new Set();
+  function add(row, familyDistinct = false) {
+    if (!row || selected.length >= width) return false;
+    const key = candidateScreenTieKey(row);
+    const family = candidateFamilyIdentity(row.candidate);
+    if (seen.has(key) || (familyDistinct && seenFamilies.has(family))) return false;
+    seen.add(key);
+    seenFamilies.add(family);
+    selected.push(row);
+    return true;
+  }
+
+  const lateQuota = Math.max(2, Math.round(width * 0.30));
+  const midQuota = Math.max(1, Math.round(width * 0.25));
+  const earlyQuota = Math.max(1, width - lateQuota - midQuota);
+  const quotas = { early: earlyQuota, mid: midQuota, late: lateQuota };
+
+  for (const bucket of ['early', 'mid', 'late']) {
+    const bucketRows = rows.filter(row => routeAvailabilityBucket(row.candidate) === bucket);
+    const before = selected.length;
+    const target = Math.min(width, before + quotas[bucket]);
+    const byObjective = [...bucketRows].sort((a, b) =>
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+    );
+    const byPostProgress = [...bucketRows].sort((a, b) => {
+      const am = routePostAvailabilityMetrics(a);
+      const bm = routePostAvailabilityMetrics(b);
+      return bm.progress - am.progress ||
+        bm.score - am.score ||
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+    });
+    const byPostScore = [...bucketRows].sort((a, b) => {
+      const am = routePostAvailabilityMetrics(a);
+      const bm = routePostAvailabilityMetrics(b);
+      return bm.score - am.score ||
+        bm.progress - am.progress ||
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+    });
+    const byEntryEndowment = [...bucketRows].sort((a, b) =>
+      Number(b.candidate.entryLevelMax || 0) - Number(a.candidate.entryLevelMax || 0) ||
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+    );
+
+    for (const ordered of [byObjective, byPostProgress, byPostScore, byEntryEndowment]) {
+      if (selected.length >= target) break;
+      for (const row of ordered) {
+        if (add(row, true)) break;
+      }
+    }
+    for (const row of byPostProgress) {
+      if (selected.length >= target) break;
+      add(row, true);
+    }
+    // Source variants are semantically distinct, so allow a same-family source only
+    // after the family-diverse quota has been exhausted.
+    for (const row of byPostProgress) {
+      if (selected.length >= target) break;
+      add(row, false);
+    }
+  }
+
+  const routeFront = rows.filter((row, index) =>
+    !rows.some((other, otherIndex) =>
+      index !== otherIndex && routeEvaluationDominates(other.evaluation, row.evaluation)
+    )
+  ).sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+    candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+  );
+  for (const row of routeFront) add(row, true);
+
+  const fallback = [...rows].sort((a, b) => {
+    const am = routePostAvailabilityMetrics(a);
+    const bm = routePostAvailabilityMetrics(b);
+    return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      bm.progress - am.progress ||
+      candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+  });
+  for (const row of fallback) add(row, false);
   return selected.slice(0, width);
 }
 
@@ -1613,6 +1820,7 @@ async function runBeamSearch({
   memberContributionRerank = false,
   contributionRuns = null,
   battleOptions = {},
+  searchPolicy = 'generic',
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -1631,7 +1839,10 @@ async function runBeamSearch({
         candidateIdentity(row.candidate) === candidateIdentity(requiredCandidate)
       )
     : screenRows;
-  let screened = selectCandidateScreenRows(eligibleScreenRows, candidateCap, objective)
+  const routeStoryPolicy = searchPolicy === 'route-story';
+  let screened = (routeStoryPolicy
+    ? selectRouteCandidateScreenRows(eligibleScreenRows, candidateCap, objective)
+    : selectCandidateScreenRows(eligibleScreenRows, candidateCap, objective))
     .map(row => row.candidate);
   if (requiredCandidate && !screened.some(mon => candidateIdentity(mon) === candidateIdentity(requiredCandidate))) {
     screened = [requiredCandidate, ...screened.slice(0, Math.max(0, candidateCap - 1))];
@@ -1690,7 +1901,9 @@ async function runBeamSearch({
       }
     }
 
-    beam = selectMultiObjectiveBeam(expanded, beamWidth, objective);
+    beam = routeStoryPolicy
+      ? selectRouteStoryBeam(expanded, beamWidth, objective)
+      : selectMultiObjectiveBeam(expanded, beamWidth, objective);
     beamTrace.push({
       targetSize,
       expandedCount: expanded.length,
@@ -1704,6 +1917,7 @@ async function runBeamSearch({
         storyClearGeometricScore: Number(state.evaluation?.storyClearGeometricScore || 0),
         storyClearCoverageScore: Number(state.evaluation?.storyClearCoverageScore || 0),
         expBurden: evaluationExpBurden(state.evaluation),
+        lateSpecialistCount: routeLateSpecialistCount(state.team),
       })),
     });
     if (!beam.length) break;
@@ -1772,6 +1986,11 @@ async function runBeamSearch({
         storyClearGeometricScore: Number(row?.evaluation?.storyClearGeometricScore || 0),
         storyClearCoverageScore: Number(row?.evaluation?.storyClearCoverageScore || 0),
         expBurden: row ? evaluationExpBurden(row.evaluation) : null,
+        availabilityBucket: routeAvailabilityBucket(candidate),
+        entryLevelMax: Number(candidate.entryLevelMax || 0),
+        postAvailabilityScore: routePostAvailabilityMetrics(row).score,
+        postAvailabilityProgress: routePostAvailabilityMetrics(row).progress,
+        postAvailabilityBattles: routePostAvailabilityMetrics(row).battles,
       };
     }),
     beamTrace,
@@ -1795,6 +2014,7 @@ async function runBeamSearch({
     finalRescoredTeams: finalStates.length,
     finalRunsPerBoss: finalRuns,
     objective,
+    searchPolicy,
     memberContributionRerank: Boolean(memberContributionRerank),
     contributionRunsPerBoss: memberContributionRerank ? normalizedContributionRuns : null,
     baselineTop,
@@ -2157,6 +2377,7 @@ async function cmdRouteExpStorySearch() {
     grindPolicy,
     objective,
     battleOptions,
+    searchPolicy: 'route-story',
   });
 
   await flushBattleCache();
@@ -2179,6 +2400,7 @@ async function cmdRouteExpStorySearch() {
       resourceProfile,
       spendPolicy,
       objective,
+      searchPolicy: 'route-story',
       runs,
       screenRuns,
       finalRuns,
