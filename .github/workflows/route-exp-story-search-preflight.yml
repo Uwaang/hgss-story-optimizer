@@ -1,0 +1,54 @@
+name: route-exp-story-search-preflight
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  preflight:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[route-search-preflight]')
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Route-aware beam preflight
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route \
+            --grind-policy=budgeted --grind-budget=0 \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=story-clear \
+            --screen-runs=1 --runs=1 --final-runs=8 \
+            --candidate-cap=16 --beam-width=4 \
+            > results/route-exp-story-search-preflight.json
+      - name: Assert search semantics
+        run: |
+          jq -e '
+            .candidatePool >= 20 and
+            .assumptions.routeBuildOptimization == true and
+            .assumptions.grindBudget == 0 and
+            (.top | length) >= 1 and
+            ([.top[].teamKeys | length] | all(. == 6))
+          ' results/route-exp-story-search-preflight.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-story-search-preflight
+          path: hgss_story_sim/results/route-exp-story-search-preflight.json
+          if-no-files-found: error
