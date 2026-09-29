@@ -1216,6 +1216,13 @@ function searchResultRow(team, evaluation) {
     expBurdenUnknown: evaluationExpUnknown(evaluation),
     captureSearch: evaluation.captureSearch,
     team: team.map(x => x.species),
+    teamKeys: team.map(candidateIdentity),
+    evolutionVariants: team.map(candidate => ({
+      species: candidate.species,
+      searchKey: candidateIdentity(candidate),
+      terminalSpecies: candidate.terminalSpecies || null,
+      speciesByStage: candidate.speciesByStage || [],
+    })),
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
     expProfile: evaluation.expProfile,
@@ -1263,6 +1270,7 @@ async function screenCandidates(
   expContext = null,
   grindPolicy = 'none',
   objective = 'mean',
+  battleOptions = {},
 ) {
   const rows = [];
   for (const candidate of candidates) {
@@ -1274,6 +1282,7 @@ async function screenCandidates(
       expContext,
       grindPolicy,
       objective,
+      battleOptions,
     );
     rows.push({ candidate, evaluation });
   }
@@ -1323,7 +1332,7 @@ function evaluationDominates(a, b) {
 }
 
 function stateTieKey(state) {
-  return state.team.map(x => x.species).sort().join('|');
+  return state.team.map(candidateIdentity).sort().join('|');
 }
 
 function selectMultiObjectiveBeam(states, width, objective = 'mean') {
@@ -1403,7 +1412,7 @@ function selectMultiObjectiveBeam(states, width, objective = 'mean') {
 }
 
 function candidateScreenTieKey(row) {
-  return row.candidate.species;
+  return candidateIdentity(row.candidate);
 }
 
 function selectCandidateScreenRows(rows, width, objective = 'mean') {
@@ -1603,6 +1612,7 @@ async function runBeamSearch({
   objective = 'mean',
   memberContributionRerank = false,
   contributionRuns = null,
+  battleOptions = {},
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -1612,6 +1622,7 @@ async function runBeamSearch({
     expContext,
     grindPolicy,
     objective,
+    battleOptions,
   );
 
   const eligibleScreenRows = requiredCandidate
@@ -1642,6 +1653,7 @@ async function runBeamSearch({
           expContext,
           grindPolicy,
           objective,
+          battleOptions,
         )
       );
     }
@@ -2049,6 +2061,98 @@ async function cmdConvergence() {
       storyClearCoverageScore: baseline.storyClearCoverageScore,
     } : null,
     rows,
+  }, null, 2));
+}
+
+async function cmdRouteExpStorySearch() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '1'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
+  const finalRuns = Math.max(runs, Math.floor(Number(arg('final-runs', '32'))));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '12'))));
+  const candidateCap = Math.max(6, Math.floor(Number(arg('candidate-cap', '32'))));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'budgeted'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'max'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
+  const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('route-exp-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
+  }
+  if (expProfile === 'ace') {
+    throw new Error('route-exp-story-search requires a route EXP profile');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const candidates = pool.candidates;
+  const requiredCandidate = findStarterCandidate(candidates, starterName);
+  const battleOptions = { p1AiMode: 'smart', routeBuildOptimization: true };
+
+  const result = await runBeamSearch({
+    candidates,
+    story,
+    moveAccess,
+    runs,
+    teamSize: 6,
+    beamWidth,
+    candidateCap,
+    screenRuns,
+    finalRuns,
+    requiredCandidate,
+    expContext,
+    grindPolicy,
+    objective,
+    battleOptions,
+  });
+
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'route-aware fixed-six beam search with source-aware EXP and actual per-checkpoint levels',
+    version,
+    starter: starterName,
+    evolutionPolicy,
+    evolutionAccess: pool.evolutionAccess || null,
+    candidatePool: candidates.length,
+    assumptions: {
+      expProfile,
+      grindPolicy,
+      grindBudget: Number(expContext.grindBudget || 0),
+      expAllocator,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      resourceProfile,
+      spendPolicy,
+      objective,
+      runs,
+      screenRuns,
+      finalRuns,
+      beamWidth,
+      candidateCap,
+      routeBuildOptimization: true,
+    },
+    ...result,
+    battleCache: battleCacheStats(),
   }, null, 2));
 }
 
@@ -8826,6 +8930,7 @@ const commands = {
   'route-exp-data-audit': cmdRouteExpDataAudit,
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'route-exp-story-rerank': cmdRouteExpStoryRerank,
+  'route-exp-story-search': cmdRouteExpStorySearch,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
