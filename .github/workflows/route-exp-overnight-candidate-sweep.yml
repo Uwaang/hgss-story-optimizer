@@ -1,0 +1,73 @@
+name: route-exp-overnight-candidate-sweep
+
+on:
+  push:
+    branches:
+      - exp/overnight-endogenous-candidates
+
+concurrency:
+  group: route-exp-overnight-candidate-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate_sweep:
+    if: contains(github.event.head_commit.message, '[overnight-candidate-sweep]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        grind_budget:
+          - 0
+          - 250000
+          - 600000
+          - 1000000
+          - 1600000
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Wide route-aware candidate sweep
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route \
+            --grind-policy=budgeted --grind-budget=${{ matrix.grind_budget }} \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=story-clear \
+            --screen-runs=2 --runs=2 --final-runs=16 \
+            --candidate-cap=48 --beam-width=24 \
+            > "results/route-exp-candidate-sweep-${{ matrix.grind_budget }}.json"
+      - name: Assert candidate sweep semantics
+        run: |
+          jq -e '
+            .candidatePool >= 20 and
+            .assumptions.routeBuildOptimization == true and
+            .assumptions.searchPolicy == "route-story" and
+            .searchPolicy == "route-story" and
+            .assumptions.beamWidth == 24 and
+            .assumptions.candidateCap == 48 and
+            ([.beamTrace[].targetSize] | index(6)) != null and
+            (.top | length) >= 1 and
+            ([.top[].teamKeys | length] | all(. == 6))
+          ' "results/route-exp-candidate-sweep-${{ matrix.grind_budget }}.json" >/dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: route-exp-candidate-sweep-${{ matrix.grind_budget }}
+          path: hgss_story_sim/results/route-exp-candidate-sweep-${{ matrix.grind_budget }}.json
+          if-no-files-found: warn
