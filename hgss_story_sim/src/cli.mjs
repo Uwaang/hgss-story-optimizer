@@ -731,6 +731,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         breakpointLevelLookahead: expContext?.breakpointLevelLookahead || 12,
         breakpointDiscount: expContext?.breakpointDiscount || 0.72,
         activationTargets: expContext?.activationTargets || [],
+        expParticipationStartBossByKey: expContext?.expParticipationStartBossByKey || {},
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -3418,6 +3419,8 @@ async function cmdRouteExpPracticalGrind() {
   const storyCheckpointFilter = storyCheckpointLabels.length
     ? new Set(storyCheckpointLabels)
     : null;
+  const deferExpKey = String(arg('defer-exp-key', '')).trim();
+  const deferExpUntilBoss = String(arg('defer-exp-until-boss', '')).trim();
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
@@ -3460,6 +3463,19 @@ async function cmdRouteExpPracticalGrind() {
   if (!starter) throw new Error('Requested team must contain the selected starter');
 
   const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const expParticipationStartBossByKey = {};
+  if (deferExpKey || deferExpUntilBoss) {
+    if (!deferExpKey || !deferExpUntilBoss) {
+      throw new Error('--defer-exp-key and --defer-exp-until-boss must be supplied together');
+    }
+    if (!team.some(candidate => candidateIdentity(candidate) === deferExpKey)) {
+      throw new Error('Deferred EXP key is not in requested team: ' + deferExpKey);
+    }
+    if (!routeBosses.some(boss => String(boss.label) === deferExpUntilBoss)) {
+      throw new Error('Deferred EXP boss is not on practical route: ' + deferExpUntilBoss);
+    }
+    expParticipationStartBossByKey[deferExpKey] = deferExpUntilBoss;
+  }
   const storyBossLabels = routeBosses
     .filter(boss =>
       String(boss.label) !== 'Red' &&
@@ -3479,6 +3495,7 @@ async function cmdRouteExpPracticalGrind() {
       grindPolicy: 'planned',
       grindBudget: 0,
       grindPlanBattles: { ...(plan || {}) },
+      expParticipationStartBossByKey,
     };
   }
 
@@ -3992,6 +4009,7 @@ async function cmdRouteExpPracticalGrind() {
       repairRuns,
       finalRuns,
       maxRepairRounds,
+      expParticipationStartBossByKey,
       globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
