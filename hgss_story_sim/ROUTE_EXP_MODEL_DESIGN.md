@@ -1224,3 +1224,139 @@ Report:
 - total optional grind required to cross meaningful clear-rate thresholds.
 
 This will test the project's main route question directly: how much additional training is required, and where should it be invested, to turn a naturally leveled team into a reliable story-clearing team?
+
+
+## 26. Budgeted optional-grind model
+
+The route model now supports:
+
+```
+--grind-policy=budgeted
+--grind-budget=<total additional EXP>
+```
+
+The budget is not made fully available at the start of the game.
+
+Instead, grind capacity is progressively released according to the fraction of natural route EXP that has become available before the current checkpoint:
+
+```
+releasedGrindBudget(t)
+  ~= totalGrindBudget
+     * cumulativeNaturalExpBefore(t)
+     / naturalExpAvailableBeforeFinalBoss
+```
+
+The full configured budget is available by Red.
+
+This is an envelope model, not a claim that the player literally grinds in exact proportion to trainer EXP. Its purpose is to prevent pathological solutions such as spending a 1.6M EXP end-game grind budget before Falkner while still allowing the optimizer to decide which currently available members receive each released portion.
+
+The released grind EXP is assigned using the selected EXP allocator and is reported separately from natural EXP by member and checkpoint.
+
+The model also reports an estimated number of wild battles using the best modeled wild EXP source at the stage where each grind tranche is released.
+
+## 27. Optional-grind coarse Pareto findings
+
+GitHub Actions `route-exp-grind-pareto #1` and `route-exp-red-breakpoint #1` tested the fixed direct-Quagsire team with `balanced` and `boss-aware-soft`.
+
+The low-budget sweep used:
+
+```
+0 / 25k / 50k / 100k / 150k / 200k / 300k
+```
+
+and the Red-breakpoint sweep extended this to:
+
+```
+400k / 600k / 800k / 1.0M / 1.2M / 1.4M / 1.6M
+```
+
+with 128 simulated runs per boss.
+
+### 27.1 Low-budget behavior
+
+At zero optional grind, `boss-aware-soft` remains stronger than balanced.
+
+However, as grind budget grows, balanced leveling scales better in aggregate because the extra resource eliminates much of the need to prioritize immediate matchup utility.
+
+At 300k optional EXP:
+
+```
+balanced:
+  score       0.8117
+  coverage    0.8891
+  Red         0/128
+  Red faints  2.016
+  final team  roughly Lv54
+
+boss-aware-soft:
+  score       0.7729
+  coverage    0.8776
+  Red         0/128
+  Red faints  1.922
+  final levels roughly Lv49-58
+```
+
+Thus the original 300k ceiling was far below the Red-ready training region.
+
+### 27.2 Coarse Red breakpoint
+
+Observed Red results:
+
+| grind budget | balanced | boss-aware-soft |
+| ---: | ---: | ---: |
+| 400k | 0% | 0% |
+| 600k | 0% | 0% |
+| 800k | 4.7% | 0% |
+| 1.0M | 2.3% | 1.6% |
+| 1.2M | 7.8% | 3.9% |
+| 1.4M | 21.1% | 19.5% |
+| 1.6M | 43.0% | 53.1% |
+
+The 800k -> 1.0M balanced non-monotonicity is expected sampling noise and/or discrete allocation/build changes at 128 runs; it should not be interpreted as more EXP being intrinsically harmful without high-run confirmation.
+
+At 1.6M:
+
+```
+balanced final levels:
+71 / 71 / 71 / 71 / 71 / 72
+Red: 55 / 128 = 42.97%
+
+boss-aware-soft final levels:
+Quagsire   73
+Rhyperior  73
+Magneton   72
+Golem      73
+Typhlosion 68
+Alakazam   68
+Red: 68 / 128 = 53.13%
+```
+
+This is consistent with the previous equal-level experiments that found the main Red performance transition in the low-70s.
+
+### 27.3 Grind burden is very large
+
+The progression-released wild-grind estimate at 1.6M is approximately:
+
+```
+2,691 expected wild battles
+```
+
+under the current best-wild-per-stage EXP model.
+
+Therefore 1.6M is useful as a mathematical Red breakpoint, but it should not automatically be described as a comfortable human playthrough.
+
+This distinction is important:
+
+- EXP budget measures team-training efficiency;
+- expected wild battles approximates player time/friction;
+- both should be carried as Pareto dimensions.
+
+### 27.4 Why the required grind is so high
+
+The direct-Quagsire fixed team previously required roughly 2.27M catch-up EXP to put all six around equal Lv72.
+
+The route ledger supplies only about 620k natural trainer EXP to the fixed team.
+
+Therefore a roughly 1.6M additional-EXP requirement for an approximately Lv70-72 team is internally consistent with the earlier equal-level cost model rather than an unexpected discrepancy.
+
+A 1,000-run validation at 1.6M was launched to verify the balanced versus boss-aware-soft Red difference before selecting a preferred high-grind allocator.
