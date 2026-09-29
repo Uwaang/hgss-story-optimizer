@@ -1081,3 +1081,146 @@ The follow-up should therefore measure:
 - Red progress even when win rate remains zero.
 
 Only after selecting a stable allocator should optional-grind Pareto experiments be treated as meaningful.
+
+
+## 25. Anti-collapse allocator comparison
+
+Validated by GitHub Actions `route-exp-allocator-ab #5` (run `36516031134`) using the same fixed trade-aware team and natural-EXP-only conditions as section 24, but with 128 simulated runs per boss.
+
+Compared allocators:
+
+- `balanced`
+- `boss-aware`
+- `boss-aware-soft`
+- `boss-aware-depth`
+- `boss-aware-saturation`
+
+### 25.1 Aggregate result
+
+| allocator | mean win rate | bottom-5 | geometric | coverage | Red avg opponent faints | top-3 EXP share | HHI |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | 0.5875 | 0.0031 | 0.2606 | 0.6781 | 1.125 | 53.0% | 0.168 |
+| boss-aware | 0.6164 | 0.0141 | 0.3478 | 0.7375 | 1.383 | 97.1% | 0.345 |
+| boss-aware-soft | **0.6195** | 0.0094 | 0.3093 | 0.6979 | 1.102 | **60.4%** | **0.176** |
+| boss-aware-depth | 0.6138 | 0.0016 | 0.2827 | 0.7083 | **1.625** | 86.1% | 0.274 |
+| boss-aware-saturation | 0.6161 | 0.0031 | 0.2637 | 0.6776 | 1.203 | 66.0% | 0.190 |
+
+All allocators use the full natural EXP ledger and zero optional grind in this run.
+
+### 25.2 Boss-aware-soft is the best current compromise
+
+At Red, `boss-aware-soft` reaches:
+
+```
+Magneton   51
+Golem      51
+Quagsire   50
+Alakazam   47
+Rhyperior  46
+Typhlosion 43
+```
+
+All six families reach their intended terminal evolution.
+
+Route EXP allocated by Red:
+
+```
+Magnemite line  128,555
+Geodude line    125,030
+Quagsire        109,375
+Abra line        95,452
+Cyndaquil line   74,708
+Rhyhorn line     68,077
+```
+
+The top three consume about 60.4% of allocated route EXP, close to balanced's 53.0% and far below boss-aware's 97.1%.
+
+No member receives zero EXP or less than 1% of the allocated route EXP.
+
+This is exactly the intended anti-collapse behavior: permit unequal investment without abandoning future members.
+
+### 25.3 Saturation is more concentrated and misses Typhlosion
+
+At Red:
+
+```
+Magneton  53
+Golem     52
+Quagsire  51
+Alakazam  47
+Rhyperior 47
+Quilava   34
+```
+
+Top-three EXP share is 66.0%.
+
+It preserves five useful final forms but leaves the starter below the Lv36 Typhlosion breakpoint. Aggregate performance is similar to boss-aware but its coverage and geometric score are lower than boss-aware-soft.
+
+### 25.4 Depth improves Red progress but still starves members
+
+At Red:
+
+```
+Magneton 60
+Golem    58
+Quagsire 50
+Alakazam 42
+Rhyhorn  35
+Quilava  28
+```
+
+It achieves the best Red progress of this comparison at 1.625 average opponent faints despite 0/128 wins.
+
+However:
+
+- Rhyhorn receives zero route EXP;
+- the starter receives very little;
+- top-three EXP share remains 86.1%;
+- Rhyperior and Typhlosion are never reached.
+
+Thus depth is useful evidence that concentration can improve a specific terminal battle, but it is not a satisfactory whole-route allocator.
+
+### 25.5 Boss-aware-soft boss profile
+
+Compared with balanced, boss-aware-soft materially improves several difficult route fights:
+
+- Morty: 3.9% -> 10.9%
+- Chuck: 88.3% -> 94.5%
+- Pryce: 75.0% -> 85.2%
+- Goldenrod Underground Silver: 40.6% -> 76.6%
+- Victory Road Silver: 60.2% -> 80.5%
+- Blue: 31.3% -> 51.6%
+
+It still performs poorly on several hard matchups:
+
+- Clair: 1.6%
+- Will: 10.2%
+- Bruno: 0.8%
+- Lance: 0%
+- Red: 0%
+
+Therefore the next problem is no longer primarily allocation collapse. It is insufficient natural EXP / matchup strength at hard checkpoints.
+
+### 25.6 Recommended next use
+
+Do not make `boss-aware-soft` an unconditional repository-wide default from this one fixed team.
+
+For the next route-EXP experiment, use it as the **leading allocator candidate** and compare optional-grind Pareto curves against balanced as a control.
+
+Recommended next experiment:
+
+```
+allocator: boss-aware-soft vs balanced
+optional grind budgets:
+0 / 25k / 50k / 100k / 150k / 200k / 300k
+```
+
+Report:
+
+- where the grind EXP is spent;
+- level/evolution state at every key boss;
+- coverage and bottom-tail performance;
+- Lance / Blue / Red progress;
+- total optional grind required to cross meaningful clear-rate thresholds.
+
+This will test the project's main route question directly: how much additional training is required, and where should it be invested, to turn a naturally leveled team into a reliable story-clearing team?
