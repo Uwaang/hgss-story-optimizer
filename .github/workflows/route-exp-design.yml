@@ -86,7 +86,7 @@ jobs:
             --runs=2 \
             "${TEAM_FLAG}=${{ matrix.team_arg }}" \
             > results/route-exp-${{ matrix.label }}.json
-      - name: Assert realistic first-gym levels and deferred Route 46 EXP
+      - name: Assert route EXP and evolution timing semantics
         run: |
           jq -e '
             .firstGym != null and
@@ -97,7 +97,11 @@ jobs:
             ([.checkpoints[] | select(.boss=="Clair") | .trainerWindowSegments[].key] |
               (index("TRAINER_HIKER_BAILEY") != null) and
               (index("TRAINER_CAMPER_TED") != null) and
-              (index("TRAINER_PICNICKER_ERIN") != null))
+              (index("TRAINER_PICNICKER_ERIN") != null)) and
+            (if .evolutionPolicy == "trade-aware"
+             then (.finalBoss.availableMons | index("Rhyperior")) != null
+             else true
+             end)
           ' results/route-exp-${{ matrix.label }}.json >/dev/null
       - uses: actions/upload-artifact@v4
         with:
