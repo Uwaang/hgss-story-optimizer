@@ -1,0 +1,166 @@
+name: route-exp-candidate-rerank
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  rerank:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[route-rerank]')
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        grind_budget:
+          - 0
+          - 1600000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download Lv63 cap1024 candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: overnight-recall-lv63-cap1024-seed505
+          path: candidate-inputs/lv63-cap1024
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 36452926578
+
+      - name: Download Lv63 cap2048 candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: overnight-recall-lv63-cap2048-seed505
+          path: candidate-inputs/lv63-cap2048
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 36452926578
+
+      - name: Download Lv72 cap1024 candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: overnight-recall-lv72-cap1024-seed505
+          path: candidate-inputs/lv72-cap1024
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 36452926578
+
+      - name: Install dependencies
+        working-directory: hgss_story_sim
+        run: npm install
+
+      - name: Rerank equal-level candidates with route EXP
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-rerank \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route \
+            --exp-allocator=boss-aware-soft \
+            --grind-budgets=${{ matrix.grind_budget }} \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --screen-runs=8 --final-runs=128 --final-cap=8 \
+            --inputs='../candidate-inputs/lv63-cap1024/overnight-recall-lv63-cap1024-seed505.json,../candidate-inputs/lv63-cap2048/overnight-recall-lv63-cap2048-seed505.json,../candidate-inputs/lv72-cap1024/overnight-recall-lv72-cap1024-seed505.json' \
+            --sections=final,finalPareto,preliminaryPareto \
+            --include-team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/route-rerank-${{ matrix.grind_budget }}.json
+
+      - name: Assert rerank output
+        working-directory: hgss_story_sim
+        run: |
+          jq -e --argjson budget ${{ matrix.grind_budget }} '
+            .candidateTeamCount >= 10 and
+            (.screened | length) == .candidateTeamCount and
+            (.final | length) >= 1 and
+            ([.final[].grindBudget] | all(. == $budget))
+          ' results/route-rerank-${{ matrix.grind_budget }}.json >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-rerank-${{ matrix.grind_budget }}
+          path: hgss_story_sim/results/route-rerank-${{ matrix.grind_budget }}.json
+          if-no-files-found: error
+
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[route-rerank]')
+    needs: rerank
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: route-rerank-*
+          path: results
+
+      - name: Build cross-budget rerank summary
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs=require('fs'), path=require('path');
+          const all=[];
+          for(const dir of fs.readdirSync('results').sort()){
+            const full=path.join('results',dir);
+            if(!fs.statSync(full).isDirectory()) continue;
+            const file=fs.readdirSync(full).find(x=>x.endsWith('.json'));
+            if(!file) continue;
+            const d=JSON.parse(fs.readFileSync(path.join(full,file),'utf8'));
+            for(const r of d.final||[]) all.push(r);
+          }
+          all.sort((a,b)=>
+            a.grindBudget-b.grindBudget ||
+            (b.storyClearGeometricScore||0)-(a.storyClearGeometricScore||0) ||
+            (b.storyClearCoverageScore||0)-(a.storyClearCoverageScore||0) ||
+            (b.red?.winRate||0)-(a.red?.winRate||0) ||
+            (b.red?.averageOpponentFaints||0)-(a.red?.averageOpponentFaints||0)
+          );
+          const byBudget={};
+          for(const r of all){
+            (byBudget[r.grindBudget]??=[]).push(r);
+          }
+          const summary={
+            schemaVersion:1,
+            totalFinalRows:all.length,
+            budgets:Object.fromEntries(Object.entries(byBudget).map(([budget,rows])=>[
+              budget,
+              {
+                topOverall:rows.slice(0,10),
+                topRed:[...rows].sort((a,b)=>
+                  (b.red?.winRate||0)-(a.red?.winRate||0) ||
+                  (b.red?.averageOpponentFaints||0)-(a.red?.averageOpponentFaints||0) ||
+                  (b.storyClearGeometricScore||0)-(a.storyClearGeometricScore||0)
+                ).slice(0,10)
+              }
+            ]))
+          };
+          fs.writeFileSync('route-rerank-comparison.json',JSON.stringify(summary,null,2));
+          const md=['# Route EXP candidate rerank',''];
+          for(const [budget,entry] of Object.entries(summary.budgets)){
+            md.push(`## grind budget ${budget}`,'');
+            md.push('| rank | final team | score | geometric | coverage | Red | Red faints |');
+            md.push('|---:|---|---:|---:|---:|---:|---:|');
+            entry.topOverall.forEach((r,i)=>{
+              md.push(`| ${i+1} | ${(r.finalTeam||r.team).join(' / ')} | ${r.score.toFixed(4)} | ${r.storyClearGeometricScore.toFixed(4)} | ${r.storyClearCoverageScore.toFixed(4)} | ${(r.red?.winRate||0).toFixed(4)} | ${(r.red?.averageOpponentFaints||0).toFixed(3)} |`);
+            });
+            md.push('');
+          }
+          fs.writeFileSync('route-rerank-comparison.md',md.join('\n'));
+          console.log(md.join('\n'));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-rerank-comparison
+          path: |
+            route-rerank-comparison.json
+            route-rerank-comparison.md
+          if-no-files-found: error
