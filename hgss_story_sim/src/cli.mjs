@@ -3528,12 +3528,19 @@ async function cmdRouteExpPracticalGrind() {
     const baseRow = base.rows.find(row => String(row.boss) === bossLabel);
     const baseRate = Number(baseRow?.winRate || 0);
     if (baseRate >= targetRate) {
-      return {
-        additionalBattles: 0,
-        achieved: true,
-        screenWinRate: baseRate,
-        maxAdditionalBattles: practicalMaxAdditionalGrindBattles(team, base, bossLabel),
-      };
+      const verifiedBase = await evaluateBoss(plan, bossLabel, verifyRuns);
+      const verifiedBaseRate = Number(
+        verifiedBase.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
+      );
+      if (verifiedBaseRate >= targetRate) {
+        return {
+          additionalBattles: 0,
+          achieved: true,
+          screenWinRate: baseRate,
+          verifiedWinRate: verifiedBaseRate,
+          maxAdditionalBattles: practicalMaxAdditionalGrindBattles(team, verifiedBase, bossLabel),
+        };
+      }
     }
 
     const current = Math.max(0, Math.floor(Number(plan[bossLabel] || 0)));
