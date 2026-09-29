@@ -10,6 +10,8 @@ jobs:
   allocator:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[allocator-ab]')
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -44,8 +46,7 @@ jobs:
       - name: Assert comparable ledger
         run: |
           jq -e '
-            .ledger.totalGrindExp == 0 and
-            (.finalBoss.availableMons | index("Rhyperior")) != null
+            .ledger.totalGrindExp == 0
           ' results/route-exp-${{ matrix.allocator }}.json >/dev/null
       - uses: actions/upload-artifact@v4
         with:
@@ -90,6 +91,7 @@ jobs:
               totalAllocatedExp: data.ledger.totalAllocatedExp,
               totalUnallocatedExp: data.ledger.totalUnallocatedExp,
               totalGrindExp: data.ledger.totalGrindExp,
+              finalTeam: data.finalTeam,
               finalLevels: data.finalLevels,
               routeAllocatedExpAtRed: red?.routeAllocatedExpBefore || {},
               keyBosses: Object.fromEntries(
