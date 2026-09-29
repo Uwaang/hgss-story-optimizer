@@ -1360,3 +1360,93 @@ The route ledger supplies only about 620k natural trainer EXP to the fixed team.
 Therefore a roughly 1.6M additional-EXP requirement for an approximately Lv70-72 team is internally consistent with the earlier equal-level cost model rather than an unexpected discrepancy.
 
 A 1,000-run validation at 1.6M was launched to verify the balanced versus boss-aware-soft Red difference before selecting a preferred high-grind allocator.
+
+
+## 28. High-run Red validation
+
+GitHub Actions `route-exp-red-validation #1` validated the 1.6M optional-grind point with 1,000 simulated runs per route boss.
+
+### Balanced
+
+```
+Red:   428 / 1000 = 42.8%
+95% Wilson interval ~= 39.8% .. 45.9%
+average Red opponent faints = 4.937
+
+Lance: 63.2%
+Blue:  100%
+
+final levels:
+Quagsire   71
+Rhyperior  71
+Magneton   71
+Typhlosion 71
+Golem      71
+Alakazam   72
+```
+
+### Boss-aware-soft
+
+```
+Red:   527 / 1000 = 52.7%
+95% Wilson interval ~= 49.6% .. 55.8%
+average Red opponent faints = 5.110
+
+Lance: 58.4%
+Blue:  100%
+
+final levels:
+Quagsire   73
+Rhyperior  73
+Magneton   72
+Golem      73
+Typhlosion 68
+Alakazam   68
+```
+
+The 128-run coarse results were therefore stable:
+
+```
+balanced:
+42.97% -> 42.8%
+
+boss-aware-soft:
+53.13% -> 52.7%
+```
+
+The soft allocator's Red advantage is not explained by the small-run noise seen in earlier searches.
+
+However, the trade-off remains real: balanced is stronger against first Lance at this budget, while soft is stronger against Red and has the higher route-wide score, lower-tail performance, geometric score and coverage.
+
+At 1.6M the expected wild-grind burden is about 2,691 battles in both policies because grind release timing is budget/progression based; the allocator changes recipients, not the total released EXP.
+
+## 29. Story-route versus equal-level boss sets
+
+The two models intentionally use different checkpoint sets.
+
+### Route EXP story model
+
+`story-bosses.json` models the canonical progression required to reach Red and also includes scored mandatory/event battles such as Rocket executives and Silver fights.
+
+It does **not** insert the Elite Four rematch after Blue.
+
+After all 16 badges, the rematch Elite Four is optional for reaching Mt. Silver/Red, so forcing it into the conserved route ledger would add EXP and a required battle that the player does not actually need.
+
+### Equal-level benchmark
+
+`equal-level-story-bosses.json` is a practical combat benchmark rather than a strict required-route ledger.
+
+It deliberately adds:
+
+```
+Will 2 / Koga 2 / Bruno 2 / Karen 2 / Lance 2
+```
+
+after Blue and before Red to test late-game team strength.
+
+Therefore:
+
+- route EXP answers "what happens along a modeled required story path to Red?";
+- equal-level answers a broader late-game combat benchmark that also includes the optional rematch Elite Four.
+
+When comparing scores across the two models, do not treat their aggregate route metrics as if they were calculated over an identical boss population.
