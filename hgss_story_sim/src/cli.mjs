@@ -7170,8 +7170,18 @@ function equalLevelPreparationCacheStats() {
 }
 
 async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs, moveAccess, options = {}) {
-  const expCost = equalLevelTeamExpCost(candidates, commonLevel);
-  if (!expCost.legal) {
+  const fixedLevels = options.levelsByCandidate && typeof options.levelsByCandidate === 'object'
+    ? Object.fromEntries(candidates.map(candidate => [
+        candidateIdentity(candidate),
+        Number(options.levelsByCandidate[candidateIdentity(candidate)]),
+      ]))
+    : null;
+  const hasFixedLevels = Boolean(
+    fixedLevels &&
+    Object.values(fixedLevels).every(level => Number.isInteger(level) && level >= 1 && level <= 100)
+  );
+  const expCost = hasFixedLevels ? null : equalLevelTeamExpCost(candidates, commonLevel);
+  if (!hasFixedLevels && !expCost.legal) {
     return {
       commonLevel: Number(commonLevel),
       legal: false,
@@ -7194,21 +7204,28 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     ])
   );
   await ensureEqualLevelPreparationCacheLoaded();
-  const preparationKey = equalLevelPreparationKey(
+  const basePreparationKey = equalLevelPreparationKey(
     candidates,
     routeBosses,
     commonLevel,
     moveAccess,
   );
+  const preparationKey = hasFixedLevels
+    ? createHash('sha256').update(
+        basePreparationKey + '|fixed-levels=' + JSON.stringify(fixedLevels)
+      ).digest('hex')
+    : basePreparationKey;
   let prepared = equalLevelPreparationCache.get(preparationKey);
   const preparationCacheHit = Boolean(prepared);
   if (prepared) {
     equalLevelPreparationCacheCounters.hits += 1;
   } else {
     equalLevelPreparationCacheCounters.misses += 1;
-    const levels = Object.fromEntries(
-      candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
-    );
+    const levels = hasFixedLevels
+      ? { ...fixedLevels }
+      : Object.fromEntries(
+          candidates.map(candidate => [candidateIdentity(candidate), Number(commonLevel)])
+        );
     const levelsByBattle = routeBosses.map(() => ({ ...levels }));
     const singleUsePlan = planSingleUseMachines(
       candidates,
@@ -7358,7 +7375,8 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     : [];
 
   return {
-    commonLevel: Number(commonLevel),
+    commonLevel: hasFixedLevels ? null : Number(commonLevel),
+    memberLevels: hasFixedLevels ? { ...levels } : null,
     legal: true,
     score,
     worstBossWinRate,
@@ -8923,6 +8941,11 @@ async function cmdEqualLevelStoryEvaluate() {
     .split(',')
     .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))))
     .filter(Number.isFinite);
+  const memberLevelValues = String(arg('member-levels', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => Math.max(1, Math.min(100, Math.floor(Number(value)))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
   const bossLabels = String(arg('bosses', ''))
     .split(',')
@@ -8939,7 +8962,12 @@ async function cmdEqualLevelStoryEvaluate() {
   if (teamNames.length !== 6 && teamKeys.length !== 6) {
     throw new Error('equal-level-story-evaluate requires six --team species or six --team-keys');
   }
-  if (!levels.length) throw new Error('equal-level-story-evaluate requires at least one valid level');
+  if (!levels.length && !memberLevelValues.length) {
+    throw new Error('equal-level-story-evaluate requires --levels or --member-levels');
+  }
+  if (memberLevelValues.length && memberLevelValues.length !== 6) {
+    throw new Error('equal-level-story-evaluate --member-levels requires six comma-separated levels');
+  }
 
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
@@ -8971,18 +8999,36 @@ async function cmdEqualLevelStoryEvaluate() {
   }
 
   const evaluations = [];
-  for (const commonLevel of levels) {
+  if (memberLevelValues.length) {
+    const levelsByCandidate = Object.fromEntries(
+      team.map((candidate, index) => [candidateIdentity(candidate), memberLevelValues[index]])
+    );
     evaluations.push(await evaluateEqualLevelStoryTeam(
       team,
       story,
-      commonLevel,
+      Math.max(...memberLevelValues),
       runs,
       moveAccess,
       {
         bossLabels: bossLabels.length ? bossLabels : null,
         seedOffset,
+        levelsByCandidate,
       },
     ));
+  } else {
+    for (const commonLevel of levels) {
+      evaluations.push(await evaluateEqualLevelStoryTeam(
+        team,
+        story,
+        commonLevel,
+        runs,
+        moveAccess,
+        {
+          bossLabels: bossLabels.length ? bossLabels : null,
+          seedOffset,
+        },
+      ));
+    }
   }
 
   await flushBattleCache();
@@ -8999,7 +9045,8 @@ async function cmdEqualLevelStoryEvaluate() {
     teamKeys: team.map(candidateIdentity),
     evolutionPolicy,
     evolutionAccess: pool.evolutionAccess,
-    levels,
+    levels: memberLevelValues.length ? [] : levels,
+    memberLevels: memberLevelValues.length ? memberLevelValues : null,
     runsPerBoss: runs,
     bosses: bossLabels,
     seedOffset,
