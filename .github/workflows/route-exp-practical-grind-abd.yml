@@ -1,0 +1,75 @@
+name: route-exp-practical-grind-abd
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+
+concurrency:
+  group: route-exp-practical-grind-abd-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  practical_grind_abd:
+    if: contains(github.event.head_commit.message, '[practical-grind-abd]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - id: A
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Geodude::Geodude->Golem#1,Slowpoke::Slowpoke->Slowbro#1,Pineco::Pineco->Forretress#1,Mareep::Mareep->Ampharos#1,Rhyhorn::Rhyhorn->Rhyperior#1"
+          - id: B
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1"
+          - id: D
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Run practical grind \${{ matrix.id }}
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="\${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --story-checkpoints="Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2" \
+            --screen-runs=4 --verify-runs=32 --repair-runs=64 --final-runs=128 \
+            --max-repair-rounds=20 \
+            > "results/practical-grind-\${{ matrix.id }}.json"
+      - name: Assert convergence \${{ matrix.id }}
+        run: |
+          jq -e '
+            .routeProfile == "practical-red-prep" and
+            .assumptions.globalRepair == true and
+            .assumptions.screenRuns == 4 and
+            .assumptions.verifyRuns == 32 and
+            .assumptions.repairRuns == 64 and
+            .assumptions.finalRuns == 128 and
+            (.storyFrontier | length) == 1 and
+            .storyFrontier[0].repairConverged == true and
+            .storyFrontier[0].storyWorstBossWinRate >= 0.5 and
+            (.storyFrontier[0].redFrontier | length) == 2
+          ' "results/practical-grind-\${{ matrix.id }}.json" >/dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: practical-grind-\${{ matrix.id }}
+          path: hgss_story_sim/results/practical-grind-\${{ matrix.id }}.json
+          if-no-files-found: warn
