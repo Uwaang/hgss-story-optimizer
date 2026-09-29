@@ -2860,6 +2860,8 @@ async function cmdRouteExpStoryEvaluate() {
       aceLevel: Number(row.aceLevel || ledger.aceLevel || 0),
       playerLevels: row.playerLevels || {},
       availableMons: row.availableMons || [],
+      memberExpBefore: ledger.expBefore || {},
+      routeAllocatedExpBefore: ledger.routeAllocatedExpBefore || {},
       winRate: Number(row.winRate || 0),
       averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
       mapExpBefore: Number(ledger.mapExpBefore || 0),
