@@ -3406,7 +3406,9 @@ async function cmdRouteExpPracticalGrind() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
   const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '2'))));
   const verifyRuns = Math.max(screenRuns, Math.floor(Number(arg('verify-runs', '16'))));
-  const finalRuns = Math.max(verifyRuns, Math.floor(Number(arg('final-runs', '32'))));
+  const repairRuns = Math.max(verifyRuns, Math.floor(Number(arg('repair-runs', '32'))));
+  const finalRuns = Math.max(repairRuns, Math.floor(Number(arg('final-runs', '64'))));
+  const maxRepairRounds = Math.max(1, Math.floor(Number(arg('max-repair-rounds', '12'))));
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -3605,6 +3607,173 @@ async function cmdRouteExpPracticalGrind() {
     };
   }
 
+
+  async function minimumAdditionalBattlesValidated(
+    plan,
+    bossLabel,
+    targetRate,
+    runs,
+    { forcePositive = false } = {},
+  ) {
+    const base = await evaluateBoss(plan, bossLabel, runs);
+    const baseRow = base.rows.find(row => String(row.boss) === bossLabel);
+    const baseRate = Number(baseRow?.winRate || 0);
+    const current = Math.max(0, Math.floor(Number(plan[bossLabel] || 0)));
+    const maxAdditional = practicalMaxAdditionalGrindBattles(team, base, bossLabel);
+
+    if (!forcePositive && baseRate >= targetRate) {
+      return {
+        additionalBattles: 0,
+        achieved: true,
+        validatedWinRate: baseRate,
+        maxAdditionalBattles: maxAdditional,
+      };
+    }
+    if (maxAdditional <= 0) {
+      return {
+        additionalBattles: 0,
+        achieved: false,
+        validatedWinRate: baseRate,
+        maxAdditionalBattles: 0,
+      };
+    }
+
+    async function rateAt(additional) {
+      const candidatePlan = {
+        ...plan,
+        [bossLabel]: current + Math.max(0, Math.floor(Number(additional || 0))),
+      };
+      const evaluation = await evaluateBoss(candidatePlan, bossLabel, runs);
+      return Number(
+        evaluation.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
+      );
+    }
+
+    let low = 0;
+    let high = 1;
+    let highRate = await rateAt(high);
+    while (highRate < targetRate && high < maxAdditional) {
+      low = high;
+      high = Math.min(maxAdditional, high * 2);
+      highRate = await rateAt(high);
+    }
+    if (highRate < targetRate) {
+      return {
+        additionalBattles: maxAdditional,
+        achieved: false,
+        validatedWinRate: highRate,
+        maxAdditionalBattles: maxAdditional,
+      };
+    }
+
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2);
+      const rate = await rateAt(mid);
+      if (rate >= targetRate) high = mid;
+      else low = mid;
+    }
+    return {
+      additionalBattles: high,
+      achieved: true,
+      validatedWinRate: await rateAt(high),
+      maxAdditionalBattles: maxAdditional,
+    };
+  }
+
+  async function globallyRepairStoryPlan(initialPlan, targetRate, runs, phase) {
+    const plan = { ...(initialPlan || {}) };
+    const history = [];
+    let evaluation = null;
+
+    for (let round = 1; round <= maxRepairRounds; round += 1) {
+      evaluation = await evaluateFull(plan, runs);
+      const rowsByBoss = new Map(
+        (evaluation.rows || []).map(row => [String(row.boss), row])
+      );
+      const failing = storyBossLabels
+        .map(label => ({
+          label,
+          winRate: Number(rowsByBoss.get(label)?.winRate || 0),
+        }))
+        .filter(row => row.winRate < targetRate);
+
+      if (!failing.length) {
+        return {
+          plan,
+          evaluation,
+          converged: true,
+          rounds: round - 1,
+          history,
+        };
+      }
+
+      const failure = failing[0];
+      const beforeTotal = practicalGrindPlanTotalBattles(plan);
+      const search = await minimumAdditionalBattlesValidated(
+        plan,
+        failure.label,
+        targetRate,
+        runs,
+        { forcePositive: true },
+      );
+      if (!(search.additionalBattles > 0)) {
+        history.push({
+          phase,
+          round,
+          boss: failure.label,
+          beforeWinRate: failure.winRate,
+          addedGrindBattles: 0,
+          cumulativeGrindBattles: beforeTotal,
+          achieved: false,
+          reason: 'no-positive-repair-found',
+        });
+        return {
+          plan,
+          evaluation,
+          converged: false,
+          rounds: round,
+          history,
+        };
+      }
+
+      plan[failure.label] =
+        Number(plan[failure.label] || 0) + search.additionalBattles;
+      const afterBoss = await evaluateBoss(plan, failure.label, runs);
+      const afterRate = Number(
+        afterBoss.rows.find(row => String(row.boss) === failure.label)?.winRate || 0
+      );
+      const ledger = practicalGrindScheduleRow(afterBoss, failure.label);
+      history.push({
+        phase,
+        round,
+        boss: failure.label,
+        beforeWinRate: failure.winRate,
+        afterWinRate: afterRate,
+        addedGrindBattles: search.additionalBattles,
+        cumulativeGrindBattles: practicalGrindPlanTotalBattles(plan),
+        grindExpBefore: Number(ledger?.grindExpBefore || 0),
+        bestWildExpPerBattle: Number(ledger?.bestWildGrind?.expectedExpPerBattle || 0),
+        bestWildSpecies: ledger?.bestWildGrind?.species || null,
+        achieved: search.achieved,
+      });
+    }
+
+    evaluation = await evaluateFull(plan, runs);
+    const rowsByBoss = new Map(
+      (evaluation.rows || []).map(row => [String(row.boss), row])
+    );
+    const converged = storyBossLabels.every(
+      label => Number(rowsByBoss.get(label)?.winRate || 0) >= targetRate
+    );
+    return {
+      plan,
+      evaluation,
+      converged,
+      rounds: maxRepairRounds,
+      history,
+    };
+  }
+
   const storyFrontier = [];
   for (const storyTarget of storyTargets) {
     const plan = {};
@@ -3640,43 +3809,81 @@ async function cmdRouteExpPracticalGrind() {
       });
     }
 
-    const storyEvaluation = await evaluateFull(plan, finalRuns);
+    const repair = await globallyRepairStoryPlan(
+      plan,
+      storyTarget,
+      repairRuns,
+      'repair',
+    );
+    const finalRepair = finalRuns > repairRuns
+      ? await globallyRepairStoryPlan(
+          repair.plan,
+          storyTarget,
+          finalRuns,
+          'final-repair',
+        )
+      : repair;
+
+    const storyPlan = finalRepair.plan;
+    const storyEvaluation = finalRepair.evaluation;
+    const repairHistory = [
+      ...(repair.history || []),
+      ...(finalRepair === repair ? [] : (finalRepair.history || [])),
+    ];
+    const repairConverged = Boolean(repair.converged && finalRepair.converged);
     const redBaseline = storyEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
     const redFrontier = [];
-    for (const redTarget of redTargets) {
-      const redPlan = { ...plan };
-      const search = await minimumAdditionalBattles(redPlan, 'Red', redTarget);
-      if (search.additionalBattles > 0) {
-        redPlan.Red = Number(redPlan.Red || 0) + search.additionalBattles;
+
+    if (repairConverged) {
+      for (const redTarget of redTargets) {
+        const redPlan = { ...storyPlan };
+        const search = await minimumAdditionalBattlesValidated(
+          redPlan,
+          'Red',
+          redTarget,
+          finalRuns,
+        );
+        if (search.additionalBattles > 0) {
+          redPlan.Red = Number(redPlan.Red || 0) + search.additionalBattles;
+        }
+        const finalEvaluation = await evaluateFull(redPlan, finalRuns);
+        const red = finalEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
+        const redLedger = practicalGrindScheduleRow(finalEvaluation, 'Red');
+        redFrontier.push({
+          targetWinRate: redTarget,
+          additionalRedGrindBattles: search.additionalBattles,
+          totalGrindBattles: practicalGrindPlanTotalBattles(redPlan),
+          totalGrindExp: Number(finalEvaluation.expSchedule?.totalGrindExp || 0),
+          achievedWinRate: Number(red?.winRate || 0),
+          averageOpponentFaints: Number(red?.averageOpponentFaints || 0),
+          redGrindExp: Number(redLedger?.grindExpBefore || 0),
+          redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
+          finalLevels: finalEvaluation.finalLevels,
+          plan: redPlan,
+        });
       }
-      const finalEvaluation = await evaluateFull(redPlan, finalRuns);
-      const red = finalEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
-      const redLedger = practicalGrindScheduleRow(finalEvaluation, 'Red');
-      redFrontier.push({
-        targetWinRate: redTarget,
-        additionalRedGrindBattles: search.additionalBattles,
-        totalGrindBattles: practicalGrindPlanTotalBattles(redPlan),
-        totalGrindExp: Number(finalEvaluation.expSchedule?.totalGrindExp || 0),
-        achievedWinRate: Number(red?.winRate || 0),
-        averageOpponentFaints: Number(red?.averageOpponentFaints || 0),
-        redGrindExp: Number(redLedger?.grindExpBefore || 0),
-        redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
-        finalLevels: finalEvaluation.finalLevels,
-        plan: redPlan,
-      });
     }
+
+    const finalRowsByBoss = new Map(
+      (storyEvaluation.rows || []).map(row => [String(row.boss), row])
+    );
+    const constrainedWinRates = storyBossLabels.map(
+      label => Number(finalRowsByBoss.get(label)?.winRate || 0)
+    );
 
     storyFrontier.push({
       storyTargetWinRate: storyTarget,
-      storyPlan: plan,
-      storyGrindBattles: practicalGrindPlanTotalBattles(plan),
+      storyPlan,
+      initialGreedyPlan: plan,
+      storyGrindBattles: practicalGrindPlanTotalBattles(storyPlan),
       storyGrindExp: Number(storyEvaluation.expSchedule?.totalGrindExp || 0),
       storyScore: Number(storyEvaluation.score || 0),
-      storyWorstBossWinRate: Math.min(
-        ...storyEvaluation.rows
-          .filter(row => String(row.boss) !== 'Red')
-          .map(row => Number(row.winRate || 0))
-      ),
+      storyWorstBossWinRate: constrainedWinRates.length
+        ? Math.min(...constrainedWinRates)
+        : 0,
+      repairConverged,
+      repairRounds: repairHistory.length,
+      repairHistory,
       redBaseline: redBaseline ? {
         winRate: Number(redBaseline.winRate || 0),
         averageOpponentFaints: Number(redBaseline.averageOpponentFaints || 0),
@@ -3716,7 +3923,10 @@ async function cmdRouteExpPracticalGrind() {
       storyCheckpoints: storyCheckpointLabels.length ? storyCheckpointLabels : 'all-pre-Red',
       screenRuns,
       verifyRuns,
+      repairRuns,
       finalRuns,
+      maxRepairRounds,
+      globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
     },
