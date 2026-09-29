@@ -36,6 +36,12 @@ jobs:
             --story-targets=0.5 --red-targets=0.25,0.5 \
             --screen-runs=1 --final-runs=8 \
             > results/practical-grind-preflight.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: practical-grind-preflight
+          path: hgss_story_sim/results/practical-grind-preflight.json
+          if-no-files-found: warn
       - name: Assert practical grind semantics
         run: |
           jq -e '
@@ -51,8 +57,3 @@ jobs:
             (.storyFrontier[0] as $s |
               ([$s.redFrontier[].totalGrindBattles] | all(. >= $s.storyGrindBattles)))
           ' results/practical-grind-preflight.json >/dev/null
-      - uses: actions/upload-artifact@v4
-        with:
-          name: practical-grind-preflight
-          path: hgss_story_sim/results/practical-grind-preflight.json
-          if-no-files-found: error
