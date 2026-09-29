@@ -3404,8 +3404,9 @@ async function cmdRouteExpPracticalGrind() {
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
-  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '4'))));
-  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '64'))));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '2'))));
+  const verifyRuns = Math.max(screenRuns, Math.floor(Number(arg('verify-runs', '16'))));
+  const finalRuns = Math.max(verifyRuns, Math.floor(Number(arg('final-runs', '32'))));
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -3546,22 +3547,22 @@ async function cmdRouteExpPracticalGrind() {
       };
     }
 
-    async function rateAt(additional) {
+    async function rateAt(additional, runs = screenRuns) {
       const candidatePlan = {
         ...plan,
         [bossLabel]: current + Math.max(0, Math.floor(Number(additional || 0))),
       };
-      const evaluation = await evaluateBoss(candidatePlan, bossLabel, screenRuns);
+      const evaluation = await evaluateBoss(candidatePlan, bossLabel, runs);
       return Number(evaluation.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0);
     }
 
     let low = 0;
     let high = 1;
-    let highRate = await rateAt(high);
+    let highRate = await rateAt(high, screenRuns);
     while (highRate < targetRate && high < maxAdditional) {
       low = high;
       high = Math.min(maxAdditional, high * 2);
-      highRate = await rateAt(high);
+      highRate = await rateAt(high, screenRuns);
     }
     if (highRate < targetRate) {
       return {
@@ -3574,14 +3575,25 @@ async function cmdRouteExpPracticalGrind() {
 
     while (high - low > 1) {
       const mid = Math.floor((low + high) / 2);
-      const rate = await rateAt(mid);
+      const rate = await rateAt(mid, screenRuns);
       if (rate >= targetRate) high = mid;
       else low = mid;
     }
+
+    let verifiedAdditional = high;
+    let verifiedRate = await rateAt(verifiedAdditional, verifyRuns);
+    while (verifiedRate < targetRate && verifiedAdditional < maxAdditional) {
+      verifiedAdditional = Math.min(
+        maxAdditional,
+        Math.max(verifiedAdditional + 1, verifiedAdditional * 2)
+      );
+      verifiedRate = await rateAt(verifiedAdditional, verifyRuns);
+    }
     return {
-      additionalBattles: high,
-      achieved: true,
-      screenWinRate: await rateAt(high),
+      additionalBattles: verifiedAdditional,
+      achieved: verifiedRate >= targetRate,
+      screenWinRate: await rateAt(high, screenRuns),
+      verifiedWinRate: verifiedRate,
       maxAdditionalBattles: maxAdditional,
     };
   }
@@ -3611,6 +3623,7 @@ async function cmdRouteExpPracticalGrind() {
         targetWinRate: storyTarget,
         beforeWinRate: beforeRate,
         afterWinRate: afterRate,
+        verifiedWinRate: search.verifiedWinRate ?? afterRate,
         addedGrindBattles: search.additionalBattles,
         cumulativeGrindBattles: practicalGrindPlanTotalBattles(plan),
         grindExpBefore: Number(ledger?.grindExpBefore || 0),
@@ -3695,6 +3708,7 @@ async function cmdRouteExpPracticalGrind() {
       redTargets,
       storyCheckpoints: storyCheckpointLabels.length ? storyCheckpointLabels : 'all-pre-Red',
       screenRuns,
+      verifyRuns,
       finalRuns,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
