@@ -925,3 +925,159 @@ For now, distinguish these meanings explicitly:
 - optional wild grinding remains an explicit cost rather than silently increasing natural EXP.
 
 A future `mandatory-only` profile may be added if every unavoidable trainer battle can be source-backed confidently.
+
+
+## 24. Fixed-team allocator A/B findings
+
+Validated by GitHub Actions `route-exp-allocator-ab #3` (run `36515186885`) using:
+
+- HeartGold / Cyndaquil;
+- trade-aware evolution;
+- fixed team families: Cyndaquil, Magnemite, Geodude, Abra, direct-capture Quagsire, Rhyhorn;
+- `normal-route` EXP;
+- maximum source-backed entry level;
+- map-order joining;
+- no optional grind;
+- equal resource policy;
+- 64 simulated runs per scored boss.
+
+All three allocators received the same natural EXP ledger:
+
+```
+totalNaturalExp   620,487
+totalMapExp       447,356
+totalMajorExp     173,131
+totalGrindExp           0
+```
+
+### 24.1 Aggregate result
+
+| allocator | mean win rate | bottom-5 | geometric | coverage |
+| --- | ---: | ---: | ---: | ---: |
+| balanced | 0.5870 | 0.0031 | 0.2944 | 0.6781 |
+| boss-aware | 0.6125 | 0.0125 | 0.3579 | 0.7333 |
+| breakpoint-aware | 0.5896 | 0.0031 | 0.3218 | 0.7042 |
+
+All three still have at least one 0% checkpoint and 0/64 against Red with zero optional grinding.
+
+### 24.2 Balanced keeps a real six-member roster
+
+At Red, balanced produces:
+
+```
+Quagsire   48
+Magneton   48
+Golem      48
+Rhyperior  48
+Alakazam   49
+Typhlosion 48
+```
+
+Pre-Red route EXP allocated after each member's capture:
+
+```
+Abra line       109,363
+Cyndaquil line  103,010
+Geodude line    102,714
+Magnemite line  106,496
+Rhyhorn line     84,647
+Quagsire line    94,967
+```
+
+This is broad and interpretable, but it is inefficient at several hard checkpoints:
+Morty 7.8%, Clair 0%, Lance 0%, Red 0%.
+
+### 24.3 Boss-aware improves route score by collapsing onto carries
+
+At Red, boss-aware produces:
+
+```
+Magneton 65
+Quagsire 51
+Golem    58
+Rhyhorn  35
+Quilava  28
+Abra     12
+```
+
+Pre-Red route EXP allocation:
+
+```
+Abra line           413
+Cyndaquil line   17,107
+Geodude line    189,238
+Magnemite line  270,529
+Rhyhorn line          0
+Quagsire line   123,910
+```
+
+Thus roughly three families consume nearly the entire route budget while three final-team families are effectively abandoned.
+
+This is not an implementation bug. It follows from the greedy immediate-boss utility objective.
+
+The concentration produces large gains at some checkpoints:
+
+- Clair: 0% -> 68.8%
+- Will: 1.6% -> 45.3%
+- Sabrina: 0% -> 56.3%
+- Misty: 3.1% -> 75.0%
+
+but loses substantial performance elsewhere, for example:
+
+- Chuck: 89.1% -> 57.8%
+- Silver at Victory Road: 64.1% -> 1.6%
+- Karen: 31.3% -> 0%
+- Erika: 39.1% -> 4.7%
+
+The higher aggregate score therefore does not mean the allocation is globally satisfactory.
+
+### 24.4 Breakpoint-aware does not solve the carry collapse
+
+Breakpoint-aware ends with exactly the same pre-Red EXP totals and final levels as boss-aware:
+
+```
+Magneton 65 / Quagsire 51 / Golem 58 /
+Rhyhorn 35 / Quilava 28 / Abra 12
+```
+
+It changes some intermediate allocations, but aggregate performance is lower than boss-aware.
+
+The current breakpoint implementation:
+
+- uses only the next few bosses (default horizon 4);
+- looks ahead only a limited number of levels (default 12);
+- bounds breakpoint bonus relative to immediate boss utility;
+- amortizes distant breakpoints over their full EXP cost.
+
+These safeguards prevent pathological long-range jumps, but they also make the foresight too weak to rescue families whose useful evolution is several levels away or whose immediate matchup utility is poor.
+
+Examples exposed by this run:
+
+- Abra remains below Lv16, so Kadabra/Alakazam is never reached.
+- Cyndaquil line stops at Quilava Lv28, so Typhlosion is never reached.
+- Rhyhorn remains Lv35, so Rhydon and therefore Protector-based Rhyperior are never reached.
+
+This is an important semantic result of route-aware leveling: a legal terminal evolution path does not imply the optimizer actually reaches its prerequisite levels.
+
+### 24.5 Consequence for the next allocator iteration
+
+Do not simply choose boss-aware as the route allocator because it has the highest mean score in this single fixed-team run.
+
+Before optional-grind Pareto or full team search, compare the existing anti-collapse variants:
+
+- `boss-aware-soft`
+- `boss-aware-depth`
+- `boss-aware-saturation`
+
+The desired behavior is not enforced equal leveling. It is an allocator that preserves concentrated investment when useful while avoiding irreversible starvation of strategically valuable future members.
+
+The follow-up should therefore measure:
+
+- aggregate route performance;
+- lower-tail boss performance;
+- final evolution state;
+- EXP concentration by member;
+- number of members that receive negligible post-capture EXP;
+- Red progress even when win rate remains zero.
+
+Only after selecting a stable allocator should optional-grind Pareto experiments be treated as meaningful.
