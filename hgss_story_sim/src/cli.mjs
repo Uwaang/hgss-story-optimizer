@@ -69,8 +69,8 @@ function mergeExpAccess(baseAccess, expAccess) {
 
 function normalizeGrindPolicy(value) {
   const policy = String(value || 'none').toLowerCase();
-  if (!['none', 'ace-paid'].includes(policy)) {
-    throw new Error(`Unknown grind policy: ${value}. Use none or ace-paid.`);
+  if (!['none', 'ace-paid', 'budgeted'].includes(policy)) {
+    throw new Error(`Unknown grind policy: ${value}. Use none, ace-paid, or budgeted.`);
   }
   return policy;
 }
@@ -192,6 +192,10 @@ async function loadExpContext(
   const normalizedEntryLevelPolicy = normalizeEntryLevelPolicy(entryLevelPolicy);
   const normalizedSameStageJoinPolicy = normalizeSameStageJoinPolicy(sameStageJoinPolicy);
   const normalizedExpAllocator = normalizeExpAllocator(expAllocator);
+  const grindBudget = Math.max(0, Math.floor(Number(arg('grind-budget', '0'))));
+  if (!Number.isFinite(grindBudget)) {
+    throw new Error(`Invalid --grind-budget: ${arg('grind-budget', '0')}`);
+  }
   const bossAwareSoftLevelScale = Number(arg('soft-level-scale', '8'));
   const breakpointBossHorizon = Number(arg('breakpoint-boss-horizon', '4'));
   const breakpointLevelLookahead = Number(arg('breakpoint-level-lookahead', '12'));
@@ -215,6 +219,7 @@ async function loadExpContext(
       entryLevelPolicy: normalizedEntryLevelPolicy,
       sameStageJoinPolicy: normalizedSameStageJoinPolicy,
       expAllocator: normalizedExpAllocator,
+      grindBudget,
       bossAwareSoftLevelScale,
       breakpointBossHorizon,
       breakpointLevelLookahead,
@@ -243,6 +248,7 @@ async function loadExpContext(
     entryLevelPolicy: normalizedEntryLevelPolicy,
     sameStageJoinPolicy: normalizedSameStageJoinPolicy,
     expAllocator: normalizedExpAllocator,
+    grindBudget,
     bossAwareSoftLevelScale,
     breakpointBossHorizon,
     breakpointLevelLookahead,
@@ -705,6 +711,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         expWorld: expContext.world,
         profile: expProfile,
         grindPolicy: expContext?.grindPolicy || 'none',
+        grindBudget: expContext?.grindBudget || 0,
         entryLevelPolicy: expContext?.entryLevelPolicy || 'midpoint',
         sameStageJoinPolicy: expContext?.sameStageJoinPolicy || 'map-order',
         allocator: expContext?.expAllocator || 'balanced',
@@ -1070,6 +1077,7 @@ async function cmdSimulate() {
       expProfile,
       'HEARTGOLD',
       grindPolicy,
+      grindBudget: Number(expContext?.grindBudget || 0),
       entryLevelPolicy,
       sameStageJoinPolicy,
       expAllocator,
@@ -2862,6 +2870,9 @@ async function cmdRouteExpStoryEvaluate() {
       availableMons: row.availableMons || [],
       memberExpBefore: ledger.expBefore || {},
       routeAllocatedExpBefore: ledger.routeAllocatedExpBefore || {},
+      grindAllocatedByKeyBefore: ledger.grindAllocatedByKeyBefore || {},
+      grindAllocatedThisCheckpoint: ledger.grindAllocatedThisCheckpoint || {},
+      grindBudgetReleasedBefore: Number(ledger.grindBudgetReleasedBefore || 0),
       winRate: Number(row.winRate || 0),
       averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
       mapExpBefore: Number(ledger.mapExpBefore || 0),
@@ -2919,7 +2930,11 @@ async function cmdRouteExpStoryEvaluate() {
       totalMajorExp: Number(evaluation.expSchedule?.totalMajorExp || 0),
       totalAllocatedExp: Number(evaluation.expSchedule?.totalAllocatedExp || 0),
       totalUnallocatedExp: Number(evaluation.expSchedule?.totalUnallocatedExp || 0),
+      grindBudget: Number(evaluation.expSchedule?.grindBudget || 0),
       totalGrindExp: Number(evaluation.expSchedule?.totalGrindExp || 0),
+      totalReleasedGrindBudget: Number(evaluation.expSchedule?.totalReleasedGrindBudget || 0),
+      unusedGrindBudget: Number(evaluation.expSchedule?.unusedGrindBudget || 0),
+      grindAllocatedByKey: evaluation.expSchedule?.grindAllocatedByKey || {},
       unknownEntryLevels: evaluation.expSchedule?.unknownEntryLevels || [],
     },
     firstGym: falkner,
