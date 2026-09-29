@@ -3408,6 +3408,13 @@ async function cmdRouteExpPracticalGrind() {
   const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '64'))));
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
+  const storyCheckpointLabels = String(arg('story-checkpoints', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const storyCheckpointFilter = storyCheckpointLabels.length
+    ? new Set(storyCheckpointLabels)
+    : null;
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
@@ -3451,8 +3458,17 @@ async function cmdRouteExpPracticalGrind() {
 
   const routeBosses = storyBattlesForCandidates(story.bosses, team);
   const storyBossLabels = routeBosses
-    .filter(boss => String(boss.label) !== 'Red')
+    .filter(boss =>
+      String(boss.label) !== 'Red' &&
+      (!storyCheckpointFilter || storyCheckpointFilter.has(String(boss.label)))
+    )
     .map(boss => String(boss.label));
+  if (storyCheckpointFilter) {
+    const missing = storyCheckpointLabels.filter(label => !storyBossLabels.includes(label));
+    if (missing.length) {
+      throw new Error('Unknown practical story checkpoint(s): ' + missing.join(', '));
+    }
+  }
 
   function expContextFor(plan) {
     return {
@@ -3677,6 +3693,7 @@ async function cmdRouteExpPracticalGrind() {
       grindDecisionUnit: 'expected wild battles at the best modeled source available before each checkpoint',
       storyTargets,
       redTargets,
+      storyCheckpoints: storyCheckpointLabels.length ? storyCheckpointLabels : 'all-pre-Red',
       screenRuns,
       finalRuns,
       redSeparatedFromStoryConstraint: true,
