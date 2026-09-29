@@ -4014,6 +4014,14 @@ async function cmdExpBudgetSmoke() {
     profile: 'all-accessible',
     grindPolicy: 'ace-paid',
   });
+  const planned = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'all-accessible',
+    grindPolicy: 'planned',
+    grindPlanBattles: { Falkner: 5 },
+  });
 
   if (major.totalMapExp !== 0) {
     throw new Error(`major profile unexpectedly included map EXP: ${major.totalMapExp}`);
@@ -4043,6 +4051,25 @@ async function cmdExpBudgetSmoke() {
   if (!(acePaid.totalGrindExp > 0) || !(acePaid.totalExpectedGrindBattles > 0)) {
     throw new Error('ace-paid profile failed to record paid grind');
   }
+  if (planned.totalExpectedGrindBattles !== 5) {
+    throw new Error(
+      `planned grind expected exactly 5 battles, got ${planned.totalExpectedGrindBattles}`
+    );
+  }
+  if (!(planned.totalGrindExp > 0)) {
+    throw new Error('planned grind failed to allocate EXP');
+  }
+  if (planned.totalNaturalExp !== accessible.totalNaturalExp) {
+    throw new Error(
+      `planned grind changed natural EXP: ${planned.totalNaturalExp} != ${accessible.totalNaturalExp}`
+    );
+  }
+  const plannedFalkner = planned.battles.find(row => row.label === 'Falkner');
+  if (Number(plannedFalkner?.expectedGrindBattles || 0) !== 5) {
+    throw new Error(
+      `Falkner planned grind count mismatch: ${plannedFalkner?.expectedGrindBattles}`
+    );
+  }
 
   console.log(JSON.stringify({
     routeBattleCount: route.length,
@@ -4066,6 +4093,18 @@ async function cmdExpBudgetSmoke() {
       totalExpectedGrindBattles: acePaid.totalExpectedGrindBattles,
       firstBattle: acePaid.battles[0],
       finalLevels: acePaid.finalLevels,
+    },
+    planned: {
+      grindPlanBattles: planned.grindPlanBattles,
+      totalNaturalExp: planned.totalNaturalExp,
+      totalGrindExp: planned.totalGrindExp,
+      totalExpectedGrindBattles: planned.totalExpectedGrindBattles,
+      falkner: {
+        expectedGrindBattles: plannedFalkner?.expectedGrindBattles ?? null,
+        grindExpBefore: plannedFalkner?.grindExpBefore ?? null,
+        bestWildGrind: plannedFalkner?.bestWildGrind ?? null,
+      },
+      finalLevels: planned.finalLevels,
     },
   }, null, 2));
 }
