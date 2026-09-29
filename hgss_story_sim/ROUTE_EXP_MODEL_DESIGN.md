@@ -1586,3 +1586,239 @@ The equal-level beam often favored Magneton, and the direct controlled A/B found
 Once route-aware leveling and a different six-member composition are considered, Ampharos appears in the leading high-grind route candidate without any species-specific rescue heuristic.
 
 This supports the policy of improving search/route semantics rather than forcing a preferred species into the beam.
+
+
+## 30. Equal-level candidate rerank findings
+
+The first route-aware team rerank reused successful equal-level search artifacts from overnight run `36452926578`:
+
+- Lv63 / hybrid pre-cap 1024
+- Lv63 / hybrid pre-cap 2048
+- Lv72 / hybrid pre-cap 1024
+
+The union of `final`, `finalPareto`, and `preliminaryPareto` rows, plus the direct-capture Quagsire control team, produced 26 unique source-aware team candidates.
+
+Each candidate preserved its exact `teamKeys`, so source variants such as:
+
+- Wooper -> Quagsire
+- direct-capture Quagsire
+- Larvitar -> Pupitar/Tyranitar
+- direct-capture Pupitar
+
+remain separate candidates even when their late-game terminal species overlap.
+
+The route reranker used:
+
+```
+exp profile       normal-route
+allocator         boss-aware-soft
+entry level       max legal source level
+join policy       map-order
+grind budgets     0 and 1.6M
+screen            16 runs/boss
+final validation  128 runs/boss
+```
+
+### 30.1 Natural-EXP-only ranking is very different from equal-level ranking
+
+At zero optional grind, the strongest route-wide candidate among this pool was:
+
+```
+Rhyperior / Magneton / Gengar / Gyarados / Typhlosion / Pupitar
+```
+
+with direct-capture Pupitar as the late source.
+
+128-run route metrics:
+
+```
+score      0.6885
+geometric  0.4441
+coverage   0.7990
+Red        0 / 128
+Red faints 1.648
+```
+
+Red levels:
+
+```
+Rhyperior 54
+Magneton  51
+Gengar    47
+Gyarados  50
+Typhlosion43
+Pupitar   45
+```
+
+This result is semantically important.
+
+The candidate is a "Tyranitar family" team in equal-level search, but under the natural route EXP ledger it never reaches Tyranitar. The actual Red team still contains Pupitar.
+
+Thus route-aware optimization changes not only ranking but also the realized final evolutionary state.
+
+The next-best natural-route candidates were similar late-capture / carry structures involving:
+
+- Rhyperior or Quagsire
+- Magneton
+- Gengar
+- Gyarados
+- Typhlosion
+- Pupitar
+
+This is evidence that a route-aware candidate generator should not assume the equal-level terminal form is necessarily realized.
+
+### 30.2 1.6M grind rerank produces a different winner
+
+At 1.6M optional EXP, the leading route-aware candidate was:
+
+```
+Rhyperior / Golem / Ampharos / Typhlosion / Slowbro / Forretress
+```
+
+128-run screen/final result:
+
+```
+score      0.9745
+geometric  0.9628
+coverage   1.0000
+Red        55.47%
+Red faints 5.172
+```
+
+final levels:
+
+```
+Rhyperior 75
+Golem     75
+Ampharos  70
+Typhlosion66
+Slowbro   71
+Forretress67
+```
+
+The previous direct-capture Quagsire control was second:
+
+```
+Quagsire / Rhyperior / Magneton / Golem / Typhlosion / Alakazam
+```
+
+with:
+
+```
+score      0.9674
+geometric  0.9511
+coverage   1.0000
+Red        53.12%
+Red faints 5.117
+```
+
+### 30.3 1,000-run validation confirms the new leader
+
+A dedicated 1,000-run validation compared the two leading 1.6M teams.
+
+#### Ampharos / Forretress / Slowbro team
+
+```
+Rhyperior / Golem / Ampharos / Typhlosion / Slowbro / Forretress
+
+Red:
+565 / 1000 = 56.5%
+average opponent faints = 5.199
+
+Lance:
+82.5%
+
+Blue:
+100%
+
+route score:
+0.9749
+
+bottom-5:
+0.8528
+
+geometric:
+0.96954
+
+coverage:
+1.0000
+```
+
+#### Direct-Quagsire control
+
+```
+Quagsire / Rhyperior / Magneton / Golem / Typhlosion / Alakazam
+
+Red:
+527 / 1000 = 52.7%
+average opponent faints = 5.110
+
+Lance:
+58.4%
+
+Blue:
+100%
+
+route score:
+0.9679
+
+bottom-5:
+0.8080
+
+geometric:
+0.95820
+
+coverage:
+1.0000
+```
+
+The new team therefore leads not only on Red but much more strongly on first Lance and lower-tail route performance.
+
+The Red difference is modest, about 3.8 percentage points, but the whole-route advantage is broader.
+
+### 30.4 Interpretation
+
+This rerank demonstrates that equal-level search is useful as a candidate generator, but its ordering is not reliable for route-aware optimization.
+
+Three major effects change the ranking:
+
+1. capture source and capture level;
+2. time-ordered EXP allocation;
+3. whether terminal evolutions are actually reached under the route budget.
+
+The appearance of Ampharos in the best 1.6M route team is also important.
+
+Earlier equal-level search frequently preferred Magneton, partly because its cheap proxy/search pruning strongly favored Magneton-containing partial teams.
+
+Once source-aware route EXP and full-route validation are applied, Ampharos can be part of the better final route team.
+
+This does not imply Ampharos is globally superior to Magneton. It shows that the ranking is context- and team-dependent, exactly as intended.
+
+## 31. Remaining search bias: candidate generation is still equal-level based
+
+The current reranker evaluates route semantics correctly, but its input teams were generated by an equal-level search whose early-game battles are level-saturated and whose pruning is dominated by later combat value.
+
+Therefore the current 26-team rerank is not yet a true route-aware global search.
+
+Potentially strong teams can still be absent before reranking if they were pruned from equal-level search for reasons that disappear under realistic route levels.
+
+The next search architecture should therefore separate:
+
+1. **broad candidate generation**
+   - maximize family/source diversity;
+   - preserve early/mid/late acquisition patterns;
+   - avoid assuming terminal evolution is reached;
+   - keep source variants distinct;
+
+2. **cheap route-aware screening**
+   - route EXP ledger;
+   - individual levels at checkpoints;
+   - low-run hard/full-route battles;
+   - boss-aware-soft allocation;
+
+3. **high-run route validation**
+   - only for the surviving team Pareto/frontier.
+
+A direct brute-force route battle search over every six-member combination remains too expensive.
+
+The next implementation target should be a route-aware beam/rerank search that uses cheap route proxies or low-run route evaluations earlier than the final candidate stage.
