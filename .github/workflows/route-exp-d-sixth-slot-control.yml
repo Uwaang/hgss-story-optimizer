@@ -1,0 +1,69 @@
+name: route-exp-d-sixth-slot-control
+
+on:
+  push:
+    branches:
+      - exp/overnight-endogenous-candidates
+
+jobs:
+  d_sixth_control:
+    if: contains(github.event.head_commit.message, '[d-sixth-control]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - id: late-tyranitar
+            sixth: "Larvitar::Pupitar->Tyranitar#1"
+          - id: early-quagsire
+            sixth: "Wooper::Quagsire->Quagsire#1"
+          - id: early-alakazam
+            sixth: "Abra::Abra->Alakazam#1"
+          - id: early-slowbro
+            sixth: "Slowpoke::Slowpoke->Slowbro#1"
+          - id: early-golem
+            sixth: "Geodude::Geodude->Golem#1"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Run D sixth-slot control
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,${{ matrix.sixth }}" \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --story-checkpoints="Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2" \
+            --screen-runs=4 --verify-runs=32 --repair-runs=64 --final-runs=128 \
+            --max-repair-rounds=20 \
+            > "results/d-sixth-${{ matrix.id }}.json"
+      - name: Assert convergence
+        run: |
+          jq -e '
+            .assumptions.globalRepair == true and
+            .assumptions.finalRuns == 128 and
+            .storyFrontier[0].repairConverged == true and
+            .storyFrontier[0].storyWorstBossWinRate >= 0.5
+          ' "results/d-sixth-${{ matrix.id }}.json" >/dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d-sixth-${{ matrix.id }}
+          path: hgss_story_sim/results/d-sixth-${{ matrix.id }}.json
+          if-no-files-found: warn
