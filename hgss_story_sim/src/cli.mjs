@@ -3335,6 +3335,360 @@ async function cmdRouteExpStoryEvaluate() {
 }
 
 
+
+function parseRateTargets(value, fallback) {
+  const parsed = String(value || fallback)
+    .split(',')
+    .map(item => Number(item.trim()))
+    .filter(rate => Number.isFinite(rate) && rate > 0 && rate <= 1);
+  if (!parsed.length) throw new Error('At least one rate target in (0,1] is required');
+  return [...new Set(parsed)].sort((a, b) => a - b);
+}
+
+function practicalGrindPlanTotalBattles(plan) {
+  return Object.values(plan || {}).reduce(
+    (sum, value) => sum + Math.max(0, Math.floor(Number(value || 0))),
+    0,
+  );
+}
+
+function practicalGrindScheduleRow(evaluation, label) {
+  return (evaluation?.expSchedule?.battles || []).find(
+    row => String(row.label) === String(label)
+  ) || null;
+}
+
+function practicalMaxAdditionalGrindBattles(team, evaluation, label) {
+  const ledger = practicalGrindScheduleRow(evaluation, label);
+  const expPerBattle = Number(ledger?.bestWildGrind?.expectedExpPerBattle || 0);
+  if (!(expPerBattle > 0)) return 0;
+  let totalExpToLevel100 = 0;
+  const expBefore = ledger?.expBefore || {};
+  for (const candidate of team) {
+    const key = candidateIdentity(candidate);
+    const current = Number(expBefore[key]);
+    if (!Number.isFinite(current)) continue;
+    const cap = expAtLevel(candidate.growthRate, 100);
+    if (cap === null) continue;
+    totalExpToLevel100 += Math.max(0, cap - current);
+  }
+  return Math.ceil(totalExpToLevel100 / expPerBattle);
+}
+
+function practicalGrindCheckpoints(evaluation) {
+  const rowsByBoss = new Map(
+    (evaluation?.rows || []).map(row => [String(row.boss), row])
+  );
+  return (evaluation?.expSchedule?.battles || []).map(ledger => {
+    const row = rowsByBoss.get(String(ledger.label)) || null;
+    return {
+      boss: ledger.label,
+      stage: Number(ledger.stage || 0),
+      winRate: row ? Number(row.winRate || 0) : null,
+      playerLevels: row?.playerLevels || ledger.levelsBefore || {},
+      grindBattlesBefore: Number(ledger.expectedGrindBattles || 0),
+      grindExpBefore: Number(ledger.grindExpBefore || 0),
+      bestWildExpPerBattle: Number(ledger.bestWildGrind?.expectedExpPerBattle || 0),
+      bestWildSpecies: ledger.bestWildGrind?.species || null,
+    };
+  });
+}
+
+async function cmdRouteExpPracticalGrind() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'max'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '4'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '64'))));
+  const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
+  const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
+  const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('route-exp-practical-grind pilot currently supports HEARTGOLD + Cyndaquil only');
+  }
+  if (expProfile === 'ace') {
+    throw new Error('route-exp-practical-grind requires a route EXP profile');
+  }
+  if (teamKeys.length !== 6) {
+    throw new Error('route-exp-practical-grind requires six exact --team-keys');
+  }
+
+  const story = await loadPracticalRedPrepStory();
+  const [pool, moveAccess, baseExpContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      'none',
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const team = teamKeys.map(key => {
+    const candidate = byKey.get(key);
+    if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
+    return candidate;
+  });
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Requested practical-grind team violates family/exclusive-group constraints');
+  }
+  const starter = team.find(candidate =>
+    candidate.exclusiveGroup === 'starter' &&
+    candidate.species.toLowerCase() === starterName.toLowerCase()
+  );
+  if (!starter) throw new Error('Requested team must contain the selected starter');
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const storyBossLabels = routeBosses
+    .filter(boss => String(boss.label) !== 'Red')
+    .map(boss => String(boss.label));
+
+  function expContextFor(plan) {
+    return {
+      ...baseExpContext,
+      grindPolicy: 'planned',
+      grindBudget: 0,
+      grindPlanBattles: { ...(plan || {}) },
+    };
+  }
+
+  const evaluationCache = new Map();
+  async function evaluateBoss(plan, bossLabel, runs) {
+    const key = JSON.stringify(plan) + '|boss=' + bossLabel + '|runs=' + runs;
+    if (!evaluationCache.has(key)) {
+      evaluationCache.set(
+        key,
+        evaluateCandidatesWithMoveAccess(
+          team,
+          story.bosses,
+          runs,
+          moveAccess,
+          expContextFor(plan),
+          'planned',
+          {
+            p1AiMode: 'smart',
+            routeBuildOptimization: true,
+            bossLabels: [bossLabel],
+          },
+        )
+      );
+    }
+    return evaluationCache.get(key);
+  }
+
+  async function evaluateFull(plan, runs) {
+    const key = JSON.stringify(plan) + '|full|runs=' + runs;
+    if (!evaluationCache.has(key)) {
+      evaluationCache.set(
+        key,
+        evaluateCandidatesWithMoveAccess(
+          team,
+          story.bosses,
+          runs,
+          moveAccess,
+          expContextFor(plan),
+          'planned',
+          { p1AiMode: 'smart', routeBuildOptimization: true },
+        )
+      );
+    }
+    return evaluationCache.get(key);
+  }
+
+  async function minimumAdditionalBattles(plan, bossLabel, targetRate) {
+    const base = await evaluateBoss(plan, bossLabel, screenRuns);
+    const baseRow = base.rows.find(row => String(row.boss) === bossLabel);
+    const baseRate = Number(baseRow?.winRate || 0);
+    if (baseRate >= targetRate) {
+      return {
+        additionalBattles: 0,
+        achieved: true,
+        screenWinRate: baseRate,
+        maxAdditionalBattles: practicalMaxAdditionalGrindBattles(team, base, bossLabel),
+      };
+    }
+
+    const current = Math.max(0, Math.floor(Number(plan[bossLabel] || 0)));
+    const maxAdditional = practicalMaxAdditionalGrindBattles(team, base, bossLabel);
+    if (maxAdditional <= 0) {
+      return {
+        additionalBattles: 0,
+        achieved: false,
+        screenWinRate: baseRate,
+        maxAdditionalBattles: 0,
+      };
+    }
+
+    async function rateAt(additional) {
+      const candidatePlan = {
+        ...plan,
+        [bossLabel]: current + Math.max(0, Math.floor(Number(additional || 0))),
+      };
+      const evaluation = await evaluateBoss(candidatePlan, bossLabel, screenRuns);
+      return Number(evaluation.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0);
+    }
+
+    let low = 0;
+    let high = 1;
+    let highRate = await rateAt(high);
+    while (highRate < targetRate && high < maxAdditional) {
+      low = high;
+      high = Math.min(maxAdditional, high * 2);
+      highRate = await rateAt(high);
+    }
+    if (highRate < targetRate) {
+      return {
+        additionalBattles: maxAdditional,
+        achieved: false,
+        screenWinRate: highRate,
+        maxAdditionalBattles: maxAdditional,
+      };
+    }
+
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2);
+      const rate = await rateAt(mid);
+      if (rate >= targetRate) high = mid;
+      else low = mid;
+    }
+    return {
+      additionalBattles: high,
+      achieved: true,
+      screenWinRate: await rateAt(high),
+      maxAdditionalBattles: maxAdditional,
+    };
+  }
+
+  const storyFrontier = [];
+  for (const storyTarget of storyTargets) {
+    const plan = {};
+    const decisions = [];
+    for (const bossLabel of storyBossLabels) {
+      const before = await evaluateBoss(plan, bossLabel, screenRuns);
+      const beforeRate = Number(
+        before.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
+      );
+      const search = await minimumAdditionalBattles(plan, bossLabel, storyTarget);
+      if (search.additionalBattles > 0) {
+        plan[bossLabel] = Number(plan[bossLabel] || 0) + search.additionalBattles;
+      }
+      const after = search.additionalBattles > 0
+        ? await evaluateBoss(plan, bossLabel, screenRuns)
+        : before;
+      const afterRate = Number(
+        after.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
+      );
+      const ledger = practicalGrindScheduleRow(after, bossLabel);
+      decisions.push({
+        boss: bossLabel,
+        targetWinRate: storyTarget,
+        beforeWinRate: beforeRate,
+        afterWinRate: afterRate,
+        addedGrindBattles: search.additionalBattles,
+        cumulativeGrindBattles: practicalGrindPlanTotalBattles(plan),
+        grindExpBefore: Number(ledger?.grindExpBefore || 0),
+        bestWildExpPerBattle: Number(ledger?.bestWildGrind?.expectedExpPerBattle || 0),
+        bestWildSpecies: ledger?.bestWildGrind?.species || null,
+        achieved: search.achieved,
+      });
+    }
+
+    const storyEvaluation = await evaluateFull(plan, finalRuns);
+    const redBaseline = storyEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
+    const redFrontier = [];
+    for (const redTarget of redTargets) {
+      const redPlan = { ...plan };
+      const search = await minimumAdditionalBattles(redPlan, 'Red', redTarget);
+      if (search.additionalBattles > 0) {
+        redPlan.Red = Number(redPlan.Red || 0) + search.additionalBattles;
+      }
+      const finalEvaluation = await evaluateFull(redPlan, finalRuns);
+      const red = finalEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
+      const redLedger = practicalGrindScheduleRow(finalEvaluation, 'Red');
+      redFrontier.push({
+        targetWinRate: redTarget,
+        additionalRedGrindBattles: search.additionalBattles,
+        totalGrindBattles: practicalGrindPlanTotalBattles(redPlan),
+        totalGrindExp: Number(finalEvaluation.expSchedule?.totalGrindExp || 0),
+        achievedWinRate: Number(red?.winRate || 0),
+        averageOpponentFaints: Number(red?.averageOpponentFaints || 0),
+        redGrindExp: Number(redLedger?.grindExpBefore || 0),
+        redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
+        finalLevels: finalEvaluation.finalLevels,
+        plan: redPlan,
+      });
+    }
+
+    storyFrontier.push({
+      storyTargetWinRate: storyTarget,
+      storyPlan: plan,
+      storyGrindBattles: practicalGrindPlanTotalBattles(plan),
+      storyGrindExp: Number(storyEvaluation.expSchedule?.totalGrindExp || 0),
+      storyScore: Number(storyEvaluation.score || 0),
+      storyWorstBossWinRate: Math.min(
+        ...storyEvaluation.rows
+          .filter(row => String(row.boss) !== 'Red')
+          .map(row => Number(row.winRate || 0))
+      ),
+      redBaseline: redBaseline ? {
+        winRate: Number(redBaseline.winRate || 0),
+        averageOpponentFaints: Number(redBaseline.averageOpponentFaints || 0),
+        playerLevels: redBaseline.playerLevels || {},
+      } : null,
+      decisions,
+      checkpoints: practicalGrindCheckpoints(storyEvaluation),
+      redFrontier,
+    });
+  }
+
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'practical Red-prep endogenous grind pilot: minimize checkpoint grind battles for story reliability, then price Red preparation separately',
+    routeProfile: 'practical-red-prep',
+    version,
+    starter: starterName,
+    evolutionPolicy,
+    team: team.map(candidate => ({
+      species: candidate.species,
+      terminalSpecies: candidate.terminalSpecies || null,
+      key: candidateIdentity(candidate),
+    })),
+    assumptions: {
+      expProfile,
+      expAllocator,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      resourceProfile,
+      spendPolicy,
+      grindPolicy: 'planned',
+      grindDecisionUnit: 'expected wild battles at the best modeled source available before each checkpoint',
+      storyTargets,
+      redTargets,
+      screenRuns,
+      finalRuns,
+      redSeparatedFromStoryConstraint: true,
+      rematchEliteFourRewardsIncludedBeforeRed: true,
+    },
+    storyFrontier,
+    evaluationCacheEntries: evaluationCache.size,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 function routeExpRerankRow(team, evaluation, budget, sources, runs) {
   const red = (evaluation.rows || []).find(row => String(row.boss) === 'Red') || null;
   const lance = (evaluation.rows || []).find(row => String(row.boss) === 'Lance') || null;
@@ -9248,6 +9602,7 @@ const commands = {
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'route-exp-story-rerank': cmdRouteExpStoryRerank,
   'route-exp-story-search': cmdRouteExpStorySearch,
+  'route-exp-practical-grind': cmdRouteExpPracticalGrind,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
