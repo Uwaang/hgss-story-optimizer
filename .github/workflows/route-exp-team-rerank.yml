@@ -1,0 +1,132 @@
+name: route-exp-team-rerank
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rerank:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[route-rerank]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+
+      - name: Download successful overnight equal-level artifacts
+        shell: bash
+        run: |
+          mkdir -p rerank-source
+          gh run download 36452926578 \
+            -n overnight-recall-lv63-cap1024-seed505 \
+            -D rerank-source/lv63-cap1024
+          gh run download 36452926578 \
+            -n overnight-recall-lv63-cap2048-seed505 \
+            -D rerank-source/lv63-cap2048
+          gh run download 36452926578 \
+            -n overnight-recall-lv72-cap1024-seed505 \
+            -D rerank-source/lv72-cap1024
+          find rerank-source -type f -maxdepth 3 -print | sort
+
+      - name: Route EXP rerank
+        shell: bash
+        run: |
+          mkdir -p results
+          INPUTS=$(find rerank-source -type f -name '*.json' ! -name '*summary.json' | sort | paste -sd, -)
+          node src/cli.mjs route-exp-story-rerank \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route \
+            --exp-allocator=boss-aware-soft \
+            --grind-budgets=0,1600000 \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --screen-runs=16 --final-runs=64 --final-cap=6 \
+            --inputs="$INPUTS" \
+            --sections=final,finalPareto,preliminaryPareto \
+            --include-team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/route-exp-team-rerank.json
+
+      - name: Assert rerank coverage
+        run: |
+          jq -e '
+            .candidateTeamCount >= 20 and
+            ([.screened[] | .grindBudget] | unique | sort) == [0,1600000] and
+            (.final | length) >= 4
+          ' results/route-exp-team-rerank.json >/dev/null
+
+      - name: Build compact report
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const d=JSON.parse(fs.readFileSync('results/route-exp-team-rerank.json','utf8'));
+          const budgets=[...new Set(d.final.map(r=>r.grindBudget))].sort((a,b)=>a-b);
+          const compact={
+            candidateTeamCount:d.candidateTeamCount,
+            assumptions:d.assumptions,
+            byBudget:{},
+            finalPareto:d.finalPareto,
+          };
+          for(const budget of budgets){
+            compact.byBudget[budget]=d.final
+              .filter(r=>r.grindBudget===budget)
+              .sort((a,b)=>
+                b.storyClearGeometricScore-a.storyClearGeometricScore ||
+                b.storyClearCoverageScore-a.storyClearCoverageScore ||
+                b.bottom5BossWinRate-a.bottom5BossWinRate ||
+                b.score-a.score ||
+                (b.red?.winRate||0)-(a.red?.winRate||0)
+              )
+              .map(r=>({
+                team:r.finalTeam,
+                teamKeys:r.teamKeys,
+                score:r.score,
+                bottom5:r.bottom5BossWinRate,
+                geometric:r.storyClearGeometricScore,
+                coverage:r.storyClearCoverageScore,
+                red:r.red,
+                lance:r.lance,
+                blue:r.blue,
+                finalLevels:r.finalLevels,
+                sources:r.sources,
+              }));
+          }
+          fs.writeFileSync('results/route-exp-team-rerank-summary.json',JSON.stringify(compact,null,2));
+          const lines=['# Route EXP team rerank','',`candidate teams: ${d.candidateTeamCount}`,''];
+          for(const budget of budgets){
+            lines.push(`## grind budget ${budget}`,'');
+            lines.push('| rank | final team | score | geometric | coverage | Red | Red faints |');
+            lines.push('|---:|---|---:|---:|---:|---:|---:|');
+            compact.byBudget[budget].forEach((r,i)=>{
+              lines.push(`| ${i+1} | ${r.team.join(' / ')} | ${r.score.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${(r.red?.winRate||0).toFixed(4)} | ${(r.red?.averageOpponentFaints||0).toFixed(3)} |`);
+            });
+            lines.push('');
+          }
+          fs.writeFileSync('results/route-exp-team-rerank-summary.md',lines.join('\n'));
+          console.log(lines.join('\n'));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-team-rerank
+          path: |
+            hgss_story_sim/results/route-exp-team-rerank.json
+            hgss_story_sim/results/route-exp-team-rerank-summary.json
+            hgss_story_sim/results/route-exp-team-rerank-summary.md
+          if-no-files-found: error
