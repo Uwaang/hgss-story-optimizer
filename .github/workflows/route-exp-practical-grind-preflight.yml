@@ -1,0 +1,57 @@
+name: route-exp-practical-grind-preflight
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+
+jobs:
+  practical_grind:
+    if: contains(github.event.head_commit.message, '[practical-grind-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Run endogenous practical grind preflight
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Geodude::Geodude->Golem#1,Slowpoke::Slowpoke->Slowbro#1,Pineco::Pineco->Forretress#1,Mareep::Mareep->Ampharos#1,Rhyhorn::Rhyhorn->Rhyperior#1" \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --screen-runs=1 --final-runs=8 \
+            > results/practical-grind-preflight.json
+      - name: Assert practical grind semantics
+        run: |
+          jq -e '
+            .routeProfile == "practical-red-prep" and
+            .assumptions.grindPolicy == "planned" and
+            .assumptions.redSeparatedFromStoryConstraint == true and
+            .assumptions.rematchEliteFourRewardsIncludedBeforeRed == true and
+            (.storyFrontier | length) == 1 and
+            (.storyFrontier[0].redFrontier | length) == 2 and
+            ([.storyFrontier[0].checkpoints[].boss] | index("Lance 2")) != null and
+            ([.storyFrontier[0].checkpoints[].boss] | index("Red")) != null and
+            (.storyFrontier[0].storyGrindBattles >= 0) and
+            ([.storyFrontier[0].redFrontier[].totalGrindBattles] | all(. >= .storyFrontier[0].storyGrindBattles))
+          ' results/practical-grind-preflight.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: practical-grind-preflight
+          path: hgss_story_sim/results/practical-grind-preflight.json
+          if-no-files-found: error
