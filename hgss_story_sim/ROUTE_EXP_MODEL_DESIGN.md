@@ -1450,3 +1450,139 @@ Therefore:
 - equal-level answers a broader late-game combat benchmark that also includes the optional rematch Elite Four.
 
 When comparing scores across the two models, do not treat their aggregate route metrics as if they were calculated over an identical boss population.
+
+
+## 30. Candidate-team route rerank
+
+The first route-aware candidate rerank reused successful equal-level search artifacts from overnight run `36452926578`.
+
+Inputs:
+
+- Lv63, hybrid pre-cap 1024, seed 505000;
+- Lv63, hybrid pre-cap 2048, seed 505000;
+- Lv72, hybrid pre-cap 1024, seed 505000;
+- the previously validated direct-capture Quagsire control.
+
+Candidate rows were deduplicated by exact `teamKeys`, so capture-source/evolution variants remain distinct even when they share the same terminal six.
+
+This produced 26 distinct route candidates.
+
+Each candidate was reranked under:
+
+- `normal-route` EXP;
+- `boss-aware-soft` allocation;
+- max legal entry level;
+- map-order acquisition;
+- grind budgets 0 and 1.6M.
+
+The route reranker therefore does not assume that the equal-level order remains valid.
+
+### 30.1 High-grind rerank winner
+
+At +1.6M optional EXP, the leading 128-run route candidate was:
+
+```
+Rhyperior / Golem / Ampharos / Typhlosion / Slowbro / Forretress
+```
+
+Exact family/source keys:
+
+```
+Cyndaquil::Cyndaquil->Typhlosion#1
+Geodude::Geodude->Golem#1
+Slowpoke::Slowpoke->Slowbro#1
+Pineco::Pineco->Forretress#1
+Mareep::Mareep->Ampharos#1
+Rhyhorn::Rhyhorn->Rhyperior#1
+```
+
+This candidate originated from the Lv72 equal-level final/Pareto set.
+
+128-run route result:
+
+```
+final levels:
+Rhyperior 75
+Golem     75
+Ampharos  70
+Typhlosion 66
+Slowbro   71
+Forretress 67
+
+Red:   55.5%
+Lance: 82.8%
+Blue: 100%
+geometric ~= 0.963
+coverage  = 1.0
+```
+
+The direct-Quagsire control at the same budget was approximately:
+
+```
+Quagsire / Rhyperior / Magneton / Golem / Typhlosion / Alakazam
+
+Red:   53.1%
+Lance: 55.5%
+Blue: 100%
+geometric ~= 0.951
+coverage  = 1.0
+```
+
+### 30.2 1,000-run winner validation
+
+The high-grind leader and the direct-Quagsire control were revalidated at 1,000 runs per route boss.
+
+#### Ampharos / Forretress / Slowbro team
+
+```
+Red:   565 / 1000 = 56.5%
+95% Wilson ~= 53.4% .. 59.5%
+average Red opponent faints = 5.199
+
+Lance: 82.5%
+Blue:  100%
+
+route score    ~= 0.9749
+bottom-5       ~= 0.8528
+geometric      ~= 0.9695
+coverage        = 1.0
+```
+
+#### Direct-Quagsire control
+
+```
+Red:   527 / 1000 = 52.7%
+95% Wilson ~= 49.6% .. 55.8%
+average Red opponent faints = 5.110
+
+Lance: 58.4%
+Blue:  100%
+
+route score    ~= 0.9679
+bottom-5       ~= 0.8080
+geometric      ~= 0.9582
+coverage        = 1.0
+```
+
+The 3.8 percentage-point Red difference alone is not a decisive 95%-level separation; the Wilson intervals overlap and an independent two-proportion approximation gives only about z=1.71.
+
+The stronger conclusion is route-wide:
+
+- materially higher Lance success;
+- higher route score;
+- higher bottom-tail performance;
+- higher geometric score;
+- same full coverage;
+- modestly higher Red clear rate/progress.
+
+Thus the Ampharos/Forretress/Slowbro candidate is the stronger **current high-grind route candidate**, while Red-only superiority should not be overstated.
+
+### 30.3 Important search implication
+
+This result also resolves an earlier concern about Ampharos.
+
+The equal-level beam often favored Magneton, and the direct controlled A/B found Ampharos and Magneton close.
+
+Once route-aware leveling and a different six-member composition are considered, Ampharos appears in the leading high-grind route candidate without any species-specific rescue heuristic.
+
+This supports the policy of improving search/route semantics rather than forcing a preferred species into the beam.
