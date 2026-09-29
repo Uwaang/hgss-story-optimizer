@@ -44,6 +44,11 @@ jobs:
             .candidatePool >= 20 and
             .assumptions.routeBuildOptimization == true and
             .assumptions.grindBudget == 0 and
+            .assumptions.searchPolicy == "route-story" and
+            .searchPolicy == "route-story" and
+            (.selectedCandidateDetails | length) == .screenedCandidates and
+            ([.selectedCandidateDetails[].availabilityBucket] | index("late")) != null and
+            ([.beamTrace[].targetSize] | index(6)) != null and
             (.top | length) >= 1 and
             ([.top[].teamKeys | length] | all(. == 6))
           ' results/route-exp-story-search-preflight.json >/dev/null
