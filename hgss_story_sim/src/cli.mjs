@@ -475,11 +475,15 @@ function storyStarterFromCandidates(candidates) {
 
 function storyBattlesForCandidates(bosses, candidates) {
   const starter = storyStarterFromCandidates(candidates);
+  // Preserve the canonical boss-array index before filtering starter-specific
+  // rival branches. Evolution item checkpoints are derived from the same
+  // unfiltered boss array, so reindexing after filtering puts route battles
+  // and evolution unlocks in different coordinate systems.
   return bosses
+    .map((boss, index) => ({ ...boss, _routeIndex: index }))
     .filter(boss =>
       !boss.appliesToStarter || (starter && boss.appliesToStarter === starter)
-    )
-    .map((boss, index) => ({ ...boss, _routeIndex: index }));
+    );
 }
 
 function summarizeCaptureSearch(candidates) {
