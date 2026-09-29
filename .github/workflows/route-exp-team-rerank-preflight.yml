@@ -1,0 +1,76 @@
+name: route-exp-team-rerank-preflight
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rerank_preflight:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[route-rerank-fast]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Download equal-level source artifacts
+        shell: bash
+        run: |
+          mkdir -p rerank-source
+          for name in \
+            overnight-recall-lv63-cap1024-seed505 \
+            overnight-recall-lv63-cap2048-seed505 \
+            overnight-recall-lv72-cap1024-seed505
+          do
+            gh run download 36452926578 -n "$name" -D "rerank-source/$name"
+          done
+      - name: Fast route rerank
+        shell: bash
+        run: |
+          mkdir -p results
+          INPUTS=$(find rerank-source -type f -name '*.json' ! -name '*summary.json' | sort | paste -sd, -)
+          node src/cli.mjs route-exp-story-rerank \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --grind-budgets=0,1600000 \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --screen-runs=4 --final-runs=4 --final-cap=8 \
+            --inputs="$INPUTS" \
+            --sections=final,finalPareto,preliminaryPareto \
+            --include-team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/rerank-preflight.json
+      - name: Build compact preflight
+        shell: bash
+        run: |
+          jq '{
+            candidateTeamCount,
+            assumptions,
+            top0: ([.screened[] | select(.grindBudget==0)] |
+              sort_by(-.storyClearGeometricScore,-.storyClearCoverageScore,-.score) | .[:10]),
+            top1600k: ([.screened[] | select(.grindBudget==1600000)] |
+              sort_by(-.storyClearGeometricScore,-.storyClearCoverageScore,-.score) | .[:10]),
+            pareto: .screenPareto
+          }' results/rerank-preflight.json > results/rerank-preflight-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-team-rerank-preflight
+          path: |
+            hgss_story_sim/results/rerank-preflight.json
+            hgss_story_sim/results/rerank-preflight-summary.json
+          if-no-files-found: error
