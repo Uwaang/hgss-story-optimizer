@@ -1,0 +1,126 @@
+name: route-exp-allocator-ab
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  allocator:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[allocator-ab]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator:
+          - balanced
+          - boss-aware
+          - breakpoint-aware
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate fixed team with ${{ matrix.allocator }}
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --entry-level=max --same-stage-join=map-order \
+            --exp-allocator=${{ matrix.allocator }} \
+            --resources=all --spend-policy=natural \
+            --runs=64 \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/route-exp-${{ matrix.allocator }}.json
+      - name: Assert comparable ledger
+        run: |
+          jq -e '
+            .ledger.totalGrindExp == 0 and
+            .ledger.totalUnallocatedExp == 0 and
+            (.finalBoss.availableMons | index("Rhyperior")) != null
+          ' results/route-exp-${{ matrix.allocator }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-allocator-${{ matrix.allocator }}
+          path: hgss_story_sim/results/route-exp-${{ matrix.allocator }}.json
+          if-no-files-found: error
+
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[allocator-ab]')
+    needs: allocator
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: route-exp-allocator-*
+          path: results
+      - name: Build comparison summary
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dirs = fs.readdirSync('results').sort();
+          const rows = [];
+          const keyBosses = ['Falkner','Whitney','Morty','Clair','Lance','Blue','Red'];
+          for (const dir of dirs) {
+            const full = path.join('results', dir);
+            if (!fs.statSync(full).isDirectory()) continue;
+            const file = fs.readdirSync(full).find(x => x.endsWith('.json'));
+            if (!file) continue;
+            const data = JSON.parse(fs.readFileSync(path.join(full, file), 'utf8'));
+            const red = data.checkpoints.find(x => x.boss === 'Red');
+            rows.push({
+              allocator: data.assumptions.expAllocator,
+              score: data.performance.score,
+              worst: data.performance.worstBossWinRate,
+              bottom5: data.performance.bottom5BossWinRate,
+              geometric: data.performance.storyClearGeometricScore,
+              coverage: data.performance.storyClearCoverageScore,
+              totalNaturalExp: data.ledger.totalNaturalExp,
+              totalGrindExp: data.ledger.totalGrindExp,
+              finalLevels: data.finalLevels,
+              routeAllocatedExpAtRed: red?.routeAllocatedExpBefore || {},
+              keyBosses: Object.fromEntries(
+                keyBosses.map(name => {
+                  const cp = data.checkpoints.find(x => x.boss === name);
+                  return [name, cp ? {
+                    winRate: cp.winRate,
+                    playerLevels: cp.playerLevels,
+                    routeAllocatedExpBefore: cp.routeAllocatedExpBefore,
+                  } : null];
+                })
+              ),
+            });
+          }
+          rows.sort((a,b) => a.allocator.localeCompare(b.allocator));
+          fs.writeFileSync('allocator-ab-summary.json', JSON.stringify({schemaVersion:1, rows}, null, 2));
+          const md = [
+            '# Route EXP allocator A/B',
+            '',
+            '| allocator | score | worst | bottom5 | geometric | coverage | natural EXP | grind EXP |',
+            '|---|---:|---:|---:|---:|---:|---:|---:|',
+            ...rows.map(r => `| ${r.allocator} | ${r.score.toFixed(4)} | ${r.worst.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${r.totalNaturalExp} | ${r.totalGrindExp} |`),
+            '',
+            'Full per-boss levels and per-member route EXP allocations are retained in allocator-ab-summary.json and the source artifacts.',
+          ].join('\n');
+          fs.writeFileSync('allocator-ab-summary.md', md);
+          console.log(md);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-allocator-comparison
+          path: |
+            allocator-ab-summary.json
+            allocator-ab-summary.md
+          if-no-files-found: error
