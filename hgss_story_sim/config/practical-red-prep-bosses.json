@@ -1,0 +1,316 @@
+{
+  "sourceCommit": "9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "notes": "Practical Red-prep route: canonical story battles through Blue, then Elite Four rematch + Lance rematch as an optional-but-common Red preparation loop, then Red. Unlike minimal story-bosses.json, rematch rewards are real EXP supply in this profile.",
+  "bosses": [
+    {
+      "stage": 0,
+      "key": "TRAINER_LEADER_FALKNER_FALKNER",
+      "label": "Falkner",
+      "kind": "gym"
+    },
+    {
+      "stage": 1,
+      "key": "TRAINER_EXECUTIVE_PROTON_PROTON",
+      "label": "Proton (Slowpoke Well)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0060_D26R0102.s"
+    },
+    {
+      "stage": 1,
+      "key": "TRAINER_LEADER_BUGSY_BUGSY",
+      "label": "Bugsy",
+      "kind": "gym"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER_7",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER_10",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_RIVAL_SILVER",
+      "label": "Silver (Azalea)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0866_T23.s"
+    },
+    {
+      "stage": 2,
+      "key": "TRAINER_LEADER_WHITNEY",
+      "label": "Whitney",
+      "kind": "gym"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_8",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_11",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_RIVAL_SILVER_4",
+      "label": "Silver (Burned Tower)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0023_D18R0101.s"
+    },
+    {
+      "stage": 3,
+      "key": "TRAINER_LEADER_MORTY_MORTY",
+      "label": "Morty",
+      "kind": "gym"
+    },
+    {
+      "stage": 4,
+      "key": "TRAINER_LEADER_CHUCK_CHUCK",
+      "label": "Chuck",
+      "kind": "gym"
+    },
+    {
+      "stage": 5,
+      "key": "TRAINER_LEADER_JASMINE_JASMINE",
+      "label": "Jasmine",
+      "kind": "gym"
+    },
+    {
+      "stage": 6,
+      "key": "TRAINER_EXECUTIVE_PETREL_PETREL_2",
+      "label": "Petrel (Mahogany Hideout)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0091_D35R0104.s"
+    },
+    {
+      "stage": 6,
+      "key": "TRAINER_LEADER_PRYCE_PRYCE",
+      "label": "Pryce",
+      "kind": "gym"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_EXECUTIVE_PETREL_PETREL",
+      "label": "Petrel (Radio Tower)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0033_D23R0105.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_18",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_12",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_RIVAL_SILVER_17",
+      "label": "Silver (Goldenrod Underground)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_EXECUTIVE_ARCHER_ARCHER",
+      "label": "Archer (Radio Tower)",
+      "kind": "rocket",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0034_D23R0106.s"
+    },
+    {
+      "stage": 7,
+      "key": "TRAINER_LEADER_CLAIR_CLAIR",
+      "label": "Clair",
+      "kind": "gym"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_9",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Chikorita",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_13",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Cyndaquil",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_RIVAL_SILVER_5",
+      "label": "Silver (Victory Road)",
+      "kind": "rival",
+      "appliesToStarter": "Totodile",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0110_D43R0103.s"
+    },
+    {
+      "stage": 8,
+      "key": "TRAINER_ELITE_FOUR_WILL_WILL",
+      "label": "Will",
+      "kind": "elite4"
+    },
+    {
+      "stage": 9,
+      "key": "TRAINER_ELITE_FOUR_KOGA_KOGA",
+      "label": "Koga",
+      "kind": "elite4"
+    },
+    {
+      "stage": 10,
+      "key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO",
+      "label": "Bruno",
+      "kind": "elite4"
+    },
+    {
+      "stage": 11,
+      "key": "TRAINER_ELITE_FOUR_KAREN_KAREN",
+      "label": "Karen",
+      "kind": "elite4"
+    },
+    {
+      "stage": 12,
+      "key": "TRAINER_CHAMPION_LANCE",
+      "label": "Lance",
+      "kind": "champion"
+    },
+    {
+      "stage": 13,
+      "key": "TRAINER_LEADER_LT_SURGE_LT__SURGE",
+      "label": "Lt. Surge",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0778_T06GYM0101.s"
+    },
+    {
+      "stage": 14,
+      "key": "TRAINER_LEADER_SABRINA_SABRINA",
+      "label": "Sabrina",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0829_T11GYM0101.s"
+    },
+    {
+      "stage": 15,
+      "key": "TRAINER_LEADER_ERIKA_ERIKA",
+      "label": "Erika",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0786_T07GYM0101.s"
+    },
+    {
+      "stage": 16,
+      "key": "TRAINER_LEADER_JANINE_JANINE",
+      "label": "Janine",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0809_T08GYM0101.s"
+    },
+    {
+      "stage": 17,
+      "key": "TRAINER_LEADER_MISTY_MISTY",
+      "label": "Misty",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0760_T04GYM0101.s"
+    },
+    {
+      "stage": 18,
+      "key": "TRAINER_LEADER_BROCK_BROCK",
+      "label": "Brock",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0752_T03GYM0101.s"
+    },
+    {
+      "stage": 19,
+      "key": "TRAINER_LEADER_BLAINE_BLAINE",
+      "label": "Blaine",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0015_D11R0106.s"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_LEADER_BLUE_BLUE",
+      "label": "Blue",
+      "kind": "gym",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0743_T02GYM0101.s"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_WILL_WILL_2",
+      "label": "Will 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_KOGA_KOGA_2",
+      "label": "Koga 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_BRUNO_BRUNO_2",
+      "label": "Bruno 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_ELITE_FOUR_KAREN_KAREN_2",
+      "label": "Karen 2",
+      "kind": "elite4-rematch"
+    },
+    {
+      "stage": 20,
+      "key": "TRAINER_CHAMPION_LANCE_2",
+      "label": "Lance 2",
+      "kind": "champion-rematch"
+    },
+    {
+      "stage": 21,
+      "key": "TRAINER_PKMN_TRAINER_RED_RED",
+      "label": "Red",
+      "kind": "final",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0107_D41R0108.s"
+    }
+  ],
+  "deferred": [
+    {
+      "label": "Ariana + Grunt (Mahogany Hideout)",
+      "reason": "This is a MultiBattle with Lance as ally; single-battle modeling would distort difficulty.",
+      "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0090_D35R0103.s"
+    },
+    {
+      "label": "Radio Tower event-trainer Proton/Ariana",
+      "reason": "Presence is confirmed in event data; mandatory-route reachability still needs verification before weighting them."
+    },
+    {
+      "label": "Opening Silver battle",
+      "reason": "Occurs before normal catching access, so including stage-0 catches would be anachronistic. It is omitted from party-composition scoring."
+    }
+  ]
+}
