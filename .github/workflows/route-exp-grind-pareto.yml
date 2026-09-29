@@ -1,0 +1,162 @@
+name: route-exp-grind-pareto
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  pareto:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[grind-pareto]')
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator:
+          - balanced
+          - boss-aware-soft
+        grind_budget:
+          - 0
+          - 25000
+          - 50000
+          - 100000
+          - 150000
+          - 200000
+          - 300000
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate ${{ matrix.allocator }} with grind budget ${{ matrix.grind_budget }}
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=budgeted \
+            --grind-budget=${{ matrix.grind_budget }} \
+            --entry-level=max --same-stage-join=map-order \
+            --exp-allocator=${{ matrix.allocator }} \
+            --resources=all --spend-policy=natural \
+            --runs=128 \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/route-exp-${{ matrix.allocator }}-grind-${{ matrix.grind_budget }}.json
+      - name: Assert grind budget accounting
+        run: |
+          jq -e --argjson budget ${{ matrix.grind_budget }} '
+            .assumptions.grindPolicy == "budgeted" and
+            .ledger.grindBudget == $budget and
+            .ledger.totalReleasedGrindBudget == $budget and
+            .ledger.totalGrindExp == $budget and
+            .ledger.unusedGrindBudget == 0
+          ' results/route-exp-${{ matrix.allocator }}-grind-${{ matrix.grind_budget }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-grind-${{ matrix.allocator }}-${{ matrix.grind_budget }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[grind-pareto]')
+    needs: pareto
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: route-exp-grind-*
+          path: results
+      - name: Build grind Pareto summary
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const rows = [];
+          const keyBosses = ['Clair','Will','Bruno','Lance','Blue','Will 2','Bruno 2','Lance 2','Red'];
+          for (const dir of fs.readdirSync('results').sort()) {
+            const full = path.join('results', dir);
+            if (!fs.statSync(full).isDirectory()) continue;
+            const file = fs.readdirSync(full).find(x => x.endsWith('.json'));
+            if (!file) continue;
+            const data = JSON.parse(fs.readFileSync(path.join(full,file),'utf8'));
+            const red = data.checkpoints.find(x => x.boss === 'Red');
+            const grindSchedule = data.checkpoints
+              .filter(cp => Number(cp.grindExpBefore || 0) > 0 || Object.keys(cp.grindAllocatedThisCheckpoint || {}).length)
+              .map(cp => ({
+                boss: cp.boss,
+                stage: cp.stage,
+                grindBudgetReleasedBefore: cp.grindBudgetReleasedBefore,
+                grindExpBefore: cp.grindExpBefore || 0,
+                allocatedThisCheckpoint: cp.grindAllocatedThisCheckpoint || {},
+                cumulativeByKey: cp.grindAllocatedByKeyBefore || {},
+                playerLevels: cp.playerLevels || {},
+              }));
+            rows.push({
+              allocator: data.assumptions.expAllocator,
+              grindBudget: data.ledger.grindBudget,
+              score: data.performance.score,
+              worst: data.performance.worstBossWinRate,
+              bottom5: data.performance.bottom5BossWinRate,
+              geometric: data.performance.storyClearGeometricScore,
+              coverage: data.performance.storyClearCoverageScore,
+              totalNaturalExp: data.ledger.totalNaturalExp,
+              totalGrindExp: data.ledger.totalGrindExp,
+              totalExpectedGrindBattles: data.checkpoints.reduce(
+                (sum,cp) => sum + Number(cp.expectedGrindBattles || 0), 0
+              ),
+              grindAllocatedByKey: data.ledger.grindAllocatedByKey || {},
+              finalTeam: data.finalTeam,
+              finalLevels: data.finalLevels,
+              red: red ? {
+                winRate: red.winRate,
+                averageOpponentFaints: red.averageOpponentFaints,
+                playerLevels: red.playerLevels,
+                availableMons: red.availableMons,
+              } : null,
+              bosses: Object.fromEntries(keyBosses.map(name => {
+                const cp=data.checkpoints.find(x=>x.boss===name);
+                return [name, cp ? {
+                  winRate: cp.winRate,
+                  averageOpponentFaints: cp.averageOpponentFaints,
+                  playerLevels: cp.playerLevels,
+                  availableMons: cp.availableMons,
+                } : null];
+              })),
+              grindSchedule,
+            });
+          }
+          rows.sort((a,b) =>
+            a.allocator.localeCompare(b.allocator) ||
+            a.grindBudget-b.grindBudget
+          );
+          fs.writeFileSync('grind-pareto-summary.json', JSON.stringify({schemaVersion:1, rows}, null, 2));
+          const md=[
+            '# Route EXP optional-grind Pareto',
+            '',
+            '| allocator | grind | score | bottom5 | geometric | coverage | Lance | Blue | Red | Red faints |',
+            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+            ...rows.map(r=>`| ${r.allocator} | ${r.grindBudget} | ${r.score.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${(r.bosses.Lance?.winRate||0).toFixed(4)} | ${(r.bosses.Blue?.winRate||0).toFixed(4)} | ${(r.red?.winRate||0).toFixed(4)} | ${(r.red?.averageOpponentFaints||0).toFixed(3)} |`),
+            '',
+            'Detailed per-member grind allocation and checkpoint release schedules are in grind-pareto-summary.json.',
+          ].join('\n');
+          fs.writeFileSync('grind-pareto-summary.md', md);
+          console.log(md);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-grind-pareto-comparison
+          path: |
+            grind-pareto-summary.json
+            grind-pareto-summary.md
+          if-no-files-found: error
