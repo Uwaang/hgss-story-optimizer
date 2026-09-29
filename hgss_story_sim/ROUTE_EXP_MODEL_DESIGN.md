@@ -1822,3 +1822,116 @@ The next search architecture should therefore separate:
 A direct brute-force route battle search over every six-member combination remains too expensive.
 
 The next implementation target should be a route-aware beam/rerank search that uses cheap route proxies or low-run route evaluations earlier than the final candidate stage.
+
+
+## 31. Natural-EXP route rerank validation
+
+The 26-team rerank was also evaluated with zero optional grind.
+
+The leading 128-run route candidates were dominated by late high-level Pupitar-source teams rather than the previous direct-Quagsire control.
+
+Three representative teams were revalidated with 1,000 runs per route boss.
+
+### 31.1 Rhyperior / Magneton / Gengar / Gyarados / Typhlosion / Pupitar
+
+Exact source policy includes direct high-level Pupitar capture:
+
+```
+Larvitar::Pupitar->Tyranitar#1
+```
+
+Final Red-state levels under natural EXP only:
+
+```
+Rhyperior 54
+Magneton  51
+Gengar    47
+Gyarados  50
+Typhlosion 43
+Pupitar   45
+```
+
+1,000-run result:
+
+```
+route score  ~= 0.6869
+bottom-5     ~= 0.0604
+geometric    ~= 0.3831
+coverage     ~= 0.8000
+
+Morty  53.0%
+Clair   2.7%
+Lance   0%
+Blue   19.8%
+Red     0%
+Red average opponent faints ~= 1.593
+```
+
+The route optimizer does not reach Tyranitar naturally: Pupitar enters at a high level but remains below its Lv55 evolution threshold by Red.
+
+### 31.2 Quagsire / Magneton / Gengar / Gyarados / Typhlosion / Pupitar
+
+```
+route score  ~= 0.6630
+bottom-5     ~= 0.0446
+geometric    ~= 0.3574
+coverage     ~= 0.7945
+
+Morty  53.0%
+Clair  16.3%
+Lance   0%
+Blue   36.8%
+Red     0.1% (1 / 1000)
+Red average opponent faints ~= 1.517
+```
+
+This team is weaker in aggregate than the Rhyperior variant but substantially better at Clair and Blue.
+
+### 31.3 Previous direct-Quagsire control
+
+```
+Quagsire / Magneton / Golem / Rhyperior / Alakazam / Typhlosion
+
+route score  ~= 0.6130
+bottom-5     ~= 0.0060
+geometric    ~= 0.2520
+coverage     ~= 0.6977
+
+Morty  12.2%
+Clair   0.5%
+Lance   0%
+Blue   50.0%
+Red     0%
+Red average opponent faints ~= 1.136
+```
+
+Thus the team that was attractive in the equal-level/Lv72 analysis is not the strongest natural-EXP route team among the reranked candidates.
+
+### 31.4 Capture-source policy matters
+
+The rerank distinguishes:
+
+```
+Larvitar::Larvitar->Tyranitar#1
+Larvitar::Pupitar->Tyranitar#1
+```
+
+as separate candidates.
+
+At zero optional grind, the direct-Pupitar source is stronger because the Pokémon joins with a much larger capture-level EXP endowment.
+
+This is precisely the behavior the route model was designed to recover: late/high-level acquisition should not receive an arbitrary bonus or penalty. Its effect should emerge from the actual source level, join timing, and post-capture EXP supply.
+
+### 31.5 Search limitation exposed
+
+The rerank only considered 26 teams that survived previous equal-level searches.
+
+Therefore these results establish:
+
+> route-aware reranking materially changes team order
+
+but do **not** establish:
+
+> the best route team is contained in those 26 equal-level survivors.
+
+The next search stage should widen candidate generation before expensive route battle evaluation.
