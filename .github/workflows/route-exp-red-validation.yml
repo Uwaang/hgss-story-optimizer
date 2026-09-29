@@ -1,0 +1,102 @@
+name: route-exp-red-validation
+
+on:
+  push:
+    branches:
+      - design/route-exp-budget-model
+  workflow_dispatch:
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[red-validate]')
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator:
+          - balanced
+          - boss-aware-soft
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate Red breakpoint at 1.6M grind
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=budgeted \
+            --grind-budget=1600000 \
+            --entry-level=max --same-stage-join=map-order \
+            --exp-allocator=${{ matrix.allocator }} \
+            --resources=all --spend-policy=natural \
+            --runs=1000 \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
+            > results/red-validate-${{ matrix.allocator }}.json
+      - name: Assert fixed grind budget
+        run: |
+          jq -e '
+            .ledger.totalGrindExp == 1600000 and
+            .ledger.totalReleasedGrindBudget == 1600000
+          ' results/red-validate-${{ matrix.allocator }}.json >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-validate-${{ matrix.allocator }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  compare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[red-validate]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: red-validate-*
+          path: results
+      - name: Summarize validation
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs=require('fs'), path=require('path');
+          const rows=[];
+          for(const dir of fs.readdirSync('results').sort()){
+            const full=path.join('results',dir);
+            if(!fs.statSync(full).isDirectory()) continue;
+            const file=fs.readdirSync(full).find(x=>x.endsWith('.json'));
+            if(!file) continue;
+            const d=JSON.parse(fs.readFileSync(path.join(full,file),'utf8'));
+            const cp=name=>d.checkpoints.find(x=>x.boss===name)||null;
+            rows.push({
+              allocator:d.assumptions.expAllocator,
+              score:d.performance.score,
+              bottom5:d.performance.bottom5BossWinRate,
+              geometric:d.performance.storyClearGeometricScore,
+              coverage:d.performance.storyClearCoverageScore,
+              grindBattles:d.ledger.totalExpectedGrindBattles,
+              grindAllocatedByKey:d.ledger.grindAllocatedByKey,
+              finalLevels:d.finalLevels,
+              Lance:cp('Lance'),
+              Blue:cp('Blue'),
+              Red:cp('Red'),
+            });
+          }
+          fs.writeFileSync('red-validation-summary.json',JSON.stringify({schemaVersion:1,rows},null,2));
+          console.log(JSON.stringify(rows,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-validation-comparison
+          path: red-validation-summary.json
+          if-no-files-found: error
