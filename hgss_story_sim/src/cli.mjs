@@ -3589,21 +3589,21 @@ async function cmdRouteExpPracticalGrind() {
       else low = mid;
     }
 
-    let verifiedAdditional = high;
-    let verifiedRate = await rateAt(verifiedAdditional, verifyRuns);
-    while (verifiedRate < targetRate && verifiedAdditional < maxAdditional) {
-      verifiedAdditional = Math.min(
-        maxAdditional,
-        Math.max(verifiedAdditional + 1, verifiedAdditional * 2)
-      );
-      verifiedRate = await rateAt(verifiedAdditional, verifyRuns);
-    }
+    const verified = await minimumAdditionalBattlesValidated(
+      plan,
+      bossLabel,
+      targetRate,
+      verifyRuns,
+    );
     return {
-      additionalBattles: verifiedAdditional,
-      achieved: verifiedRate >= targetRate,
+      additionalBattles: verified.additionalBattles,
+      achieved: verified.achieved,
+      screenAdditionalBattles: high,
       screenWinRate: await rateAt(high, screenRuns),
-      verifiedWinRate: verifiedRate,
-      maxAdditionalBattles: maxAdditional,
+      verifiedWinRate: verified.validatedWinRate,
+      verifiedSearchMode: verified.searchMode || 'validated-binary',
+      monotonicityViolation: Boolean(verified.monotonicityViolation),
+      maxAdditionalBattles: verified.maxAdditionalBattles,
     };
   }
 
@@ -3638,15 +3638,30 @@ async function cmdRouteExpPracticalGrind() {
       };
     }
 
+    const sampledRates = new Map([[0, baseRate]]);
     async function rateAt(additional) {
+      const normalized = Math.max(0, Math.floor(Number(additional || 0)));
+      if (sampledRates.has(normalized)) return sampledRates.get(normalized);
       const candidatePlan = {
         ...plan,
-        [bossLabel]: current + Math.max(0, Math.floor(Number(additional || 0))),
+        [bossLabel]: current + normalized,
       };
       const evaluation = await evaluateBoss(candidatePlan, bossLabel, runs);
-      return Number(
+      const rate = Number(
         evaluation.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
       );
+      sampledRates.set(normalized, rate);
+      return rate;
+    }
+
+    function monotonicityViolation() {
+      const samples = [...sampledRates.entries()].sort((a, b) => a[0] - b[0]);
+      let best = -Infinity;
+      for (const [, rate] of samples) {
+        if (rate + 1e-12 < best) return true;
+        best = Math.max(best, rate);
+      }
+      return false;
     }
 
     let low = 0;
@@ -3672,11 +3687,58 @@ async function cmdRouteExpPracticalGrind() {
       if (rate >= targetRate) high = mid;
       else low = mid;
     }
+
+    let selected = high;
+    let searchMode = 'validated-binary';
+    let violated = monotonicityViolation();
+    if (violated) {
+      // Route-wide moveset/resource replanning can make win rate locally
+      // non-monotone in EXP. Scan the final bracket instead of trusting a
+      // pure binary-search boundary.
+      searchMode = 'validated-grid-fallback';
+      const scanLow = Math.max(0, low - Math.max(16, Math.ceil((high - low) * 4)));
+      const width = Math.max(1, high - scanLow);
+      const step = Math.max(1, Math.floor(width / 16));
+      let previous = scanLow;
+      let found = null;
+      for (let point = scanLow; point <= high; point += step) {
+        const rate = await rateAt(point);
+        if (rate >= targetRate) {
+          found = { low: previous, high: point };
+          break;
+        }
+        previous = point;
+      }
+      if (!found) found = { low: low, high };
+      let gridLow = Math.max(0, found.low);
+      let gridHigh = Math.max(gridLow, found.high);
+      if (gridHigh - gridLow <= 32) {
+        for (let point = gridLow; point <= gridHigh; point += 1) {
+          if (await rateAt(point) >= targetRate) {
+            selected = point;
+            break;
+          }
+        }
+      } else {
+        while (gridHigh - gridLow > 1) {
+          const mid = Math.floor((gridLow + gridHigh) / 2);
+          const rate = await rateAt(mid);
+          if (rate >= targetRate) gridHigh = mid;
+          else gridLow = mid;
+        }
+        selected = gridHigh;
+      }
+      violated = monotonicityViolation();
+    }
+
     return {
-      additionalBattles: high,
+      additionalBattles: selected,
       achieved: true,
-      validatedWinRate: await rateAt(high),
+      validatedWinRate: await rateAt(selected),
       maxAdditionalBattles: maxAdditional,
+      searchMode,
+      monotonicityViolation: violated,
+      sampledPoints: sampledRates.size,
     };
   }
 
@@ -3754,6 +3816,8 @@ async function cmdRouteExpPracticalGrind() {
         grindExpBefore: Number(ledger?.grindExpBefore || 0),
         bestWildExpPerBattle: Number(ledger?.bestWildGrind?.expectedExpPerBattle || 0),
         bestWildSpecies: ledger?.bestWildGrind?.species || null,
+        searchMode: search.searchMode || null,
+        monotonicityViolation: Boolean(search.monotonicityViolation),
         achieved: search.achieved,
       });
     }
@@ -3800,6 +3864,8 @@ async function cmdRouteExpPracticalGrind() {
         beforeWinRate: beforeRate,
         afterWinRate: afterRate,
         verifiedWinRate: search.verifiedWinRate ?? afterRate,
+        grindSearchMode: search.verifiedSearchMode || search.searchMode || null,
+        monotonicityViolation: Boolean(search.monotonicityViolation),
         addedGrindBattles: search.additionalBattles,
         cumulativeGrindBattles: practicalGrindPlanTotalBattles(plan),
         grindExpBefore: Number(ledger?.grindExpBefore || 0),
