@@ -19,7 +19,9 @@ jobs:
         allocator:
           - balanced
           - boss-aware
-          - breakpoint-aware
+          - boss-aware-soft
+          - boss-aware-depth
+          - boss-aware-saturation
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -40,7 +42,7 @@ jobs:
             --entry-level=max --same-stage-join=map-order \
             --exp-allocator=${{ matrix.allocator }} \
             --resources=all --spend-policy=natural \
-            --runs=64 \
+            --runs=128 \
             --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1' \
             > results/route-exp-${{ matrix.allocator }}.json
       - name: Assert comparable ledger
@@ -80,6 +82,19 @@ jobs:
             if (!file) continue;
             const data = JSON.parse(fs.readFileSync(path.join(full, file), 'utf8'));
             const red = data.checkpoints.find(x => x.boss === 'Red');
+            const allocations = Object.values(red?.routeAllocatedExpBefore || {}).map(Number);
+            const allocatedTotal = allocations.reduce((a,b) => a+b, 0);
+            const sortedAllocations = [...allocations].sort((a,b) => b-a);
+            const top3Share = allocatedTotal > 0
+              ? sortedAllocations.slice(0,3).reduce((a,b) => a+b,0) / allocatedTotal
+              : 0;
+            const zeroExpMembers = allocations.filter(x => x === 0).length;
+            const belowOnePctMembers = allocations.filter(
+              x => allocatedTotal > 0 && x < allocatedTotal * 0.01
+            ).length;
+            const hhi = allocatedTotal > 0
+              ? allocations.reduce((sum,x) => sum + (x/allocatedTotal)**2, 0)
+              : 0;
             rows.push({
               allocator: data.assumptions.expAllocator,
               score: data.performance.score,
@@ -94,12 +109,26 @@ jobs:
               finalTeam: data.finalTeam,
               finalLevels: data.finalLevels,
               routeAllocatedExpAtRed: red?.routeAllocatedExpBefore || {},
+              concentration: {
+                top3Share,
+                hhi,
+                zeroExpMembers,
+                belowOnePctMembers,
+              },
+              red: red ? {
+                winRate: red.winRate,
+                averageOpponentFaints: red.averageOpponentFaints,
+                playerLevels: red.playerLevels,
+                availableMons: red.availableMons,
+              } : null,
               keyBosses: Object.fromEntries(
                 keyBosses.map(name => {
                   const cp = data.checkpoints.find(x => x.boss === name);
                   return [name, cp ? {
                     winRate: cp.winRate,
+                    averageOpponentFaints: cp.averageOpponentFaints,
                     playerLevels: cp.playerLevels,
+                    availableMons: cp.availableMons,
                     routeAllocatedExpBefore: cp.routeAllocatedExpBefore,
                   } : null];
                 })
@@ -111,9 +140,9 @@ jobs:
           const md = [
             '# Route EXP allocator A/B',
             '',
-            '| allocator | score | worst | bottom5 | geometric | coverage | natural EXP | allocated | unallocated | grind EXP |',
-            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
-            ...rows.map(r => `| ${r.allocator} | ${r.score.toFixed(4)} | ${r.worst.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${r.totalNaturalExp} | ${r.totalAllocatedExp} | ${r.totalUnallocatedExp} | ${r.totalGrindExp} |`),
+            '| allocator | score | bottom5 | geometric | coverage | Red | Red faints | top3 EXP | HHI | <1% members | unallocated |',
+            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+            ...rows.map(r => `| ${r.allocator} | ${r.score.toFixed(4)} | ${r.bottom5.toFixed(4)} | ${r.geometric.toFixed(4)} | ${r.coverage.toFixed(4)} | ${(r.red?.winRate || 0).toFixed(4)} | ${(r.red?.averageOpponentFaints || 0).toFixed(3)} | ${(100*r.concentration.top3Share).toFixed(1)}% | ${r.concentration.hhi.toFixed(3)} | ${r.concentration.belowOnePctMembers} | ${r.totalUnallocatedExp} |`),
             '',
             'Full per-boss levels and per-member route EXP allocations are retained in allocator-ab-summary.json and the source artifacts.',
           ].join('\n');
