@@ -1020,6 +1020,7 @@ export function buildTeamExpSchedule({
   breakpointLevelLookahead = 12,
   breakpointDiscount = 0.72,
   activationTargets = [],
+  expParticipationStartBossByKey = {},
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -1075,6 +1076,23 @@ export function buildTeamExpSchedule({
     }
     return { key, level };
   });
+
+  const routeBossIndexByLabel = new Map(
+    (routeBosses || []).map((boss, index) => [String(boss?.label || ''), index])
+  );
+  const normalizedExpParticipationStartBossByKey = {};
+  const expParticipationStartIndexByKey = new Map();
+  for (const [rawKey, rawBossLabel] of Object.entries(expParticipationStartBossByKey || {})) {
+    const key = String(rawKey || '').trim();
+    const bossLabel = String(rawBossLabel || '').trim();
+    if (!key || !bossLabel || !routeBossIndexByLabel.has(bossLabel)) {
+      throw new Error(
+        `Invalid EXP participation start: key=${key || rawKey}, boss=${bossLabel || rawBossLabel}`
+      );
+    }
+    normalizedExpParticipationStartBossByKey[key] = bossLabel;
+    expParticipationStartIndexByKey.set(key, routeBossIndexByLabel.get(bossLabel));
+  }
 
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
   const states = [];
@@ -1153,13 +1171,25 @@ export function buildTeamExpSchedule({
     return added;
   }
 
-  function allocateActivationExp(amount) {
+  function participatingStatesFor(targetIndex) {
+    const index = Math.max(0, Math.floor(Number(targetIndex || 0)));
+    return states.filter(state => {
+      const startIndex = expParticipationStartIndexByKey.get(state.key);
+      return startIndex === undefined || index >= startIndex;
+    });
+  }
+
+  function allocateActivationExp(amount, targetIndex) {
     let remaining = Math.max(0, Math.floor(Number(amount || 0)));
     let allocated = 0;
+    const participatingKeys = new Set(
+      participatingStatesFor(targetIndex).map(state => state.key)
+    );
     for (const target of normalizedActivationTargets) {
       if (remaining <= 0) break;
       const state = states.find(item => item.key === target.key);
-      if (!state || state.unknown || state.level >= target.level) continue;
+      if (!state || !participatingKeys.has(state.key) ||
+          state.unknown || state.level >= target.level) continue;
       const targetExp = expAtLevel(state.growthRate, target.level);
       if (targetExp === null) continue;
       const need = Math.max(0, targetExp - state.exp);
@@ -1178,9 +1208,10 @@ export function buildTeamExpSchedule({
   }
 
   function allocate(amount, targetBoss, targetIndex) {
-    const activation = allocateActivationExp(amount);
+    const activation = allocateActivationExp(amount, targetIndex);
     totalActivationExp += activation.allocated;
     const remaining = activation.unallocated;
+    const participatingStates = participatingStatesFor(targetIndex);
     let base;
     if (allocator === 'breakpoint-aware') {
       const startIndex = Math.max(0, Number(targetIndex) || 0);
@@ -1190,7 +1221,7 @@ export function buildTeamExpSchedule({
       );
       if (!futureBosses.length && targetBoss) futureBosses.push(targetBoss);
       base = allocateBreakpointAwareExp(
-        states,
+        participatingStates,
         remaining,
         futureBosses,
         levelUtility,
@@ -1202,10 +1233,10 @@ export function buildTeamExpSchedule({
         },
       );
     } else if (allocator === 'boss-aware') {
-      base = allocateBossAwareExp(states, remaining, targetBoss, levelUtility);
+      base = allocateBossAwareExp(participatingStates, remaining, targetBoss, levelUtility);
     } else if (allocator === 'boss-aware-soft') {
       base = allocateBossAwareSoftExp(
-        states,
+        participatingStates,
         remaining,
         targetBoss,
         levelUtility,
@@ -1213,7 +1244,7 @@ export function buildTeamExpSchedule({
       );
     } else if (allocator === 'boss-aware-depth') {
       base = allocateBossAwareDepthExp(
-        states,
+        participatingStates,
         remaining,
         targetBoss,
         levelUtility,
@@ -1221,13 +1252,13 @@ export function buildTeamExpSchedule({
       );
     } else if (allocator === 'boss-aware-saturation') {
       base = allocateBossAwareSaturationExp(
-        states,
+        participatingStates,
         remaining,
         targetBoss,
         levelUtility,
       );
     } else {
-      base = allocateBalancedExp(states, remaining);
+      base = allocateBalancedExp(participatingStates, remaining);
     }
     return {
       allocated: activation.allocated + Number(base?.allocated || 0),
@@ -1620,6 +1651,7 @@ export function buildTeamExpSchedule({
     breakpointDiscount: allocator === 'breakpoint-aware'
       ? Number(breakpointDiscount)
       : null,
+    expParticipationStartBossByKey: normalizedExpParticipationStartBossByKey,
     activationTargets: normalizedActivationTargets.map(target => {
       const state = states.find(item => item.key === target.key);
       return {
