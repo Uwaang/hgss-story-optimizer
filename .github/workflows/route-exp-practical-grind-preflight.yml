@@ -5,11 +5,15 @@ on:
     branches:
       - design/route-exp-budget-model
 
+concurrency:
+  group: route-exp-practical-grind-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   practical_grind:
     if: contains(github.event.head_commit.message, '[practical-grind-preflight]')
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -34,8 +38,8 @@ jobs:
             --entry-level=max --same-stage-join=map-order \
             --resources=all --spend-policy=natural \
             --story-targets=0.5 --red-targets=0.25,0.5 \
-            --story-checkpoints="Falkner,Lance,Blue,Lance 2" \
-            --screen-runs=1 --final-runs=4 \
+            --story-checkpoints="Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2" \
+            --screen-runs=2 --verify-runs=16 --final-runs=32 \
             > results/practical-grind-preflight.json
       - uses: actions/upload-artifact@v4
         if: always()
