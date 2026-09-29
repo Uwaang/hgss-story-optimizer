@@ -2960,6 +2960,300 @@ async function cmdRouteExpStoryEvaluate() {
   }, null, 2));
 }
 
+
+function routeExpRerankRow(team, evaluation, budget, sources, runs) {
+  const red = (evaluation.rows || []).find(row => String(row.boss) === 'Red') || null;
+  const lance = (evaluation.rows || []).find(row => String(row.boss) === 'Lance') || null;
+  const blue = (evaluation.rows || []).find(row => String(row.boss) === 'Blue') || null;
+  return {
+    team: team.map(candidate => candidate.species),
+    teamKeys: team.map(candidateIdentity),
+    finalTeam: evaluation.finalTeam || [],
+    finalLevels: evaluation.finalLevels || {},
+    grindBudget: Number(budget || 0),
+    totalNaturalExp: Number(evaluation.expSchedule?.totalNaturalExp || 0),
+    totalGrindExp: Number(evaluation.expSchedule?.totalGrindExp || 0),
+    expectedGrindBattles:
+      evaluation.expSchedule?.totalExpectedGrindBattles === null
+        ? null
+        : Number(evaluation.expSchedule?.totalExpectedGrindBattles || 0),
+    score: Number(evaluation.score || 0),
+    worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+    bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+    storyClearGeometricScore: Number(evaluation.storyClearGeometricScore || 0),
+    storyClearCoverageScore: Number(evaluation.storyClearCoverageScore || 0),
+    red: red ? {
+      wins: Number(red.wins || 0),
+      losses: Number(red.losses || 0),
+      ties: Number(red.ties || 0),
+      winRate: Number(red.winRate || 0),
+      averageOpponentFaints: Number(red.averageOpponentFaints ?? red.averageP2Faints ?? 0),
+      playerLevels: red.playerLevels || {},
+      availableMons: red.availableMons || [],
+    } : null,
+    lance: lance ? {
+      winRate: Number(lance.winRate || 0),
+      averageOpponentFaints: Number(lance.averageOpponentFaints ?? lance.averageP2Faints ?? 0),
+    } : null,
+    blue: blue ? {
+      winRate: Number(blue.winRate || 0),
+      averageOpponentFaints: Number(blue.averageOpponentFaints ?? blue.averageP2Faints ?? 0),
+    } : null,
+    runsPerBoss: Number(runs || 0),
+    sources,
+  };
+}
+
+function routeExpRerankCompare(a, b) {
+  return (
+    Number(b.storyClearGeometricScore || 0) - Number(a.storyClearGeometricScore || 0) ||
+    Number(b.storyClearCoverageScore || 0) - Number(a.storyClearCoverageScore || 0) ||
+    Number(b.bottom5BossWinRate || 0) - Number(a.bottom5BossWinRate || 0) ||
+    Number(b.score || 0) - Number(a.score || 0) ||
+    Number(b.red?.winRate || 0) - Number(a.red?.winRate || 0) ||
+    Number(b.red?.averageOpponentFaints || 0) - Number(a.red?.averageOpponentFaints || 0) ||
+    a.teamKeys.join('|').localeCompare(b.teamKeys.join('|'))
+  );
+}
+
+function routeExpRerankPareto(rows) {
+  return rows.filter((row, index) => !rows.some((other, otherIndex) => {
+    if (index === otherIndex) return false;
+    const atLeastAsGood =
+      Number(other.storyClearGeometricScore || 0) >= Number(row.storyClearGeometricScore || 0) &&
+      Number(other.storyClearCoverageScore || 0) >= Number(row.storyClearCoverageScore || 0) &&
+      Number(other.bottom5BossWinRate || 0) >= Number(row.bottom5BossWinRate || 0) &&
+      Number(other.score || 0) >= Number(row.score || 0) &&
+      Number(other.red?.winRate || 0) >= Number(row.red?.winRate || 0) &&
+      Number(other.red?.averageOpponentFaints || 0) >= Number(row.red?.averageOpponentFaints || 0) &&
+      Number(other.totalGrindExp || 0) <= Number(row.totalGrindExp || 0);
+    const strictlyBetter =
+      Number(other.storyClearGeometricScore || 0) > Number(row.storyClearGeometricScore || 0) ||
+      Number(other.storyClearCoverageScore || 0) > Number(row.storyClearCoverageScore || 0) ||
+      Number(other.bottom5BossWinRate || 0) > Number(row.bottom5BossWinRate || 0) ||
+      Number(other.score || 0) > Number(row.score || 0) ||
+      Number(other.red?.winRate || 0) > Number(row.red?.winRate || 0) ||
+      Number(other.red?.averageOpponentFaints || 0) > Number(row.red?.averageOpponentFaints || 0) ||
+      Number(other.totalGrindExp || 0) < Number(row.totalGrindExp || 0);
+    return atLeastAsGood && strictlyBetter;
+  }));
+}
+
+async function cmdRouteExpStoryRerank() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'max'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '16'))));
+  const finalRuns = Math.max(screenRuns, Math.floor(Number(arg('final-runs', '128'))));
+  const finalCap = Math.max(1, Math.floor(Number(arg('final-cap', '8'))));
+  const budgets = String(arg('grind-budgets', '0,1600000'))
+    .split(',')
+    .map(value => Math.max(0, Math.floor(Number(value))))
+    .filter(Number.isFinite);
+  const inputs = String(arg('inputs', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const sections = new Set(
+    String(arg('sections', 'final,finalPareto,preliminaryPareto'))
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean)
+  );
+  const includeTeamSets = String(arg('include-team-keys', ''))
+    .split(';')
+    .map(value => value.split(',').map(key => key.trim()).filter(Boolean))
+    .filter(keys => keys.length);
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('route-exp-story-rerank pilot currently supports HEARTGOLD + Cyndaquil only');
+  }
+  if (expProfile === 'ace') {
+    throw new Error('route-exp-story-rerank requires a route EXP profile');
+  }
+  if (!budgets.length) throw new Error('route-exp-story-rerank requires at least one grind budget');
+  if (!inputs.length && !includeTeamSets.length) {
+    throw new Error('route-exp-story-rerank requires --inputs and/or --include-team-keys');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, baseExpContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      'budgeted',
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+
+  const candidateSets = new Map();
+  function addTeamKeys(teamKeys, source) {
+    if (!Array.isArray(teamKeys) || teamKeys.length !== 6) return;
+    const normalized = teamKeys.map(String);
+    const setKey = [...normalized].sort().join('|');
+    const current = candidateSets.get(setKey) || { teamKeys: normalized, sources: [] };
+    current.sources.push(source);
+    candidateSets.set(setKey, current);
+  }
+
+  for (const input of inputs) {
+    const resolved = path.isAbsolute(input) ? input : path.resolve(process.cwd(), input);
+    const payload = JSON.parse(await fs.readFile(resolved, 'utf8'));
+    for (const section of sections) {
+      for (const row of payload?.[section] || []) {
+        addTeamKeys(row.teamKeys, {
+          type: 'equal-level-search',
+          input,
+          section,
+          commonLevel: Number(row.commonLevel ?? payload.commonLevel ?? 0),
+          score: Number(row.score || 0),
+          coverage: Number(row.storyClearCoverageScore || 0),
+          geometric: Number(row.storyClearGeometricScore || 0),
+          equalLevelGrindExp: row.totalGrindExp ?? null,
+          finalTeam: row.finalTeam || [],
+        });
+      }
+    }
+  }
+  for (const teamKeys of includeTeamSets) {
+    addTeamKeys(teamKeys, { type: 'explicit-control' });
+  }
+
+  const candidateRows = [];
+  for (const entry of candidateSets.values()) {
+    const team = entry.teamKeys.map(key => {
+      const candidate = byKey.get(key);
+      if (!candidate) throw new Error('Rerank candidate key not found: ' + key);
+      return candidate;
+    });
+    if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+      throw new Error('Rerank candidate violates team constraints: ' + entry.teamKeys.join(','));
+    }
+    if (!team.some(candidate =>
+      candidate.exclusiveGroup === 'starter' &&
+      candidate.species.toLowerCase() === starterName.toLowerCase()
+    )) {
+      throw new Error('Rerank candidate is missing selected starter: ' + entry.teamKeys.join(','));
+    }
+    candidateRows.push({ ...entry, team });
+  }
+
+  const screened = [];
+  for (const budget of budgets) {
+    const expContext = {
+      ...baseExpContext,
+      grindPolicy: 'budgeted',
+      grindBudget: budget,
+      expAllocator,
+    };
+    for (const candidate of candidateRows) {
+      const evaluation = await evaluateCandidatesWithMoveAccess(
+        candidate.team,
+        story.bosses,
+        screenRuns,
+        moveAccess,
+        expContext,
+        'budgeted',
+        { p1AiMode: 'smart', routeBuildOptimization: true },
+      );
+      screened.push(
+        routeExpRerankRow(candidate.team, evaluation, budget, candidate.sources, screenRuns)
+      );
+    }
+  }
+
+  const selectedKeys = new Set();
+  const selected = [];
+  for (const budget of budgets) {
+    const rows = screened.filter(row => row.grindBudget === budget);
+    const overall = [...rows].sort(routeExpRerankCompare).slice(0, finalCap);
+    const redFocused = [...rows].sort((a, b) =>
+      Number(b.red?.winRate || 0) - Number(a.red?.winRate || 0) ||
+      Number(b.red?.averageOpponentFaints || 0) - Number(a.red?.averageOpponentFaints || 0) ||
+      routeExpRerankCompare(a, b)
+    ).slice(0, Math.max(2, Math.ceil(finalCap / 2)));
+    for (const row of [...overall, ...redFocused]) {
+      const key = budget + '::' + [...row.teamKeys].sort().join('|');
+      if (selectedKeys.has(key)) continue;
+      selectedKeys.add(key);
+      selected.push(row);
+    }
+  }
+
+  const final = [];
+  for (const row of selected) {
+    const team = row.teamKeys.map(key => byKey.get(key));
+    const expContext = {
+      ...baseExpContext,
+      grindPolicy: 'budgeted',
+      grindBudget: row.grindBudget,
+      expAllocator,
+    };
+    const evaluation = finalRuns === screenRuns
+      ? null
+      : await evaluateCandidatesWithMoveAccess(
+          team,
+          story.bosses,
+          finalRuns,
+          moveAccess,
+          expContext,
+          'budgeted',
+          { p1AiMode: 'smart', routeBuildOptimization: true },
+        );
+    final.push(
+      evaluation
+        ? routeExpRerankRow(team, evaluation, row.grindBudget, row.sources, finalRuns)
+        : row
+    );
+  }
+  final.sort((a, b) =>
+    a.grindBudget - b.grindBudget ||
+    routeExpRerankCompare(a, b)
+  );
+
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'rerank equal-level candidate teams with route-aware EXP, acquisition timing, evolution timing, and optional grind',
+    version,
+    starter: starterName,
+    evolutionPolicy,
+    candidateTeamCount: candidateRows.length,
+    inputs,
+    sections: [...sections],
+    assumptions: {
+      expProfile,
+      expAllocator,
+      grindBudgets: budgets,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      resourceProfile,
+      spendPolicy,
+      screenRuns,
+      finalRuns,
+      finalCap,
+    },
+    screened,
+    screenPareto: routeExpRerankPareto(screened),
+    final,
+    finalPareto: routeExpRerankPareto(final),
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
 async function cmdExpBudgetSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -8531,6 +8825,7 @@ const commands = {
   'exp-budget': cmdExpBudget,
   'route-exp-data-audit': cmdRouteExpDataAudit,
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
+  'route-exp-story-rerank': cmdRouteExpStoryRerank,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
@@ -8567,7 +8862,7 @@ const commands = {
 
 if (!commands[command]) {
   console.error(`Unknown command: ${command}`);
-  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, equal-level-story-search, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
+  console.error('Use one of: smoke, resource-budget-smoke, resource-monotonic-smoke, move-score-smoke, resource-smoke, route-smoke, exp-envelope, exp-envelope-smoke, exp-budget, exp-budget-smoke, exp-segment-smoke, exp-allocator-smoke, team-order-smoke, objective-smoke, capture-smoke, exp-route-smoke, exp-smoke, switch-smoke, trainer-ai-smoke, allocator-cross-compare, allocator-depth-compare, allocator-saturation-compare, team-ablation, team-usage, team-activation, boss-interaction-matrix, counterfactual-specialist-probe, boss-local-oracle-probe, boss-local-resource-policy-probe, equal-level-story-evaluate, equal-level-story-search, route-exp-story-rerank, meaningful-six, tutor-smoke, hm-smoke, tm-smoke, shop-tm-smoke, extract, pool, validate, simulate, search, convergence, optimize');
   process.exitCode = 2;
 } else {
   await commands[command]();
