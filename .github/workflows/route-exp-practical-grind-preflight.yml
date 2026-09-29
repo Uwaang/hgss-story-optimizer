@@ -34,7 +34,8 @@ jobs:
             --entry-level=max --same-stage-join=map-order \
             --resources=all --spend-policy=natural \
             --story-targets=0.5 --red-targets=0.25,0.5 \
-            --screen-runs=1 --final-runs=8 \
+            --story-checkpoints="Falkner,Lance,Blue,Lance 2" \
+            --screen-runs=1 --final-runs=4 \
             > results/practical-grind-preflight.json
       - uses: actions/upload-artifact@v4
         if: always()
