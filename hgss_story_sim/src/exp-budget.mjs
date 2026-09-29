@@ -427,6 +427,7 @@ function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
     availableFrom: Number(candidate.availableFrom || 0),
     growthRate,
     entryLevel: level,
+    initialExp,
     exp: initialExp,
     level,
     unknown: level === null || initialExp === null,
@@ -958,6 +959,25 @@ function snapshotLevels(states) {
   );
 }
 
+function snapshotExp(states) {
+  return Object.fromEntries(
+    [...states]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(state => [state.key, Number(state.exp || 0)])
+  );
+}
+
+function snapshotRouteAllocatedExp(states) {
+  return Object.fromEntries(
+    [...states]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(state => [
+        state.key,
+        Math.max(0, Number(state.exp || 0) - Number(state.initialExp || 0)),
+      ])
+  );
+}
+
 function aceGapForStates(states, targetLevel) {
   let total = 0;
   const details = [];
@@ -1369,6 +1389,8 @@ export function buildTeamExpSchedule({
     }
 
     const levelsBefore = snapshotLevels(states);
+    const expBefore = snapshotExp(states);
+    const routeAllocatedExpBefore = snapshotRouteAllocatedExp(states);
     const moneyBefore = currentMoney;
     const majorReward = trainerBattleExp(boss.trainer, expWorld.expYieldBySpecies);
     const majorPrizeMoney = trainerPrizeMoney(
@@ -1403,6 +1425,8 @@ export function buildTeamExpSchedule({
       grindExpBefore,
       expectedGrindBattles,
       levelsBefore,
+      expBefore,
+      routeAllocatedExpBefore,
       rewardAfter: majorReward.total,
       prizeMoneyAfter: majorPrizeMoney,
     });
