@@ -1639,6 +1639,7 @@ async function runBeamSearch({
 
   const cache = evaluationCache || new Map();
   const cacheSizeBefore = cache.size;
+  const beamTrace = [];
   async function evaluateTeamAtRuns(team, requestedRuns) {
     const key = team.map(candidateIdentity).sort().join('|') +
       `@runs=${requestedRuns}@objective=${objective}`;
@@ -1690,6 +1691,21 @@ async function runBeamSearch({
     }
 
     beam = selectMultiObjectiveBeam(expanded, beamWidth, objective);
+    beamTrace.push({
+      targetSize,
+      expandedCount: expanded.length,
+      selectedCount: beam.length,
+      selected: beam.map(state => ({
+        team: state.team.map(candidate => candidate.species),
+        teamKeys: state.team.map(candidateIdentity),
+        score: Number(state.evaluation?.score || 0),
+        worstBossWinRate: Number(state.evaluation?.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(state.evaluation?.bottom5BossWinRate || 0),
+        storyClearGeometricScore: Number(state.evaluation?.storyClearGeometricScore || 0),
+        storyClearCoverageScore: Number(state.evaluation?.storyClearCoverageScore || 0),
+        expBurden: evaluationExpBurden(state.evaluation),
+      })),
+    });
     if (!beam.length) break;
   }
 
@@ -1740,6 +1756,25 @@ async function runBeamSearch({
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
+    selectedCandidateDetails: screened.map(candidate => {
+      const row = screenRows.find(entry =>
+        candidateIdentity(entry.candidate) === candidateIdentity(candidate)
+      );
+      return {
+        species: candidate.species,
+        terminalSpecies: candidate.terminalSpecies || null,
+        searchKey: candidateIdentity(candidate),
+        familyId: candidateFamilyIdentity(candidate),
+        availableFrom: Number(candidate.availableFrom || 0),
+        score: Number(row?.evaluation?.score || 0),
+        worstBossWinRate: Number(row?.evaluation?.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(row?.evaluation?.bottom5BossWinRate || 0),
+        storyClearGeometricScore: Number(row?.evaluation?.storyClearGeometricScore || 0),
+        storyClearCoverageScore: Number(row?.evaluation?.storyClearCoverageScore || 0),
+        expBurden: row ? evaluationExpBurden(row.evaluation) : null,
+      };
+    }),
+    beamTrace,
     screenTop: screenRows.slice(0, Math.min(20, screenRows.length)).map(row => ({
       species: row.candidate.species,
       availableFrom: row.candidate.availableFrom,
