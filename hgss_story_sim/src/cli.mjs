@@ -2872,6 +2872,10 @@ async function cmdRouteExpStoryEvaluate() {
       grindAllocatedByKeyBefore: ledger.grindAllocatedByKeyBefore || {},
       grindAllocatedThisCheckpoint: ledger.grindAllocatedThisCheckpoint || {},
       grindBudgetReleasedBefore: Number(ledger.grindBudgetReleasedBefore || 0),
+      grindExpBefore: Number(ledger.grindExpBefore || 0),
+      expectedGrindBattles: ledger.expectedGrindBattles === null
+        ? null
+        : Number(ledger.expectedGrindBattles || 0),
       winRate: Number(row.winRate || 0),
       averageOpponentFaints: Number(row.averageOpponentFaints ?? row.averageP2Faints ?? 0),
       mapExpBefore: Number(ledger.mapExpBefore || 0),
@@ -2935,6 +2939,10 @@ async function cmdRouteExpStoryEvaluate() {
       totalReleasedGrindBudget: Number(evaluation.expSchedule?.totalReleasedGrindBudget || 0),
       unusedGrindBudget: Number(evaluation.expSchedule?.unusedGrindBudget || 0),
       grindAllocatedByKey: evaluation.expSchedule?.grindAllocatedByKey || {},
+      totalExpectedGrindBattles:
+        evaluation.expSchedule?.totalExpectedGrindBattles === null
+          ? null
+          : Number(evaluation.expSchedule?.totalExpectedGrindBattles || 0),
       unknownEntryLevels: evaluation.expSchedule?.unknownEntryLevels || [],
     },
     firstGym: falkner,
