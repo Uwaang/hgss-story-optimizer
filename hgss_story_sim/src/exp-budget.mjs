@@ -1010,6 +1010,7 @@ export function buildTeamExpSchedule({
   profile = 'all-accessible',
   grindPolicy = 'none',
   grindBudget = 0,
+  grindPlanBattles = {},
   entryLevelPolicy = 'midpoint',
   sameStageJoinPolicy = 'map-order',
   allocator = 'balanced',
@@ -1023,10 +1024,19 @@ export function buildTeamExpSchedule({
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
   }
-  if (!['none', 'ace-paid', 'budgeted'].includes(grindPolicy)) {
+  if (!['none', 'ace-paid', 'budgeted', 'planned'].includes(grindPolicy)) {
     throw new Error(`Unknown grind policy: ${grindPolicy}`);
   }
   const normalizedGrindBudget = Math.max(0, Math.floor(Number(grindBudget || 0)));
+  const normalizedGrindPlanBattles = Object.fromEntries(
+    Object.entries(grindPlanBattles || {}).map(([key, value]) => {
+      const count = Math.max(0, Math.floor(Number(value || 0)));
+      if (!Number.isFinite(count)) {
+        throw new Error(`Invalid planned grind battle count for ${key}: ${value}`);
+      }
+      return [String(key), count];
+    })
+  );
   if (!Number.isFinite(normalizedGrindBudget)) {
     throw new Error(`Invalid grind budget: ${grindBudget}`);
   }
@@ -1466,6 +1476,31 @@ export function buildTeamExpSchedule({
         : null;
       totalGrindExp += grindExpBefore;
       if (expectedGrindBattles !== null) totalExpectedGrindBattles += expectedGrindBattles;
+    } else if (grindPolicy === 'planned') {
+      const plannedBattles = Number(
+        normalizedGrindPlanBattles[String(boss.label)] ??
+        normalizedGrindPlanBattles[String(boss.key)] ??
+        normalizedGrindPlanBattles[String(battleIndex)] ??
+        0
+      );
+      if (plannedBattles > 0) {
+        if (!(wild?.expectedExpPerBattle > 0)) {
+          throw new Error(
+            `Planned grind before ${boss.label} requires a modeled wild EXP source`
+          );
+        }
+        const requestedExp = Math.max(
+          0,
+          Math.floor(plannedBattles * Number(wild.expectedExpPerBattle))
+        );
+        const applied = allocateTrackedGrind(requestedExp, boss, battleIndex);
+        grindExpBefore = Number(applied.allocated || 0);
+        grindAllocatedThisCheckpoint = applied.byKey || {};
+        totalReleasedGrindBudget += grindExpBefore;
+        totalGrindExp += grindExpBefore;
+        expectedGrindBattles = plannedBattles;
+        totalExpectedGrindBattles += plannedBattles;
+      }
     } else if (grindPolicy === 'budgeted' && normalizedGrindBudget > 0) {
       const cumulativeNaturalBeforeBoss = Number(totalMapExp + totalMajorExp);
       const releaseFraction = naturalExpBeforeFinalBossPotential > 0
@@ -1554,6 +1589,7 @@ export function buildTeamExpSchedule({
     profile,
     grindPolicy,
     grindBudget: grindPolicy === 'budgeted' ? normalizedGrindBudget : 0,
+    grindPlanBattles: grindPolicy === 'planned' ? normalizedGrindPlanBattles : {},
     naturalExpBeforeFinalBossPotential,
     entryLevelPolicy,
     entryLevelAssumption: entryLevelPolicy === 'midpoint'
