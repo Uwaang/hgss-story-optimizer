@@ -6,7 +6,7 @@ on:
       - design/route-exp-budget-model
 
 concurrency:
-  group: route-exp-practical-grind-abd-\${{ github.ref }}
+  group: route-exp-practical-grind-abd-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,13 +38,13 @@ jobs:
         run: |
           node --check src/cli.mjs
           node --check src/exp-budget.mjs
-      - name: Run practical grind \${{ matrix.id }}
+      - name: Run practical grind ${{ matrix.id }}
         run: |
           mkdir -p results
           node src/cli.mjs route-exp-practical-grind \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
-            --team-keys="\${{ matrix.team_keys }}" \
+            --team-keys="${{ matrix.team_keys }}" \
             --exp-profile=normal-route --exp-allocator=boss-aware-soft \
             --entry-level=max --same-stage-join=map-order \
             --resources=all --spend-policy=natural \
@@ -52,8 +52,8 @@ jobs:
             --story-checkpoints="Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2" \
             --screen-runs=4 --verify-runs=32 --repair-runs=64 --final-runs=128 \
             --max-repair-rounds=20 \
-            > "results/practical-grind-\${{ matrix.id }}.json"
-      - name: Assert convergence \${{ matrix.id }}
+            > "results/practical-grind-${{ matrix.id }}.json"
+      - name: Assert convergence ${{ matrix.id }}
         run: |
           jq -e '
             .routeProfile == "practical-red-prep" and
@@ -66,10 +66,10 @@ jobs:
             .storyFrontier[0].repairConverged == true and
             .storyFrontier[0].storyWorstBossWinRate >= 0.5 and
             (.storyFrontier[0].redFrontier | length) == 2
-          ' "results/practical-grind-\${{ matrix.id }}.json" >/dev/null
+          ' "results/practical-grind-${{ matrix.id }}.json" >/dev/null
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: practical-grind-\${{ matrix.id }}
-          path: hgss_story_sim/results/practical-grind-\${{ matrix.id }}.json
+          name: practical-grind-${{ matrix.id }}
+          path: hgss_story_sim/results/practical-grind-${{ matrix.id }}.json
           if-no-files-found: warn
