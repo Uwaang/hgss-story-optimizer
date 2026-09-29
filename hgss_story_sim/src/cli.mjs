@@ -707,6 +707,9 @@ function summarizeMemberUsage(candidates, rows) {
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
+  const requestedBossLabels = Array.isArray(battleOptions?.bossLabels)
+    ? new Set(battleOptions.bossLabels.map(String))
+    : null;
   const routeStarter = storyStarterFromCandidates(candidates);
   const expProfile = normalizeExpProfile(expContext?.profile || 'ace');
   const expSchedule = expProfile === 'ace'
@@ -782,6 +785,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   let weightedWins = 0;
   let weightedRuns = 0;
   for (const [battleIndex, boss] of routeBosses.entries()) {
+    if (requestedBossLabels && !requestedBossLabels.has(String(boss.label))) continue;
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
     const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
     let playerTeam = materializeCandidateTeam(
@@ -836,7 +840,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       {
         p2Trainer: boss,
         ...Object.fromEntries(
-          Object.entries(battleOptions).filter(([key]) => key !== 'routeBuildOptimization')
+          Object.entries(battleOptions).filter(([key]) =>
+            key !== 'routeBuildOptimization' && key !== 'bossLabels'
+          )
         ),
       },
     );
