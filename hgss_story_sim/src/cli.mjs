@@ -1427,7 +1427,7 @@ function routePostAvailabilityMetrics(screenRow) {
 // expensive than equally large late-game weakness. Skipped checkpoints are
 // ignored so a not-yet-acquired late specialist is not punished for battles
 // before it can legally join.
-function routeGrindProxyMetrics(evaluation, targetWinRate = STORY_CLEAR_TARGET_WIN_RATE) {
+function routeGrindProxyV1Metrics(evaluation, targetWinRate = STORY_CLEAR_TARGET_WIN_RATE) {
   const expSchedule = evaluation?.expSchedule;
   if (!expSchedule || !Array.isArray(expSchedule.battles)) {
     return {
@@ -1495,6 +1495,149 @@ function routeGrindProxyMetrics(evaluation, targetWinRate = STORY_CLEAR_TARGET_W
     rawExpectedBattles,
     unknownCheckpoints,
     contributingCheckpoints: details.length,
+    details,
+  };
+}
+
+
+function routeGrindProxyMetrics(evaluation, targetWinRate = STORY_CLEAR_TARGET_WIN_RATE) {
+  const legacy = routeGrindProxyV1Metrics(evaluation, targetWinRate);
+  const expSchedule = evaluation?.expSchedule;
+  if (!expSchedule || !Array.isArray(expSchedule.battles)) {
+    return {
+      ...legacy,
+      version: 2,
+      expectedBattles: null,
+      rawExpectedBattles: null,
+      legacyExpectedBattles: legacy.expectedBattles,
+      legacyRawExpectedBattles: legacy.rawExpectedBattles,
+      cumulativeGrindExp: 0,
+    };
+  }
+
+  const target = Math.max(0.01, Math.min(1, Number(targetWinRate || STORY_CLEAR_TARGET_WIN_RATE)));
+  const scheduleByLabel = new Map(
+    expSchedule.battles.map(row => [String(row.label), row])
+  );
+  const creditByKey = new Map();
+  let scalarCreditExp = 0;
+  let rawExpectedBattles = 0;
+  let unknownCheckpoints = 0;
+  let cumulativeGrindExp = 0;
+  const details = [];
+
+  const totalMemberCredit = () =>
+    [...creditByKey.values()].reduce((sum, value) => sum + Number(value || 0), 0);
+
+  for (const row of evaluation?.rows || []) {
+    if (row?.skipped) continue;
+    const progress = Math.max(
+      0,
+      Math.min(1, Number(row?.battleProgressScore ?? row?.winRate ?? 0)),
+    );
+    const deficitFraction = Math.max(0, target - progress) / target;
+    if (deficitFraction <= 0) continue;
+
+    const schedule = scheduleByLabel.get(String(row.boss));
+    const expectedExpPerBattle = Number(schedule?.bestWildGrind?.expectedExpPerBattle || 0);
+    const aceGapExpBefore = Number(schedule?.aceGapExpBefore);
+    const aceGapBattles = Number(schedule?.expectedAceGapBattles);
+    const gapDetails = Array.isArray(schedule?.aceGapExpDetails)
+      ? schedule.aceGapExpDetails
+      : [];
+
+    if (
+      !Number.isFinite(expectedExpPerBattle) ||
+      expectedExpPerBattle <= 0 ||
+      !Number.isFinite(aceGapExpBefore) ||
+      aceGapExpBefore < 0
+    ) {
+      unknownCheckpoints += 1;
+      details.push({
+        boss: row.boss,
+        progress,
+        deficitFraction,
+        matchupGrowthEfficiency: null,
+        expectedAceGapBattles: Number.isFinite(aceGapBattles) ? aceGapBattles : null,
+        residualAceGapExp: null,
+        newGrindExp: null,
+        weightedBattles: null,
+      });
+      continue;
+    }
+
+    const residualDetails = [];
+    let residualAceGapExp = 0;
+    for (const detail of gapDetails) {
+      const key = String(detail?.key || '');
+      const gapExp = Math.max(0, Number(detail?.exp || 0));
+      if (!key || !Number.isFinite(gapExp) || gapExp <= 0) continue;
+      const priorCredit = Math.max(0, Number(creditByKey.get(key) || 0));
+      const residualExp = Math.max(0, gapExp - priorCredit);
+      if (residualExp <= 0) continue;
+      residualDetails.push({ key, gapExp, priorCredit, residualExp });
+      residualAceGapExp += residualExp;
+    }
+
+    // Older schedules may not expose member-level gaps. Keep a scalar fallback,
+    // but prefer per-member credits so a late joiner cannot inherit grind done
+    // before it was available.
+    if (!gapDetails.length && aceGapExpBefore > 0) {
+      residualAceGapExp = Math.max(0, aceGapExpBefore - scalarCreditExp);
+    }
+
+    const progressRatio = Math.max(0, Math.min(1, progress / target));
+    // Severe matchup deficits usually require more than the linear ace-gap share
+    // to convert into wins. Keep this deliberately mild: 0.65 at zero progress,
+    // rising linearly to 1.0 at the target.
+    const matchupGrowthEfficiency = 0.65 + 0.35 * progressRatio;
+    const newGrindExp = residualAceGapExp > 0
+      ? (residualAceGapExp * deficitFraction) / matchupGrowthEfficiency
+      : 0;
+    const weightedBattles = newGrindExp / expectedExpPerBattle;
+
+    rawExpectedBattles += weightedBattles;
+    cumulativeGrindExp += newGrindExp;
+
+    if (residualDetails.length && residualAceGapExp > 0) {
+      for (const detail of residualDetails) {
+        const share = detail.residualExp / residualAceGapExp;
+        creditByKey.set(
+          detail.key,
+          Number(creditByKey.get(detail.key) || 0) + newGrindExp * share,
+        );
+      }
+    } else if (newGrindExp > 0) {
+      scalarCreditExp += newGrindExp;
+    }
+
+    details.push({
+      boss: row.boss,
+      progress,
+      deficitFraction,
+      matchupGrowthEfficiency,
+      expectedAceGapBattles: Number.isFinite(aceGapBattles) ? aceGapBattles : null,
+      aceGapExpBefore,
+      residualAceGapExp,
+      newGrindExp,
+      weightedBattles,
+      expectedExpPerBattle,
+      memberCreditExpBefore: totalMemberCredit() - newGrindExp,
+      cumulativeCreditExpAfter: totalMemberCredit() + scalarCreditExp,
+    });
+  }
+
+  return {
+    enabled: true,
+    version: 2,
+    targetWinRate: target,
+    expectedBattles: Math.ceil(rawExpectedBattles),
+    rawExpectedBattles,
+    legacyExpectedBattles: legacy.expectedBattles,
+    legacyRawExpectedBattles: legacy.rawExpectedBattles,
+    unknownCheckpoints,
+    contributingCheckpoints: details.length,
+    cumulativeGrindExp,
     details,
   };
 }
@@ -1745,6 +1888,19 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
   const midQuota = Math.max(1, Math.round(width * 0.25));
   const earlyQuota = Math.max(1, width - lateQuota - midQuota);
   const quotas = { early: earlyQuota, mid: midQuota, late: lateQuota };
+  const routeFrontRank = new Map(
+    rows
+      .filter((row, index) =>
+        !rows.some((other, otherIndex) =>
+          index !== otherIndex && routeEvaluationDominates(other.evaluation, row.evaluation)
+        )
+      )
+      .sort((a, b) =>
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+      )
+      .map((row, index) => [candidateScreenTieKey(row), index])
+  );
 
   for (const bucket of ['early', 'mid', 'late']) {
     const bucketRows = rows.filter(row => routeAvailabilityBucket(row.candidate) === bucket);
@@ -1775,6 +1931,20 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
       evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
       candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
     );
+    const byAvailability = [...bucketRows].sort((a, b) =>
+      Number(a.candidate.availableFrom || 0) - Number(b.candidate.availableFrom || 0) ||
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+    );
+    const byParetoFront = [...bucketRows].sort((a, b) => {
+      const ar = routeFrontRank.get(candidateScreenTieKey(a));
+      const br = routeFrontRank.get(candidateScreenTieKey(b));
+      if (ar !== undefined && br !== undefined && ar !== br) return ar - br;
+      if (ar !== undefined && br === undefined) return -1;
+      if (ar === undefined && br !== undefined) return 1;
+      return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+    });
     const byGrindProxy = [...bucketRows].sort((a, b) => {
       const ap = evaluationRouteGrindProxy(a.evaluation);
       const bp = evaluationRouteGrindProxy(b.evaluation);
@@ -1788,8 +1958,10 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
     const laneOrders = [
       byObjective,
       byGrindProxy,
+      byParetoFront,
       byPostProgress,
       byPostScore,
+      byAvailability,
       byEntryEndowment,
     ];
     const bucketQuota = target - before;
@@ -1818,21 +1990,33 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
       laneRound += 1;
     }
 
-    // Preserve a small source/evolution-variant reserve inside every availability
-    // bucket. Families are still diverse for most of the quota, but semantically
-    // different acquisition/evolution routes are not deleted just because another
-    // member of the same family happened to screen slightly better in isolation.
-    const selectedFamiliesInBucket = new Set(
-      selected
-        .slice(before)
-        .map(row => candidateFamilyIdentity(row.candidate)),
+    // Reserve up to the final 20% of each bucket for semantically distinct
+    // acquisition/evolution variants. Evolution-divergent variants get first
+    // priority; otherwise keep drawing new families before spending slots on a
+    // same-terminal source variant.
+    const selectedFamilies = new Set(
+      selected.map(row => candidateFamilyIdentity(row.candidate))
     );
+    const selectedTerminalsByFamily = new Map();
+    for (const row of selected) {
+      const family = candidateFamilyIdentity(row.candidate);
+      if (!selectedTerminalsByFamily.has(family)) selectedTerminalsByFamily.set(family, new Set());
+      selectedTerminalsByFamily.get(family).add(String(row.candidate.terminalSpecies || row.candidate.species));
+    }
+
     const variantRows = bucketRows
       .filter(row =>
         !seen.has(candidateScreenTieKey(row)) &&
-        selectedFamiliesInBucket.has(candidateFamilyIdentity(row.candidate))
+        selectedFamilies.has(candidateFamilyIdentity(row.candidate))
       )
       .sort((a, b) => {
+        const af = candidateFamilyIdentity(a.candidate);
+        const bf = candidateFamilyIdentity(b.candidate);
+        const at = String(a.candidate.terminalSpecies || a.candidate.species);
+        const bt = String(b.candidate.terminalSpecies || b.candidate.species);
+        const aNovelTerminal = !selectedTerminalsByFamily.get(af)?.has(at);
+        const bNovelTerminal = !selectedTerminalsByFamily.get(bf)?.has(bt);
+        if (aNovelTerminal !== bNovelTerminal) return aNovelTerminal ? -1 : 1;
         const ap = evaluationRouteGrindProxy(a.evaluation);
         const bp = evaluationRouteGrindProxy(b.evaluation);
         return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
@@ -1840,20 +2024,33 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
           routePostAvailabilityMetrics(b).progress - routePostAvailabilityMetrics(a).progress ||
           candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
       });
+
+    // Spend at most half of the reserve immediately on evolution-divergent
+    // variants. This protects Slowbro/Slowking-like choices without allowing
+    // same-terminal source duplicates to crowd out whole families.
+    const reserveSlots = Math.max(0, target - familyDiverseTarget);
+    const evolutionVariantSlots = Math.ceil(reserveSlots / 2);
+    let evolutionVariantsAdded = 0;
     for (const row of variantRows) {
-      if (selected.length >= target) break;
-      add(row, false);
+      if (selected.length >= target || evolutionVariantsAdded >= evolutionVariantSlots) break;
+      const family = candidateFamilyIdentity(row.candidate);
+      const terminal = String(row.candidate.terminalSpecies || row.candidate.species);
+      if (selectedTerminalsByFamily.get(family)?.has(terminal)) continue;
+      if (add(row, false)) {
+        evolutionVariantsAdded += 1;
+        if (!selectedTerminalsByFamily.has(family)) selectedTerminalsByFamily.set(family, new Set());
+        selectedTerminalsByFamily.get(family).add(terminal);
+      }
     }
 
-    // If the bucket has few alternate variants, spend the remaining reserve on a
-    // second balanced pass rather than falling back to a single metric.
-    laneRound = 0;
+    // Continue a balanced family-diverse pass before using source-only variants.
+    let laneRound = 0;
     while (selected.length < target) {
       let addedThisRound = false;
       for (const ordered of laneOrders) {
         if (selected.length >= target) break;
         for (let offset = laneRound; offset < ordered.length; offset += 1) {
-          if (add(ordered[offset], false)) {
+          if (add(ordered[offset], true)) {
             addedThisRound = true;
             break;
           }
@@ -1861,6 +2058,14 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
       }
       if (!addedThisRound) break;
       laneRound += 1;
+    }
+
+    // If family diversity cannot fill the quota, use the remaining reserve for
+    // source variants. This keeps the reserve available without making duplicate
+    // families mandatory.
+    for (const row of variantRows) {
+      if (selected.length >= target) break;
+      add(row, false);
     }
   }
 
