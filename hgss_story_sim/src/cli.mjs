@@ -841,7 +841,10 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         p2Trainer: boss,
         ...Object.fromEntries(
           Object.entries(battleOptions).filter(([key]) =>
-            key !== 'routeBuildOptimization' && key !== 'bossLabels'
+            key !== 'routeBuildOptimization' &&
+            key !== 'bossLabels' &&
+            key !== 'routeGrindProxy' &&
+            key !== 'routeGrindProxyTarget'
           )
         ),
       },
@@ -878,6 +881,12 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     : [];
   const finalTeam = finalMaterialized.map(mon => mon.species);
   const finalLevels = Object.fromEntries(finalMaterialized.map(mon => [mon.species, mon.level]));
+  const routeGrindProxy = battleOptions.routeGrindProxy
+    ? routeGrindProxyMetrics(
+        { rows, expSchedule },
+        Number(battleOptions.routeGrindProxyTarget || STORY_CLEAR_TARGET_WIN_RATE),
+      )
+    : null;
 
   return {
     score: meanWinRate,
@@ -909,6 +918,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     purchaseCosts,
     resourceBudget,
     memberUsage,
+    routeGrindProxy,
     rows,
   };
 }
@@ -1227,6 +1237,7 @@ function searchResultRow(team, evaluation) {
     catchUpExpUnknown: evaluation.catchUpExpUnknown,
     expBurden: evaluationExpBurden(evaluation),
     expBurdenUnknown: evaluationExpUnknown(evaluation),
+    routeGrindProxy: evaluation.routeGrindProxy || null,
     captureSearch: evaluation.captureSearch,
     team: team.map(x => x.species),
     teamKeys: team.map(candidateIdentity),
@@ -1353,6 +1364,11 @@ function routeEvaluationDominates(a, b) {
   const bExp = evaluationExpBurden(b);
   const aUnknown = evaluationExpUnknown(a);
   const bUnknown = evaluationExpUnknown(b);
+  const aProxy = evaluationRouteGrindProxy(a);
+  const bProxy = evaluationRouteGrindProxy(b);
+  const aProxyUnknown = evaluationRouteGrindProxyUnknown(a);
+  const bProxyUnknown = evaluationRouteGrindProxyUnknown(b);
+  const compareProxy = aProxy !== null && bProxy !== null;
   const atLeastAsGood =
     a.score >= b.score &&
     a.worstBossWinRate >= b.worstBossWinRate &&
@@ -1360,7 +1376,11 @@ function routeEvaluationDominates(a, b) {
     a.storyClearGeometricScore >= b.storyClearGeometricScore &&
     a.storyClearCoverageScore >= b.storyClearCoverageScore &&
     aExp <= bExp &&
-    aUnknown <= bUnknown;
+    aUnknown <= bUnknown &&
+    (!compareProxy || (
+      aProxy <= bProxy &&
+      aProxyUnknown <= bProxyUnknown
+    ));
   const strictlyBetter =
     a.score > b.score ||
     a.worstBossWinRate > b.worstBossWinRate ||
@@ -1368,7 +1388,11 @@ function routeEvaluationDominates(a, b) {
     a.storyClearGeometricScore > b.storyClearGeometricScore ||
     a.storyClearCoverageScore > b.storyClearCoverageScore ||
     aExp < bExp ||
-    aUnknown < bUnknown;
+    aUnknown < bUnknown ||
+    (compareProxy && (
+      aProxy < bProxy ||
+      aProxyUnknown < bProxyUnknown
+    ));
   return atLeastAsGood && strictlyBetter;
 }
 
@@ -1389,6 +1413,101 @@ function routePostAvailabilityMetrics(screenRow) {
     0,
   ) / active.length;
   return { score, progress, battles: active.length };
+}
+
+// Cheap search-time approximation of the practical grind objective.
+//
+// A weak checkpoint is expensive in proportion to:
+//   1) how far battle progress is below the story-clear target, and
+//   2) how many repeatable wild battles would be required at that exact point
+//      to raise the currently available team to the boss ace level.
+//
+// Because expectedAceGapBattles already divides the EXP gap by the best modeled
+// wild EXP/battle available at that stage, early weakness is naturally more
+// expensive than equally large late-game weakness. Skipped checkpoints are
+// ignored so a not-yet-acquired late specialist is not punished for battles
+// before it can legally join.
+function routeGrindProxyMetrics(evaluation, targetWinRate = STORY_CLEAR_TARGET_WIN_RATE) {
+  const expSchedule = evaluation?.expSchedule;
+  if (!expSchedule || !Array.isArray(expSchedule.battles)) {
+    return {
+      enabled: true,
+      targetWinRate,
+      expectedBattles: null,
+      rawExpectedBattles: null,
+      unknownCheckpoints: 1,
+      contributingCheckpoints: 0,
+      details: [],
+    };
+  }
+
+  const target = Math.max(0.01, Math.min(1, Number(targetWinRate || STORY_CLEAR_TARGET_WIN_RATE)));
+  const scheduleByLabel = new Map(
+    expSchedule.battles.map(row => [String(row.label), row])
+  );
+  let rawExpectedBattles = 0;
+  let unknownCheckpoints = 0;
+  const details = [];
+
+  for (const row of evaluation?.rows || []) {
+    if (row?.skipped) continue;
+    const progress = Math.max(
+      0,
+      Math.min(1, Number(row?.battleProgressScore ?? row?.winRate ?? 0)),
+    );
+    const deficitFraction = Math.max(0, target - progress) / target;
+    if (deficitFraction <= 0) continue;
+
+    const schedule = scheduleByLabel.get(String(row.boss));
+    const aceGapBattles = Number(schedule?.expectedAceGapBattles);
+    const modeled = Number.isFinite(aceGapBattles) && aceGapBattles >= 0;
+    if (!modeled) {
+      unknownCheckpoints += 1;
+      details.push({
+        boss: row.boss,
+        progress,
+        deficitFraction,
+        expectedAceGapBattles: null,
+        weightedBattles: null,
+      });
+      continue;
+    }
+
+    // A matchup can remain weak even when every available member is already at
+    // the ace level. Keep a one-battle floor so such a checkpoint is not treated
+    // as literally free, while preserving the scale set by modeled EXP gaps.
+    const weightedBattles = deficitFraction * Math.max(1, aceGapBattles);
+    rawExpectedBattles += weightedBattles;
+    details.push({
+      boss: row.boss,
+      progress,
+      deficitFraction,
+      expectedAceGapBattles: aceGapBattles,
+      weightedBattles,
+      expectedExpPerBattle: Number(schedule?.bestWildGrind?.expectedExpPerBattle || 0),
+    });
+  }
+
+  return {
+    enabled: true,
+    targetWinRate: target,
+    expectedBattles: Math.ceil(rawExpectedBattles),
+    rawExpectedBattles,
+    unknownCheckpoints,
+    contributingCheckpoints: details.length,
+    details,
+  };
+}
+
+function evaluationRouteGrindProxy(evaluation) {
+  if (!evaluation?.routeGrindProxy?.enabled) return null;
+  const value = Number(evaluation.routeGrindProxy.expectedBattles);
+  return Number.isFinite(value) ? value : null;
+}
+
+function evaluationRouteGrindProxyUnknown(evaluation) {
+  if (!evaluation?.routeGrindProxy?.enabled) return null;
+  return Number(evaluation.routeGrindProxy.unknownCheckpoints || 0);
 }
 
 function routeLateSpecialistCount(team) {
@@ -1521,10 +1640,20 @@ function selectRouteStoryBeam(states, width, objective = 'story-clear') {
     evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
     stateTieKey(a).localeCompare(stateTieKey(b))
   );
+  const byGrindProxy = [...front].sort((a, b) => {
+    const ap = evaluationRouteGrindProxy(a.evaluation);
+    const bp = evaluationRouteGrindProxy(b.evaluation);
+    if (ap !== null && bp !== null && ap !== bp) return ap - bp;
+    if (ap !== null && bp === null) return -1;
+    if (ap === null && bp !== null) return 1;
+    return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+      stateTieKey(a).localeCompare(stateTieKey(b));
+  });
 
   add(byObjective[0]);
   add(byBottom5[0]);
   add(byLateSpecialists[0]);
+  add(byGrindProxy[0]);
   add(byWorst[0]);
   add(byExp[0]);
   for (const state of byObjective) add(state);
@@ -1646,8 +1775,17 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
       evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
       candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
     );
+    const byGrindProxy = [...bucketRows].sort((a, b) => {
+      const ap = evaluationRouteGrindProxy(a.evaluation);
+      const bp = evaluationRouteGrindProxy(b.evaluation);
+      if (ap !== null && bp !== null && ap !== bp) return ap - bp;
+      if (ap !== null && bp === null) return -1;
+      if (ap === null && bp !== null) return 1;
+      return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+    });
 
-    for (const ordered of [byObjective, byPostProgress, byPostScore, byEntryEndowment]) {
+    for (const ordered of [byObjective, byGrindProxy, byPostProgress, byPostScore, byEntryEndowment]) {
       if (selected.length >= target) break;
       for (const row of ordered) {
         if (add(row, true)) break;
@@ -1930,6 +2068,8 @@ async function runBeamSearch({
         storyClearGeometricScore: Number(state.evaluation?.storyClearGeometricScore || 0),
         storyClearCoverageScore: Number(state.evaluation?.storyClearCoverageScore || 0),
         expBurden: evaluationExpBurden(state.evaluation),
+        routeGrindProxyBattles: evaluationRouteGrindProxy(state.evaluation),
+        routeGrindProxyUnknown: evaluationRouteGrindProxyUnknown(state.evaluation),
         lateSpecialistCount: routeLateSpecialistCount(state.team),
       })),
     });
@@ -2004,6 +2144,8 @@ async function runBeamSearch({
         postAvailabilityScore: routePostAvailabilityMetrics(row).score,
         postAvailabilityProgress: routePostAvailabilityMetrics(row).progress,
         postAvailabilityBattles: routePostAvailabilityMetrics(row).battles,
+        routeGrindProxyBattles: row ? evaluationRouteGrindProxy(row.evaluation) : null,
+        routeGrindProxyUnknown: row ? evaluationRouteGrindProxyUnknown(row.evaluation) : null,
       };
     }),
     beamTrace,
@@ -2349,6 +2491,11 @@ async function cmdRouteExpStorySearch() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
+  const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
+  const routeGrindProxyTarget = Math.max(
+    0.01,
+    Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
+  );
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
     throw new Error('route-exp-story-search pilot currently supports HEARTGOLD + Cyndaquil only');
@@ -2373,7 +2520,12 @@ async function cmdRouteExpStorySearch() {
   ]);
   const candidates = pool.candidates;
   const requiredCandidate = findStarterCandidate(candidates, starterName);
-  const battleOptions = { p1AiMode: 'smart', routeBuildOptimization: true };
+  const battleOptions = {
+    p1AiMode: 'smart',
+    routeBuildOptimization: true,
+    routeGrindProxy,
+    routeGrindProxyTarget,
+  };
 
   const result = await runBeamSearch({
     candidates,
@@ -2420,6 +2572,8 @@ async function cmdRouteExpStorySearch() {
       beamWidth,
       candidateCap,
       routeBuildOptimization: true,
+      routeGrindProxy,
+      routeGrindProxyTarget,
     },
     ...result,
     battleCache: battleCacheStats(),
