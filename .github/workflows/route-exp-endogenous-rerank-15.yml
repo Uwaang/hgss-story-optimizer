@@ -1,0 +1,205 @@
+name: route-exp-endogenous-rerank-15
+
+on:
+  push:
+    branches:
+      - exp/endogenous-rerank-15
+
+concurrency:
+  group: route-exp-endogenous-rerank-15-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  endogenous_rerank:
+    if: contains(github.event.head_commit.message, '[endogenous-rerank-15]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 15
+      matrix:
+        include:
+          - id: b0-r1
+            source: budget-0-rank-1
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Geodude::Graveler->Golem#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Hoppip::Skiploom->Jumpluff#1,Sneasel::Sneasel->Sneasel#1'
+          - id: b0-r2
+            source: budget-0-rank-2
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Geodude::Graveler->Golem#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Tentacool::Tentacruel->Tentacruel#1,Houndour::Houndour->Houndoom#1'
+          - id: b250-r1
+            source: budget-250k-rank-1
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1,Horsea::Horsea->Kingdra#1'
+          - id: b250-r2
+            source: budget-250k-rank-2
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1,Sneasel::Sneasel->Sneasel#1'
+          - id: b600-r1
+            source: budget-600k-rank-1
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Lapras::Lapras->Lapras#1,Geodude::Graveler->Golem#1,Abra::Abra->Alakazam#1,Tentacool::Tentacruel->Tentacruel#1,Dratini::Dragonair->Dragonite#1'
+          - id: b600-r2
+            source: budget-600k-rank-2
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Lapras::Lapras->Lapras#1,Geodude::Graveler->Golem#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Tentacool::Tentacruel->Tentacruel#1'
+          - id: b1000-r1
+            source: budget-1m-rank-1
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Lapras::Lapras->Lapras#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Dratini::Dratini->Dragonite#1,Elekid::Electabuzz->Electivire#1'
+          - id: b1000-r2
+            source: budget-1m-rank-2
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Lapras::Lapras->Lapras#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Dratini::Dratini->Dragonite#1,Geodude::Graveler->Golem#1'
+          - id: b1600-r1
+            source: budget-1.6m-rank-1
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Sneasel::Sneasel->Sneasel#1,Elekid::Electabuzz->Electivire#1,Girafarig::Girafarig->Girafarig#1,Dratini::Dratini->Dragonite#1'
+          - id: b1600-r2
+            source: budget-1.6m-rank-2
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Mareep::Mareep->Ampharos#1,Elekid::Electabuzz->Electivire#1,Venonat::Venomoth->Venomoth#1'
+          - id: b600-r3
+            source: budget-600k-rank-3-source-variant
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Lapras::Lapras->Lapras#1,Geodude::Graveler->Golem#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Dratini::Dragonair->Dragonite#1'
+          - id: b250-r3
+            source: budget-250k-rank-3-structural
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Mantyke::Mantine->Mantine#1,Horsea::Horsea->Kingdra#1,Slugma::Slugma->Magcargo#1'
+          - id: baseline-a
+            source: prior-A
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Geodude::Geodude->Golem#1,Slowpoke::Slowpoke->Slowbro#1,Pineco::Pineco->Forretress#1,Mareep::Mareep->Ampharos#1,Rhyhorn::Rhyhorn->Rhyperior#1'
+          - id: baseline-b
+            source: prior-B
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Geodude::Geodude->Golem#1,Abra::Abra->Alakazam#1,Wooper::Quagsire->Quagsire#1,Rhyhorn::Rhyhorn->Rhyperior#1'
+          - id: baseline-d
+            source: prior-D
+            team_keys: 'Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1'
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Full endogenous global-repair evaluation
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --story-checkpoints="Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2" \
+            --screen-runs=4 --verify-runs=32 --repair-runs=64 --final-runs=128 \
+            --max-repair-rounds=20 \
+            > "results/endogenous-${{ matrix.id }}.json"
+      - name: Assert final convergence
+        run: |
+          jq -e '
+            .assumptions.globalRepair == true and
+            .assumptions.finalRuns == 128 and
+            .storyFrontier[0].repairConverged == true and
+            .storyFrontier[0].storyWorstBossWinRate >= 0.5 and
+            ([.storyFrontier[0].redFrontier[].targetWinRate] | index(0.5)) != null
+          ' "results/endogenous-${{ matrix.id }}.json" >/dev/null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: endogenous-rerank-${{ matrix.id }}
+          path: hgss_story_sim/results/endogenous-${{ matrix.id }}.json
+          if-no-files-found: warn
+
+  collect_results:
+    if: always()
+    needs: endogenous_rerank
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: endogenous-rerank-*
+          path: inputs
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build endogenous rerank summary
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const files = fs.existsSync('inputs')
+            ? fs.readdirSync('inputs').filter(name => name.endsWith('.json')).sort()
+            : [];
+          const rows = [];
+          for (const name of files) {
+            const payload = JSON.parse(fs.readFileSync(path.join('inputs', name), 'utf8'));
+            const story = payload?.storyFrontier?.[0];
+            if (!story) continue;
+            const red25 = (story.redFrontier || []).find(row => Number(row.targetWinRate) === 0.25) || null;
+            const red50 = (story.redFrontier || []).find(row => Number(row.targetWinRate) === 0.5) || null;
+            rows.push({
+              id: name.replace(/^endogenous-/, '').replace(/\.json$/, ''),
+              team: (payload.team || []).map(row => row.terminalSpecies || row.species),
+              teamKeys: (payload.team || []).map(row => row.key),
+              storyGrindBattles: Number(story.storyGrindBattles || 0),
+              storyGrindExp: Number(story.storyGrindExp || 0),
+              storyWorstBossWinRate: Number(story.storyWorstBossWinRate || 0),
+              storyScore: Number(story.storyScore || 0),
+              repairRounds: Number(story.repairRounds || 0),
+              repairConverged: Boolean(story.repairConverged),
+              redBaselineWinRate: Number(story.redBaseline?.winRate || 0),
+              red25AdditionalBattles: red25 ? Number(red25.additionalRedGrindBattles || 0) : null,
+              red25TotalBattles: red25 ? Number(red25.totalGrindBattles || 0) : null,
+              red50AdditionalBattles: red50 ? Number(red50.additionalRedGrindBattles || 0) : null,
+              red50TotalBattles: red50 ? Number(red50.totalGrindBattles || 0) : null,
+              red50TotalGrindExp: red50 ? Number(red50.totalGrindExp || 0) : null,
+              red50AchievedWinRate: red50 ? Number(red50.achievedWinRate || 0) : null,
+              red50FinalLevels: red50?.finalLevels || null,
+              storyPlan: story.storyPlan || {},
+            });
+          }
+
+          rows.sort((a,b) =>
+            (a.red50TotalBattles ?? Infinity) - (b.red50TotalBattles ?? Infinity) ||
+            a.storyGrindBattles - b.storyGrindBattles ||
+            a.id.localeCompare(b.id)
+          );
+
+          const paretoRed50 = rows.filter((row, i) => !rows.some((other, j) => {
+            if (i === j) return false;
+            if (other.red50TotalBattles == null || row.red50TotalBattles == null) return false;
+            const noWorse =
+              other.storyGrindBattles <= row.storyGrindBattles &&
+              other.red50TotalBattles <= row.red50TotalBattles;
+            const strict =
+              other.storyGrindBattles < row.storyGrindBattles ||
+              other.red50TotalBattles < row.red50TotalBattles;
+            return noWorse && strict;
+          }));
+
+          const out = {
+            schemaVersion: 1,
+            purpose: 'full endogenous/global-repair comparison for v3 shortlist plus A/B/D baselines',
+            completedTeamCount: rows.length,
+            rows,
+            paretoRed50,
+          };
+          fs.writeFileSync('endogenous-rerank-15-summary.json', JSON.stringify(out, null, 2) + '\n');
+          console.log(JSON.stringify({
+            completedTeamCount: rows.length,
+            ranking: rows.map(row => ({
+              id: row.id,
+              team: row.team,
+              storyGrindBattles: row.storyGrindBattles,
+              red50AdditionalBattles: row.red50AdditionalBattles,
+              red50TotalBattles: row.red50TotalBattles,
+            })),
+            paretoRed50: paretoRed50.map(row => row.id),
+          }, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: endogenous-rerank-15-summary
+          path: endogenous-rerank-15-summary.json
+          if-no-files-found: error
