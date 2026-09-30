@@ -60,8 +60,13 @@ jobs:
             .assumptions.routeGrindProxy == true and
             .assumptions.routeGrindProxyTarget == 0.5 and
             .routeGrindProxy.enabled == true and
+            .routeGrindProxy.version == 2 and
             (.routeGrindProxy.expectedBattles | type) == "number" and
             .routeGrindProxy.expectedBattles >= 0 and
+            (.routeGrindProxy.legacyExpectedBattles | type) == "number" and
+            .routeGrindProxy.legacyExpectedBattles >= 0 and
+            (.routeGrindProxy.cumulativeGrindExp | type) == "number" and
+            .routeGrindProxy.cumulativeGrindExp >= 0 and
             .routeGrindProxy.unknownCheckpoints == 0
           ' "results/proxy-fixture-${{ matrix.id }}.json" >/dev/null
       - uses: actions/upload-artifact@v4
@@ -121,8 +126,8 @@ jobs:
             ] as $required |
             {
               selectedCount: ($keys | length),
-              missing: [$required[] | select($keys | index(.) == null)],
-              present: [$required[] | select($keys | index(.) != null)]
+              missing: [$required[] as $k | select(($keys | index($k)) == null) | $k],
+              present: [$required[] as $k | select(($keys | index($k)) != null) | $k]
             }
           ' results/route-grind-proxy-recall.json
 
@@ -151,7 +156,8 @@ jobs:
                 "Lapras::Lapras->Lapras#1",
                 "Chinchou::Lanturn->Lanturn#1",
                 "Horsea::Horsea->Kingdra#1"
-              ] | all(. as $k | $keys | index($k) != null)
+              ] as $required |
+              ([$required[] as $k | ($keys | index($k)) != null] | all)
             ) and
             ([.selectedCandidateDetails[].routeGrindProxyBattles] | all(type == "number")) and
             ([.beamTrace[].selected[].routeGrindProxyBattles] | all(type == "number"))
@@ -182,6 +188,9 @@ jobs:
               teamKeys: [.team[].key],
               expectedBattles: .routeGrindProxy.expectedBattles,
               rawExpectedBattles: .routeGrindProxy.rawExpectedBattles,
+              legacyExpectedBattles: .routeGrindProxy.legacyExpectedBattles,
+              legacyRawExpectedBattles: .routeGrindProxy.legacyRawExpectedBattles,
+              cumulativeGrindExp: .routeGrindProxy.cumulativeGrindExp,
               contributingCheckpoints: .routeGrindProxy.contributingCheckpoints,
               worstBossWinRate: .performance.worstBossWinRate,
               storyClearGeometricScore: .performance.storyClearGeometricScore
