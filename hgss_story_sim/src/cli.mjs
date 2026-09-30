@@ -3315,6 +3315,11 @@ async function cmdRouteExpStoryEvaluate() {
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '4'))));
+  const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
+  const routeGrindProxyTarget = Math.max(
+    0.01,
+    Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
+  );
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
 
@@ -3382,7 +3387,12 @@ async function cmdRouteExpStoryEvaluate() {
     moveAccess,
     expContext,
     grindPolicy,
-    { p1AiMode: 'smart', routeBuildOptimization: true },
+    {
+      p1AiMode: 'smart',
+      routeBuildOptimization: true,
+      routeGrindProxy,
+      routeGrindProxyTarget,
+    },
   );
 
   const scheduleRows = evaluation.expSchedule?.battles || [];
@@ -3442,6 +3452,8 @@ async function cmdRouteExpStoryEvaluate() {
       resourceProfile,
       spendPolicy,
       playerAi: 'smart',
+      routeGrindProxy,
+      routeGrindProxyTarget,
       routeExpInterpretation: expProfile === 'normal-route'
         ? 'all source-visible trainer rewards on curated normal-route maps; not yet a proven mandatory-only trainer subset'
         : expProfile === 'all-accessible'
@@ -3477,6 +3489,7 @@ async function cmdRouteExpStoryEvaluate() {
     finalBoss: red,
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
+    routeGrindProxy: evaluation.routeGrindProxy || null,
     performance: {
       score: Number(evaluation.score || 0),
       worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
