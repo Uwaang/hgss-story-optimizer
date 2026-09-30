@@ -1,0 +1,176 @@
+name: route-exp-candidate-sweep-v3
+
+on:
+  push:
+    branches:
+      - exp/overnight-candidate-sweep-v3
+
+concurrency:
+  group: route-exp-candidate-sweep-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate_sweep:
+    if: contains(github.event.head_commit.message, '[candidate-sweep-v3]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        grind_budget:
+          - 0
+          - 250000
+          - 600000
+          - 1000000
+          - 1600000
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Lightweight route-aware candidate sweep
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route \
+            --grind-policy=budgeted --grind-budget=${{ matrix.grind_budget }} \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=story-clear \
+            --screen-runs=1 --runs=1 --final-runs=4 \
+            --candidate-cap=24 --beam-width=10 \
+            > "results/route-exp-candidate-sweep-v3-${{ matrix.grind_budget }}.json"
+      - name: Assert candidate sweep semantics
+        run: |
+          jq -e '
+            .candidatePool >= 20 and
+            .assumptions.routeBuildOptimization == true and
+            .assumptions.searchPolicy == "route-story" and
+            .searchPolicy == "route-story" and
+            .assumptions.beamWidth == 10 and
+            .assumptions.candidateCap == 24 and
+            .assumptions.screenRuns == 1 and
+            .assumptions.runs == 1 and
+            .assumptions.finalRuns == 4 and
+            ([.beamTrace[].targetSize] | index(6)) != null and
+            (.top | length) >= 1 and
+            ([.top[].teamKeys | length] | all(. == 6))
+          ' "results/route-exp-candidate-sweep-v3-${{ matrix.grind_budget }}.json" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-candidate-sweep-v3-${{ matrix.grind_budget }}
+          path: hgss_story_sim/results/route-exp-candidate-sweep-v3-${{ matrix.grind_budget }}.json
+          if-no-files-found: error
+
+  collect_shortlist:
+    if: always() && needs.candidate_sweep.result == 'success'
+    needs: candidate_sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: route-exp-candidate-sweep-v3-*
+          path: inputs
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deduplicate candidate teams
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const files = fs.readdirSync('inputs')
+            .filter(name => name.endsWith('.json'))
+            .sort();
+
+          const byTeam = new Map();
+          const budgets = [];
+          for (const name of files) {
+            const payload = JSON.parse(fs.readFileSync(path.join('inputs', name), 'utf8'));
+            const budget = Number(payload?.assumptions?.grindBudget || 0);
+            budgets.push(budget);
+            for (const [rank, row] of (payload.top || []).entries()) {
+              const keys = (row.teamKeys || []).map(String);
+              if (keys.length !== 6) continue;
+              const id = [...keys].sort().join('|');
+              const current = byTeam.get(id) || {
+                team: row.team || [],
+                teamKeys: keys,
+                sources: [],
+                bestRank: rank + 1,
+                bestStoryClearGeometricScore: Number(row.storyClearGeometricScore || 0),
+                bestStoryClearCoverageScore: Number(row.storyClearCoverageScore || 0),
+                bestWorstBossWinRate: Number(row.worstBossWinRate || 0),
+              };
+              current.sources.push({
+                grindBudget: budget,
+                rank: rank + 1,
+                storyClearGeometricScore: Number(row.storyClearGeometricScore || 0),
+                storyClearCoverageScore: Number(row.storyClearCoverageScore || 0),
+                worstBossWinRate: Number(row.worstBossWinRate || 0),
+                expBurden: row.expBurden ?? null,
+              });
+              current.bestRank = Math.min(current.bestRank, rank + 1);
+              current.bestStoryClearGeometricScore = Math.max(
+                current.bestStoryClearGeometricScore,
+                Number(row.storyClearGeometricScore || 0)
+              );
+              current.bestStoryClearCoverageScore = Math.max(
+                current.bestStoryClearCoverageScore,
+                Number(row.storyClearCoverageScore || 0)
+              );
+              current.bestWorstBossWinRate = Math.max(
+                current.bestWorstBossWinRate,
+                Number(row.worstBossWinRate || 0)
+              );
+              byTeam.set(id, current);
+            }
+          }
+
+          const candidates = [...byTeam.values()].sort((a, b) =>
+            b.sources.length - a.sources.length ||
+            a.bestRank - b.bestRank ||
+            b.bestStoryClearGeometricScore - a.bestStoryClearGeometricScore ||
+            b.bestStoryClearCoverageScore - a.bestStoryClearCoverageScore ||
+            a.teamKeys.join('|').localeCompare(b.teamKeys.join('|'))
+          );
+
+          const out = {
+            schemaVersion: 1,
+            purpose: 'deduplicated candidate pool for full endogenous/global-repair reranking',
+            budgets: [...new Set(budgets)].sort((a,b) => a-b),
+            inputFiles: files,
+            distinctTeamCount: candidates.length,
+            candidates,
+          };
+          fs.writeFileSync('candidate-shortlist-v3.json', JSON.stringify(out, null, 2) + '\n');
+          console.log(JSON.stringify({
+            budgets: out.budgets,
+            distinctTeamCount: out.distinctTeamCount,
+            topTeams: candidates.slice(0, 10).map(x => ({
+              team: x.team,
+              sourceCount: x.sources.length,
+              bestRank: x.bestRank,
+            })),
+          }, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-exp-candidate-shortlist-v3
+          path: candidate-shortlist-v3.json
+          if-no-files-found: error
