@@ -1,0 +1,92 @@
+name: route-grind-proxy-v2-search
+
+on:
+  push:
+    branches:
+      - exp/route-grind-proxy-v2-search
+
+concurrency:
+  group: route-grind-proxy-v2-search-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search:
+    if: contains(github.event.head_commit.message, '[proxy-v2-search]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Run proxy v2 route search
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=story-clear \
+            --route-grind-proxy=true --route-grind-proxy-target=0.5 \
+            --screen-runs=1 --runs=2 --final-runs=16 \
+            --candidate-cap=36 --beam-width=4 \
+            > results/route-grind-proxy-v2-search.json
+      - name: Assert v2 search semantics
+        run: |
+          jq -e '
+            .assumptions.routeGrindProxy == true and
+            .assumptions.routeGrindProxyTarget == 0.5 and
+            .assumptions.candidateCap == 36 and
+            .assumptions.beamWidth == 4 and
+            .assumptions.finalRuns == 16 and
+            (.top | length) >= 1 and
+            ([.top[].teamKeys | length] | all(. == 6)) and
+            ([.top[].routeGrindProxy.version] | all(. == 2)) and
+            ([.top[].routeGrindProxy.expectedBattles | type] | all(. == "number"))
+          ' results/route-grind-proxy-v2-search.json >/dev/null
+      - name: Summarize top teams
+        run: |
+          jq '
+            {
+              screenedCandidates,
+              evaluatedTeams,
+              finalRescoredTeams,
+              top: [
+                .top[] | {
+                  team,
+                  teamKeys,
+                  score,
+                  worstBossWinRate,
+                  bottom5BossWinRate,
+                  storyClearGeometricScore,
+                  storyClearCoverageScore,
+                  routeGrindProxy: {
+                    expectedBattles: .routeGrindProxy.expectedBattles,
+                    legacyExpectedBattles: .routeGrindProxy.legacyExpectedBattles,
+                    cumulativeGrindExp: .routeGrindProxy.cumulativeGrindExp
+                  }
+                }
+              ]
+            }
+          ' results/route-grind-proxy-v2-search.json | tee results/route-grind-proxy-v2-search-summary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: route-grind-proxy-v2-search
+          path: |
+            hgss_story_sim/results/route-grind-proxy-v2-search.json
+            hgss_story_sim/results/route-grind-proxy-v2-search-summary.json
+          if-no-files-found: warn
