@@ -2044,7 +2044,7 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
     }
 
     // Continue a balanced family-diverse pass before using source-only variants.
-    let laneRound = 0;
+    laneRound = 0;
     while (selected.length < target) {
       let addedThisRound = false;
       for (const ordered of laneOrders) {
