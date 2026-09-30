@@ -1559,6 +1559,7 @@ export function buildTeamExpSchedule({
       moneyBefore,
       bestWildGrind: wild,
       aceGapExpBefore: aceGapBefore.total,
+      aceGapExpDetails: aceGapBefore.details,
       expectedAceGapBattles,
       grindExpBefore,
       grindBudgetReleasedBefore: totalReleasedGrindBudget,
