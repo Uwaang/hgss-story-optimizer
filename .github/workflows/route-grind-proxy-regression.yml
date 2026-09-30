@@ -9,6 +9,9 @@ concurrency:
   group: route-grind-proxy-regression-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   proxy_fixture:
     if: contains(github.event.head_commit.message, '[route-grind-proxy]')
