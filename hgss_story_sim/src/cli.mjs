@@ -1785,21 +1785,82 @@ function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') 
         candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
     });
 
-    for (const ordered of [byObjective, byGrindProxy, byPostProgress, byPostScore, byEntryEndowment]) {
-      if (selected.length >= target) break;
-      for (const row of ordered) {
-        if (add(row, true)) break;
+    const laneOrders = [
+      byObjective,
+      byGrindProxy,
+      byPostProgress,
+      byPostScore,
+      byEntryEndowment,
+    ];
+    const bucketQuota = target - before;
+    const familyDiverseTarget = Math.min(
+      target,
+      before + Math.max(1, Math.ceil(bucketQuota * 0.80)),
+    );
+
+    // Keep drawing from every useful signal instead of taking one exemplar from
+    // each lane and then filling the remainder almost entirely by post-progress.
+    // This preserves candidates whose value comes from a different axis, e.g.
+    // late entry endowment or cheap grind timing.
+    let laneRound = 0;
+    while (selected.length < familyDiverseTarget) {
+      let addedThisRound = false;
+      for (const ordered of laneOrders) {
+        if (selected.length >= familyDiverseTarget) break;
+        for (let offset = laneRound; offset < ordered.length; offset += 1) {
+          if (add(ordered[offset], true)) {
+            addedThisRound = true;
+            break;
+          }
+        }
       }
+      if (!addedThisRound) break;
+      laneRound += 1;
     }
-    for (const row of byPostProgress) {
-      if (selected.length >= target) break;
-      add(row, true);
-    }
-    // Source variants are semantically distinct, so allow a same-family source only
-    // after the family-diverse quota has been exhausted.
-    for (const row of byPostProgress) {
+
+    // Preserve a small source/evolution-variant reserve inside every availability
+    // bucket. Families are still diverse for most of the quota, but semantically
+    // different acquisition/evolution routes are not deleted just because another
+    // member of the same family happened to screen slightly better in isolation.
+    const selectedFamiliesInBucket = new Set(
+      selected
+        .slice(before)
+        .map(row => candidateFamilyIdentity(row.candidate)),
+    );
+    const variantRows = bucketRows
+      .filter(row =>
+        !seen.has(candidateScreenTieKey(row)) &&
+        selectedFamiliesInBucket.has(candidateFamilyIdentity(row.candidate))
+      )
+      .sort((a, b) => {
+        const ap = evaluationRouteGrindProxy(a.evaluation);
+        const bp = evaluationRouteGrindProxy(b.evaluation);
+        return evaluationObjectiveCompare(a.evaluation, b.evaluation, objective) ||
+          (ap ?? Number.POSITIVE_INFINITY) - (bp ?? Number.POSITIVE_INFINITY) ||
+          routePostAvailabilityMetrics(b).progress - routePostAvailabilityMetrics(a).progress ||
+          candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b));
+      });
+    for (const row of variantRows) {
       if (selected.length >= target) break;
       add(row, false);
+    }
+
+    // If the bucket has few alternate variants, spend the remaining reserve on a
+    // second balanced pass rather than falling back to a single metric.
+    laneRound = 0;
+    while (selected.length < target) {
+      let addedThisRound = false;
+      for (const ordered of laneOrders) {
+        if (selected.length >= target) break;
+        for (let offset = laneRound; offset < ordered.length; offset += 1) {
+          if (add(ordered[offset], false)) {
+            addedThisRound = true;
+            break;
+          }
+        }
+      }
+      if (!addedThisRound) break;
+      laneRound += 1;
     }
   }
 
