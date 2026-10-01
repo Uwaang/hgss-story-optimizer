@@ -142,6 +142,31 @@ function storyClearGeometricScore(rows) {
   return Math.exp(logMean);
 }
 
+function routeRiskActiveRows(evaluation) {
+  return (evaluation?.rows || []).filter(row => !row?.skipped);
+}
+
+function routeRiskGeometricScore(evaluation) {
+  return storyClearGeometricScore(routeRiskActiveRows(evaluation));
+}
+
+function routeRiskMeanWinRate(evaluation) {
+  const rows = routeRiskActiveRows(evaluation);
+  const totals = rows.reduce(
+    (acc, row) => {
+      const runs = Math.max(0, Number(row?.runs || 0));
+      const wins = Math.max(0, Number(row?.wins || 0));
+      acc.runs += runs;
+      acc.wins += wins;
+      return acc;
+    },
+    { wins: 0, runs: 0 },
+  );
+  if (totals.runs > 0) return totals.wins / totals.runs;
+  if (!rows.length) return 0;
+  return rows.reduce((sum, row) => sum + Number(row?.winRate || 0), 0) / rows.length;
+}
+
 function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
   const rates = rows
     .map(row => Number(row.winRate || 0))
@@ -153,13 +178,15 @@ function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
 
 function evaluationObjectiveCompare(a, b, objective = 'mean') {
   if (objective === 'route-risk') {
-    // Threshold-free route objective. The geometric mean is equivalent to
-    // minimizing mean negative log success probability, so weak checkpoints
-    // are penalized continuously without an arbitrary win-rate cutoff or K-tail.
-    if (a.storyClearGeometricScore !== b.storyClearGeometricScore) {
-      return b.storyClearGeometricScore - a.storyClearGeometricScore;
-    }
-    if (a.score !== b.score) return b.score - a.score;
+    // Threshold-free route objective. Skipped checkpoints are not failures:
+    // a candidate that is not yet legally available must not be punished before
+    // its acquisition point during single-member screening.
+    const aGeometric = routeRiskGeometricScore(a);
+    const bGeometric = routeRiskGeometricScore(b);
+    if (aGeometric !== bGeometric) return bGeometric - aGeometric;
+    const aMean = routeRiskMeanWinRate(a);
+    const bMean = routeRiskMeanWinRate(b);
+    if (aMean !== bMean) return bMean - aMean;
     return 0;
   }
   if (objective === 'story-clear') {
@@ -1808,14 +1835,18 @@ function routeRiskEvaluationDominates(a, b) {
   const bExp = evaluationExpBurden(b);
   const aUnknown = evaluationExpUnknown(a);
   const bUnknown = evaluationExpUnknown(b);
+  const aGeometric = routeRiskGeometricScore(a);
+  const bGeometric = routeRiskGeometricScore(b);
+  const aMean = routeRiskMeanWinRate(a);
+  const bMean = routeRiskMeanWinRate(b);
   const atLeastAsGood =
-    Number(a.storyClearGeometricScore || 0) >= Number(b.storyClearGeometricScore || 0) &&
-    Number(a.score || 0) >= Number(b.score || 0) &&
+    aGeometric >= bGeometric &&
+    aMean >= bMean &&
     aExp <= bExp &&
     aUnknown <= bUnknown;
   const strictlyBetter =
-    Number(a.storyClearGeometricScore || 0) > Number(b.storyClearGeometricScore || 0) ||
-    Number(a.score || 0) > Number(b.score || 0) ||
+    aGeometric > bGeometric ||
+    aMean > bMean ||
     aExp < bExp ||
     aUnknown < bUnknown;
   return atLeastAsGood && strictlyBetter;
@@ -1827,8 +1858,8 @@ function selectRouteRiskBeam(states, width) {
     states.flatMap(state => (state.evaluation?.rows || []).map(row => String(row.boss)))
   )].sort();
   const dimensions = [
-    state => Number(state.evaluation?.storyClearGeometricScore || 0),
-    state => Number(state.evaluation?.score || 0),
+    state => routeRiskGeometricScore(state.evaluation),
+    state => routeRiskMeanWinRate(state.evaluation),
     state => evaluationExpBurden(state.evaluation),
     ...bossLabels.map(label => state => {
       const row = (state.evaluation?.rows || []).find(item => String(item.boss) === label);
@@ -1862,25 +1893,29 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
     const bm = routePostAvailabilityMetrics(b);
     const aExp = evaluationExpBurden(a.evaluation);
     const bExp = evaluationExpBurden(b.evaluation);
+    const aGeometric = routeRiskGeometricScore(a.evaluation);
+    const bGeometric = routeRiskGeometricScore(b.evaluation);
     const atLeastAsGood =
-      Number(a.evaluation?.storyClearGeometricScore || 0) >= Number(b.evaluation?.storyClearGeometricScore || 0) &&
+      aGeometric >= bGeometric &&
       am.progress >= bm.progress &&
       am.score >= bm.score &&
       aExp <= bExp;
     const strictlyBetter =
-      Number(a.evaluation?.storyClearGeometricScore || 0) > Number(b.evaluation?.storyClearGeometricScore || 0) ||
+      aGeometric > bGeometric ||
       am.progress > bm.progress ||
       am.score > bm.score ||
       aExp < bExp;
     return atLeastAsGood && strictlyBetter;
   };
   const dimensions = [
-    row => Number(row.evaluation?.storyClearGeometricScore || 0),
-    row => Number(row.evaluation?.score || 0),
+    row => routeRiskGeometricScore(row.evaluation),
+    row => routeRiskMeanWinRate(row.evaluation),
     row => routePostAvailabilityMetrics(row).progress,
     row => routePostAvailabilityMetrics(row).score,
+    // Availability is used only as a crowding/diversity coordinate, never as
+    // a bonus or penalty. This preserves timing-diverse candidates without
+    // fixed early/mid/late quotas.
     row => Number(row.candidate?.availableFrom || 0),
-    row => Number(row.candidate?.entryLevelMax || 0),
   ];
   const selected = [];
   for (const layer of nonDominatedLayers(rows, dominates)) {
