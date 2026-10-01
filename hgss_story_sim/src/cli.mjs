@@ -149,17 +149,25 @@ function routeRiskActiveRows(evaluation) {
 function routeRiskRowProbability(row) {
   const wins = Number(row?.wins);
   const losses = Number(row?.losses);
-  if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
-    // Use the same finite-sample Beta(1,1) posterior mean as the geometric
-    // score. This is continuous and avoids arbitrary success thresholds while
-    // keeping 0/N smoke samples finite.
-    return (wins + 1) / (wins + losses + 2);
+  const ties = Number(row?.ties || 0);
+  const failures = Number.isFinite(losses)
+    ? losses + (Number.isFinite(ties) ? ties : 0)
+    : null;
+  if (Number.isFinite(wins) && Number.isFinite(failures) && wins + failures > 0) {
+    // Beta(1,1) posterior mean. A tie is a non-clear and therefore a retry.
+    return (wins + 1) / (wins + failures + 2);
   }
   return Math.max(1e-6, Math.min(1 - 1e-6, Number(row?.winRate || 0)));
 }
 
 function routeRiskGeometricScore(evaluation) {
-  return storyClearGeometricScore(routeRiskActiveRows(evaluation));
+  const rows = routeRiskActiveRows(evaluation);
+  if (!rows.length) return 0;
+  const logMean = rows.reduce(
+    (sum, row) => sum + Math.log(routeRiskRowProbability(row)),
+    0,
+  ) / rows.length;
+  return Math.exp(logMean);
 }
 
 function routeRiskExpectedRetryFailures(evaluation) {
@@ -167,6 +175,33 @@ function routeRiskExpectedRetryFailures(evaluation) {
     const p = routeRiskRowProbability(row);
     return sum + (1 - p) / p;
   }, 0);
+}
+
+function routeRiskMeanRetryFailures(evaluation) {
+  const rows = routeRiskActiveRows(evaluation);
+  if (!rows.length) return Number.POSITIVE_INFINITY;
+  return routeRiskExpectedRetryFailures(evaluation) / rows.length;
+}
+
+function routeRiskRetryInterval(evaluation, z = 1.96) {
+  let lower = 0;
+  let upper = 0;
+  for (const row of routeRiskActiveRows(evaluation)) {
+    const wins = Math.max(0, Number(row?.wins || 0));
+    const losses = Math.max(0, Number(row?.losses || 0));
+    const ties = Math.max(0, Number(row?.ties || 0));
+    const a = wins + 1;
+    const b = losses + ties + 1;
+    const total = a + b;
+    const mean = a / total;
+    const variance = (a * b) / (total * total * (total + 1));
+    const sd = Math.sqrt(Math.max(0, variance));
+    const pLow = Math.max(1e-6, mean - z * sd);
+    const pHigh = Math.min(1 - 1e-6, mean + z * sd);
+    lower += (1 - pHigh) / pHigh;
+    upper += (1 - pLow) / pLow;
+  }
+  return { lower, upper };
 }
 
 function routeRiskMeanWinRate(evaluation) {
@@ -184,6 +219,38 @@ function routeRiskMeanWinRate(evaluation) {
   if (totals.runs > 0) return totals.wins / totals.runs;
   if (!rows.length) return 0;
   return rows.reduce((sum, row) => sum + Number(row?.winRate || 0), 0) / rows.length;
+}
+
+function routeRiskProgressMap(evaluation) {
+  const map = new Map();
+  for (const row of evaluation?.rows || []) {
+    if (!row || row.skipped) continue;
+    map.set(
+      String(row.boss),
+      Math.max(0, Math.min(1, Number(row.battleProgressScore ?? row.winRate ?? 0))),
+    );
+  }
+  return map;
+}
+
+function routeRiskProgressAtLeastAsGood(a, b) {
+  const aMap = routeRiskProgressMap(a);
+  const bMap = routeRiskProgressMap(b);
+  for (const [boss, bProgress] of bMap) {
+    if (!aMap.has(boss)) return false;
+    if (Number(aMap.get(boss)) + 1e-12 < Number(bProgress)) return false;
+  }
+  return true;
+}
+
+function routeRiskProgressStrictlyBetter(a, b) {
+  const aMap = routeRiskProgressMap(a);
+  const bMap = routeRiskProgressMap(b);
+  for (const [boss, aProgress] of aMap) {
+    if (!bMap.has(boss)) return true;
+    if (Number(aProgress) > Number(bMap.get(boss)) + 1e-12) return true;
+  }
+  return false;
 }
 
 function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
@@ -1865,16 +1932,20 @@ function routeRiskEvaluationDominates(a, b) {
   const bGeometric = routeRiskGeometricScore(b);
   const aMean = routeRiskMeanWinRate(a);
   const bMean = routeRiskMeanWinRate(b);
+  const progressAtLeastAsGood = routeRiskProgressAtLeastAsGood(a, b);
+  const progressStrictlyBetter = routeRiskProgressStrictlyBetter(a, b);
   const atLeastAsGood =
     aRetries <= bRetries &&
     aGeometric >= bGeometric &&
     aMean >= bMean &&
-    aUnknown <= bUnknown;
+    aUnknown <= bUnknown &&
+    progressAtLeastAsGood;
   const strictlyBetter =
     aRetries < bRetries ||
     aGeometric > bGeometric ||
     aMean > bMean ||
-    aUnknown < bUnknown;
+    aUnknown < bUnknown ||
+    progressStrictlyBetter;
   return atLeastAsGood && strictlyBetter;
 }
 
@@ -1918,25 +1989,29 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
   const dominates = (a, b) => {
     const am = routePostAvailabilityMetrics(a);
     const bm = routePostAvailabilityMetrics(b);
-    const aRetries = routeRiskExpectedRetryFailures(a.evaluation);
-    const bRetries = routeRiskExpectedRetryFailures(b.evaluation);
+    const aRetries = routeRiskMeanRetryFailures(a.evaluation);
+    const bRetries = routeRiskMeanRetryFailures(b.evaluation);
     const aGeometric = routeRiskGeometricScore(a.evaluation);
     const bGeometric = routeRiskGeometricScore(b.evaluation);
+    const progressAtLeastAsGood = routeRiskProgressAtLeastAsGood(a.evaluation, b.evaluation);
+    const progressStrictlyBetter = routeRiskProgressStrictlyBetter(a.evaluation, b.evaluation);
     const atLeastAsGood =
       aRetries <= bRetries &&
       aGeometric >= bGeometric &&
       am.progress >= bm.progress &&
-      am.score >= bm.score;
+      am.score >= bm.score &&
+      progressAtLeastAsGood;
     const strictlyBetter =
       aRetries < bRetries ||
       aGeometric > bGeometric ||
       am.progress > bm.progress ||
-      am.score > bm.score;
+      am.score > bm.score ||
+      progressStrictlyBetter;
     return atLeastAsGood && strictlyBetter;
   };
 
   const dimensions = [
-    row => routeRiskExpectedRetryFailures(row.evaluation),
+    row => routeRiskMeanRetryFailures(row.evaluation),
     row => routeRiskGeometricScore(row.evaluation),
     row => routeRiskMeanWinRate(row.evaluation),
     row => routePostAvailabilityMetrics(row).progress,
