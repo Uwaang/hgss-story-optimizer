@@ -77,8 +77,8 @@ function normalizeGrindPolicy(value) {
 
 function normalizeEntryLevelPolicy(value) {
   const policy = String(value || 'midpoint').toLowerCase();
-  if (!['min', 'midpoint', 'max'].includes(policy)) {
-    throw new Error(`Unknown entry-level policy: ${value}. Use min, midpoint, or max.`);
+  if (!['min', 'midpoint', 'max', 'expected'].includes(policy)) {
+    throw new Error(`Unknown entry-level policy: ${value}. Use min, midpoint, max, or expected.`);
   }
   return policy;
 }
