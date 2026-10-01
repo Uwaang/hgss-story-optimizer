@@ -416,10 +416,100 @@ function entryLevel(candidate, policy = 'midpoint') {
   return Math.max(1, Math.floor(value));
 }
 
-function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
-  const level = entryLevel(candidate, entryLevelPolicy);
+function normalizedSourceLevelDistribution(source, candidate) {
+  const explicit = (source?.levelDistribution || [])
+    .map(row => ({
+      level: Number(row?.level),
+      probability: Number(row?.probability),
+    }))
+    .filter(row =>
+      Number.isFinite(row.level) &&
+      row.level >= 1 &&
+      row.level <= 100 &&
+      Number.isFinite(row.probability) &&
+      row.probability > 0
+    );
+  if (explicit.length) {
+    const total = explicit.reduce((sum, row) => sum + row.probability, 0);
+    return explicit.map(row => ({
+      level: row.level,
+      probability: row.probability / total,
+    }));
+  }
+
+  const sourceMin = Number(source?.minLevel);
+  const sourceMax = Number(source?.maxLevel);
+  const min = Number.isFinite(sourceMin) ? sourceMin : Number(candidate?.entryLevelMin);
+  const max = Number.isFinite(sourceMax) ? sourceMax : Number(candidate?.entryLevelMax);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return [];
+  const start = Math.max(1, Math.floor(Number.isFinite(min) ? min : max));
+  const end = Math.min(100, Math.floor(Number.isFinite(max) ? max : min));
+  const lo = Math.min(start, end);
+  const hi = Math.max(start, end);
+  const count = hi - lo + 1;
+  return Array.from({ length: count }, (_, index) => ({
+    level: lo + index,
+    probability: 1 / count,
+  }));
+}
+
+function expectedEntryState(candidate) {
   const growthRate = candidate.growthRate || null;
-  const initialExp = level === null ? null : expAtLevel(growthRate, level);
+  if (!growthRate) return null;
+
+  const rawSources = Array.isArray(candidate.sources) && candidate.sources.length
+    ? candidate.sources
+    : [null];
+  const options = [];
+  for (const source of rawSources) {
+    const distribution = normalizedSourceLevelDistribution(source, candidate);
+    if (!distribution.length) continue;
+    let expectedExp = 0;
+    let expectedLevel = 0;
+    let valid = true;
+    for (const row of distribution) {
+      const exp = expAtLevel(growthRate, row.level);
+      if (exp === null) {
+        valid = false;
+        break;
+      }
+      expectedExp += row.probability * exp;
+      expectedLevel += row.probability * row.level;
+    }
+    if (!valid) continue;
+    options.push({
+      expectedExp,
+      expectedLevel,
+      distribution,
+      source,
+    });
+  }
+  if (!options.length) return null;
+
+  // Capture friction is intentionally not an optimization objective in the
+  // route model. If multiple legal earliest-stage sources exist, use the one
+  // with the highest expected capture EXP instead of assuming the maximum slot
+  // level from the union of all sources.
+  options.sort((a, b) =>
+    b.expectedExp - a.expectedExp ||
+    b.expectedLevel - a.expectedLevel ||
+    String(a.source?.map || '').localeCompare(String(b.source?.map || '')) ||
+    String(a.source?.method || '').localeCompare(String(b.source?.method || ''))
+  );
+  const best = options[0];
+  return {
+    ...best,
+    level: levelAtExp(growthRate, best.expectedExp),
+  };
+}
+
+function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
+  const growthRate = candidate.growthRate || null;
+  const expected = entryLevelPolicy === 'expected' ? expectedEntryState(candidate) : null;
+  const level = expected ? expected.level : entryLevel(candidate, entryLevelPolicy);
+  const initialExp = expected
+    ? expected.expectedExp
+    : (level === null ? null : expAtLevel(growthRate, level));
   return {
     candidate,
     key: candidateKey(candidate),
@@ -427,6 +517,8 @@ function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
     availableFrom: Number(candidate.availableFrom || 0),
     growthRate,
     entryLevel: level,
+    entryExpectedLevel: expected?.expectedLevel ?? null,
+    entrySource: expected?.source || null,
     initialExp,
     exp: initialExp,
     level,
@@ -1040,7 +1132,7 @@ export function buildTeamExpSchedule({
   if (!Number.isFinite(normalizedGrindBudget)) {
     throw new Error(`Invalid grind budget: ${grindBudget}`);
   }
-  if (!['min', 'midpoint', 'max'].includes(entryLevelPolicy)) {
+  if (!['min', 'midpoint', 'max', 'expected'].includes(entryLevelPolicy)) {
     throw new Error(`Unknown entry-level policy: ${entryLevelPolicy}`);
   }
   if (!['map-order', 'before-map-exp', 'after-map-exp'].includes(sameStageJoinPolicy)) {
@@ -1593,9 +1685,11 @@ export function buildTeamExpSchedule({
     grindPlanBattles: grindPolicy === 'planned' ? normalizedGrindPlanBattles : {},
     naturalExpBeforeFinalBossPotential,
     entryLevelPolicy,
-    entryLevelAssumption: entryLevelPolicy === 'midpoint'
-      ? 'midpoint of source-backed encounter/gift level range'
-      : `${entryLevelPolicy} source-backed encounter/gift level`,
+    entryLevelAssumption: entryLevelPolicy === 'expected'
+      ? 'expected capture EXP from source-backed encounter level distributions; highest-expectation legal earliest-stage source when capture friction is excluded'
+      : entryLevelPolicy === 'midpoint'
+        ? 'midpoint of source-backed encounter/gift level range'
+        : `${entryLevelPolicy} source-backed encounter/gift level`,
     sameStageJoinPolicy,
     allocator,
     allocatorDescription: allocator === 'breakpoint-aware'
