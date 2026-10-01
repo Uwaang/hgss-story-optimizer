@@ -146,8 +146,27 @@ function routeRiskActiveRows(evaluation) {
   return (evaluation?.rows || []).filter(row => !row?.skipped);
 }
 
+function routeRiskRowProbability(row) {
+  const wins = Number(row?.wins);
+  const losses = Number(row?.losses);
+  if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
+    // Use the same finite-sample Beta(1,1) posterior mean as the geometric
+    // score. This is continuous and avoids arbitrary success thresholds while
+    // keeping 0/N smoke samples finite.
+    return (wins + 1) / (wins + losses + 2);
+  }
+  return Math.max(1e-6, Math.min(1 - 1e-6, Number(row?.winRate || 0)));
+}
+
 function routeRiskGeometricScore(evaluation) {
   return storyClearGeometricScore(routeRiskActiveRows(evaluation));
+}
+
+function routeRiskExpectedRetryFailures(evaluation) {
+  return routeRiskActiveRows(evaluation).reduce((sum, row) => {
+    const p = routeRiskRowProbability(row);
+    return sum + (1 - p) / p;
+  }, 0);
 }
 
 function routeRiskMeanWinRate(evaluation) {
@@ -178,9 +197,13 @@ function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
 
 function evaluationObjectiveCompare(a, b, objective = 'mean') {
   if (objective === 'route-risk') {
-    // Threshold-free route objective. Skipped checkpoints are not failures:
-    // a candidate that is not yet legally available must not be punished before
-    // its acquisition point during single-member screening.
+    // Threshold-free route objective. Expected retry failures makes a genuine
+    // hard wall expensive continuously instead of introducing a 50% cutoff.
+    // Skipped checkpoints are excluded because pre-acquisition battles are not
+    // failures for a candidate that cannot legally exist yet.
+    const aRetries = routeRiskExpectedRetryFailures(a);
+    const bRetries = routeRiskExpectedRetryFailures(b);
+    if (aRetries !== bRetries) return aRetries - bRetries;
     const aGeometric = routeRiskGeometricScore(a);
     const bGeometric = routeRiskGeometricScore(b);
     if (aGeometric !== bGeometric) return bGeometric - aGeometric;
@@ -1266,6 +1289,9 @@ function searchResultRow(team, evaluation) {
     bottom5BossWinRate: evaluation.bottom5BossWinRate,
     storyClearGeometricScore: evaluation.storyClearGeometricScore,
     storyClearCoverageScore: evaluation.storyClearCoverageScore,
+    routeExpectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+    routeRiskGeometricScore: routeRiskGeometricScore(evaluation),
+    routeRiskMeanWinRate: routeRiskMeanWinRate(evaluation),
     storyClearTargetWinRate: evaluation.storyClearTargetWinRate,
     storyClearBottomK: evaluation.storyClearBottomK,
     catchUpLevels: evaluation.catchUpLevels,
@@ -1797,16 +1823,14 @@ function nonDominatedLayers(items, dominates) {
   return layers;
 }
 
-function crowdingSelect(items, width, dimensions, keyFn) {
-  if (items.length <= width) {
-    return [...items].sort((a, b) => keyFn(a).localeCompare(keyFn(b)));
-  }
+function crowdingOrder(items, dimensions, keyFn) {
   const distance = new Map(items.map(item => [item, 0]));
   for (const dimension of dimensions) {
     const ordered = [...items].sort((a, b) =>
       Number(dimension(a) || 0) - Number(dimension(b) || 0) ||
       keyFn(a).localeCompare(keyFn(b))
     );
+    if (ordered.length < 2) continue;
     const lo = Number(dimension(ordered[0]) || 0);
     const hi = Number(dimension(ordered[ordered.length - 1]) || 0);
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) continue;
@@ -1822,32 +1846,34 @@ function crowdingSelect(items, width, dimensions, keyFn) {
       );
     }
   }
-  return [...items]
-    .sort((a, b) =>
-      Number(distance.get(b) || 0) - Number(distance.get(a) || 0) ||
-      keyFn(a).localeCompare(keyFn(b))
-    )
-    .slice(0, width);
+  return [...items].sort((a, b) =>
+    Number(distance.get(b) || 0) - Number(distance.get(a) || 0) ||
+    keyFn(a).localeCompare(keyFn(b))
+  );
+}
+
+function crowdingSelect(items, width, dimensions, keyFn) {
+  return crowdingOrder(items, dimensions, keyFn).slice(0, width);
 }
 
 function routeRiskEvaluationDominates(a, b) {
-  const aExp = evaluationExpBurden(a);
-  const bExp = evaluationExpBurden(b);
   const aUnknown = evaluationExpUnknown(a);
   const bUnknown = evaluationExpUnknown(b);
+  const aRetries = routeRiskExpectedRetryFailures(a);
+  const bRetries = routeRiskExpectedRetryFailures(b);
   const aGeometric = routeRiskGeometricScore(a);
   const bGeometric = routeRiskGeometricScore(b);
   const aMean = routeRiskMeanWinRate(a);
   const bMean = routeRiskMeanWinRate(b);
   const atLeastAsGood =
+    aRetries <= bRetries &&
     aGeometric >= bGeometric &&
     aMean >= bMean &&
-    aExp <= bExp &&
     aUnknown <= bUnknown;
   const strictlyBetter =
+    aRetries < bRetries ||
     aGeometric > bGeometric ||
     aMean > bMean ||
-    aExp < bExp ||
     aUnknown < bUnknown;
   return atLeastAsGood && strictlyBetter;
 }
@@ -1858,9 +1884,9 @@ function selectRouteRiskBeam(states, width) {
     states.flatMap(state => (state.evaluation?.rows || []).map(row => String(row.boss)))
   )].sort();
   const dimensions = [
+    state => routeRiskExpectedRetryFailures(state.evaluation),
     state => routeRiskGeometricScore(state.evaluation),
     state => routeRiskMeanWinRate(state.evaluation),
-    state => evaluationExpBurden(state.evaluation),
     ...bossLabels.map(label => state => {
       const row = (state.evaluation?.rows || []).find(item => String(item.boss) === label);
       return Number(row?.battleProgressScore ?? row?.winRate ?? 0);
@@ -1887,64 +1913,90 @@ function selectRouteRiskBeam(states, width) {
 }
 
 function selectRouteRiskCandidateScreenRows(rows, width) {
-  if (rows.length <= width) return rows;
+  if (!rows.length || width <= 0) return [];
+
   const dominates = (a, b) => {
     const am = routePostAvailabilityMetrics(a);
     const bm = routePostAvailabilityMetrics(b);
-    const aExp = evaluationExpBurden(a.evaluation);
-    const bExp = evaluationExpBurden(b.evaluation);
+    const aRetries = routeRiskExpectedRetryFailures(a.evaluation);
+    const bRetries = routeRiskExpectedRetryFailures(b.evaluation);
     const aGeometric = routeRiskGeometricScore(a.evaluation);
     const bGeometric = routeRiskGeometricScore(b.evaluation);
     const atLeastAsGood =
+      aRetries <= bRetries &&
       aGeometric >= bGeometric &&
       am.progress >= bm.progress &&
-      am.score >= bm.score &&
-      aExp <= bExp;
+      am.score >= bm.score;
     const strictlyBetter =
+      aRetries < bRetries ||
       aGeometric > bGeometric ||
       am.progress > bm.progress ||
-      am.score > bm.score ||
-      aExp < bExp;
+      am.score > bm.score;
     return atLeastAsGood && strictlyBetter;
   };
+
   const dimensions = [
+    row => routeRiskExpectedRetryFailures(row.evaluation),
     row => routeRiskGeometricScore(row.evaluation),
     row => routeRiskMeanWinRate(row.evaluation),
     row => routePostAvailabilityMetrics(row).progress,
     row => routePostAvailabilityMetrics(row).score,
-    // Availability is used only as a crowding/diversity coordinate, never as
-    // a bonus or penalty. This preserves timing-diverse candidates without
-    // fixed early/mid/late quotas.
+    // Timing is diversity only, never a scalar bonus or fixed early/mid/late quota.
     row => Number(row.candidate?.availableFrom || 0),
   ];
-  const selected = [];
-  for (const layer of nonDominatedLayers(rows, dominates)) {
-    const remaining = width - selected.length;
-    if (remaining <= 0) break;
-    if (layer.length <= remaining) {
-      selected.push(...layer.sort((a, b) =>
-        evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
-      ));
-    } else {
-      selected.push(...crowdingSelect(layer, remaining, dimensions, candidateScreenTieKey));
-      break;
+
+  // First remove variants that are dominated by another acquisition/evolution
+  // path from the same evolution family. Remaining variants are genuinely
+  // different choices and stay eligible together.
+  const rowsByFamily = new Map();
+  for (const row of rows) {
+    const family = candidateFamilyIdentity(row.candidate);
+    if (!rowsByFamily.has(family)) rowsByFamily.set(family, []);
+    rowsByFamily.get(family).push(row);
+  }
+  const familyFrontRows = [];
+  for (const familyRows of rowsByFamily.values()) {
+    for (const layer of nonDominatedLayers(familyRows, dominates).slice(0, 1)) {
+      familyFrontRows.push(...layer);
     }
   }
-  return selected.slice(0, width);
+
+  // candidate-cap is a FAMILY cap in route-risk mode. Walk global Pareto layers
+  // and select families without arbitrary early/mid/late or 80/20 quotas.
+  // Once a family is selected, every within-family nondominated variant remains
+  // available to the beam, so Dratini/Dragonair-like source alternatives are
+  // not silently collapsed.
+  const selectedFamilies = new Set();
+  for (const layer of nonDominatedLayers(familyFrontRows, dominates)) {
+    for (const row of crowdingOrder(layer, dimensions, candidateScreenTieKey)) {
+      selectedFamilies.add(candidateFamilyIdentity(row.candidate));
+      if (selectedFamilies.size >= width) break;
+    }
+    if (selectedFamilies.size >= width) break;
+  }
+
+  return familyFrontRows
+    .filter(row => selectedFamilies.has(candidateFamilyIdentity(row.candidate)))
+    .sort((a, b) =>
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+      candidateFamilyIdentity(a.candidate).localeCompare(candidateFamilyIdentity(b.candidate)) ||
+      candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+    );
 }
 
 function routeRiskParetoFront(rows) {
   return rows.filter((row, index) => !rows.some((other, otherIndex) => {
     if (index === otherIndex) return false;
     const atLeastAsGood =
-      Number(other.storyClearGeometricScore || 0) >= Number(row.storyClearGeometricScore || 0) &&
-      Number(other.score || 0) >= Number(row.score || 0) &&
-      Number(other.expBurden || 0) <= Number(row.expBurden || 0);
+      Number(other.routeExpectedRetryFailures ?? Number.POSITIVE_INFINITY) <=
+        Number(row.routeExpectedRetryFailures ?? Number.POSITIVE_INFINITY) &&
+      Number(other.routeRiskGeometricScore || 0) >= Number(row.routeRiskGeometricScore || 0) &&
+      Number(other.routeRiskMeanWinRate || 0) >= Number(row.routeRiskMeanWinRate || 0);
     const strictlyBetter =
-      Number(other.storyClearGeometricScore || 0) > Number(row.storyClearGeometricScore || 0) ||
-      Number(other.score || 0) > Number(row.score || 0) ||
-      Number(other.expBurden || 0) < Number(row.expBurden || 0);
+      Number(other.routeExpectedRetryFailures ?? Number.POSITIVE_INFINITY) <
+        Number(row.routeExpectedRetryFailures ?? Number.POSITIVE_INFINITY) ||
+      Number(other.routeRiskGeometricScore || 0) > Number(row.routeRiskGeometricScore || 0) ||
+      Number(other.routeRiskMeanWinRate || 0) > Number(row.routeRiskMeanWinRate || 0);
     return atLeastAsGood && strictlyBetter;
   }));
 }
@@ -2603,6 +2655,7 @@ async function runBeamSearch({
   return {
     scannedCandidates: screenRows.length,
     screenedCandidates: screened.length,
+    screenedCandidateFamilies: new Set(screened.map(candidateFamilyIdentity)).size,
     selectedCandidateDetails: screened.map(candidate => {
       const row = screenRows.find(entry =>
         candidateIdentity(entry.candidate) === candidateIdentity(candidate)
