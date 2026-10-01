@@ -1,0 +1,105 @@
+name: deheuristic-entry-distribution-v1
+
+on:
+  push:
+    branches:
+      - exp/deheuristic-entry-distribution-v1
+
+concurrency:
+  group: deheuristic-entry-distribution-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  entry_distribution_smoke:
+    if: contains(github.event.head_commit.message, '[entry-distribution]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: D
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1"
+          - id: N03
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1,Horsea::Horsea->Kingdra#1"
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/acquisition.mjs
+          node --check src/exp-budget.mjs
+          node --check src/cli.mjs
+      - name: Evaluate max entry policy
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=1 \
+            > "results/entry-max-${{ matrix.id }}.json"
+      - name: Evaluate expected entry policy
+        run: |
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=1 \
+            > "results/entry-expected-${{ matrix.id }}.json"
+      - name: Assert expected policy and summarize
+        run: |
+          jq -e '.assumptions.entryLevelPolicy == "expected"' "results/entry-expected-${{ matrix.id }}.json" >/dev/null
+          jq -n \
+            --slurpfile max "results/entry-max-${{ matrix.id }}.json" \
+            --slurpfile expected "results/entry-expected-${{ matrix.id }}.json" \
+            '{
+              team: "${{ matrix.id }}",
+              max: {
+                finalLevels: $max[0].finalLevels,
+                geometric: $max[0].performance.storyClearGeometricScore,
+                sourcesWithDistribution: [
+                  $max[0].team[] |
+                  {
+                    key,
+                    sourceLevels: [
+                      .sources[] |
+                      {
+                        type,
+                        map,
+                        method,
+                        minLevel,
+                        maxLevel,
+                        levelDistribution
+                      }
+                    ]
+                  }
+                ]
+              },
+              expected: {
+                finalLevels: $expected[0].finalLevels,
+                geometric: $expected[0].performance.storyClearGeometricScore
+              }
+            }' | tee "results/entry-compare-${{ matrix.id }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: entry-distribution-${{ matrix.id }}
+          path: hgss_story_sim/results/entry-*-${{ matrix.id }}.json
+          if-no-files-found: warn
