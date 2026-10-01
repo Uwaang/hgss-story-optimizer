@@ -105,8 +105,8 @@ function normalizeExpAllocator(value) {
 
 function normalizeSearchObjective(value) {
   const objective = String(value || 'mean').toLowerCase();
-  if (!['mean', 'story-clear'].includes(objective)) {
-    throw new Error(`Unknown search objective: ${value}. Use mean or story-clear.`);
+  if (!['mean', 'story-clear', 'route-risk'].includes(objective)) {
+    throw new Error(`Unknown search objective: ${value}. Use mean, story-clear, or route-risk.`);
   }
   return objective;
 }
@@ -152,6 +152,16 @@ function lowerTailBossWinRate(rows, k = STORY_CLEAR_BOTTOM_K) {
 }
 
 function evaluationObjectiveCompare(a, b, objective = 'mean') {
+  if (objective === 'route-risk') {
+    // Threshold-free route objective. The geometric mean is equivalent to
+    // minimizing mean negative log success probability, so weak checkpoints
+    // are penalized continuously without an arbitrary win-rate cutoff or K-tail.
+    if (a.storyClearGeometricScore !== b.storyClearGeometricScore) {
+      return b.storyClearGeometricScore - a.storyClearGeometricScore;
+    }
+    if (a.score !== b.score) return b.score - a.score;
+    return 0;
+  }
   if (objective === 'story-clear') {
     if (a.storyClearGeometricScore !== b.storyClearGeometricScore) {
       return b.storyClearGeometricScore - a.storyClearGeometricScore;
@@ -1737,7 +1747,175 @@ function selectMultiObjectiveBeam(states, width, objective = 'mean') {
   return selected.slice(0, width);
 }
 
+
+function nonDominatedLayers(items, dominates) {
+  const remaining = [...items];
+  const layers = [];
+  while (remaining.length) {
+    const front = remaining.filter((item, index) =>
+      !remaining.some((other, otherIndex) =>
+        index !== otherIndex && dominates(other, item)
+      )
+    );
+    if (!front.length) {
+      layers.push([...remaining]);
+      break;
+    }
+    layers.push(front);
+    const frontSet = new Set(front);
+    for (let i = remaining.length - 1; i >= 0; i -= 1) {
+      if (frontSet.has(remaining[i])) remaining.splice(i, 1);
+    }
+  }
+  return layers;
+}
+
+function crowdingSelect(items, width, dimensions, keyFn) {
+  if (items.length <= width) {
+    return [...items].sort((a, b) => keyFn(a).localeCompare(keyFn(b)));
+  }
+  const distance = new Map(items.map(item => [item, 0]));
+  for (const dimension of dimensions) {
+    const ordered = [...items].sort((a, b) =>
+      Number(dimension(a) || 0) - Number(dimension(b) || 0) ||
+      keyFn(a).localeCompare(keyFn(b))
+    );
+    const lo = Number(dimension(ordered[0]) || 0);
+    const hi = Number(dimension(ordered[ordered.length - 1]) || 0);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) continue;
+    distance.set(ordered[0], Number.POSITIVE_INFINITY);
+    distance.set(ordered[ordered.length - 1], Number.POSITIVE_INFINITY);
+    for (let i = 1; i < ordered.length - 1; i += 1) {
+      if (!Number.isFinite(distance.get(ordered[i]))) continue;
+      const prev = Number(dimension(ordered[i - 1]) || 0);
+      const next = Number(dimension(ordered[i + 1]) || 0);
+      distance.set(
+        ordered[i],
+        Number(distance.get(ordered[i]) || 0) + (next - prev) / (hi - lo),
+      );
+    }
+  }
+  return [...items]
+    .sort((a, b) =>
+      Number(distance.get(b) || 0) - Number(distance.get(a) || 0) ||
+      keyFn(a).localeCompare(keyFn(b))
+    )
+    .slice(0, width);
+}
+
+function routeRiskEvaluationDominates(a, b) {
+  const aExp = evaluationExpBurden(a);
+  const bExp = evaluationExpBurden(b);
+  const aUnknown = evaluationExpUnknown(a);
+  const bUnknown = evaluationExpUnknown(b);
+  const atLeastAsGood =
+    Number(a.storyClearGeometricScore || 0) >= Number(b.storyClearGeometricScore || 0) &&
+    Number(a.score || 0) >= Number(b.score || 0) &&
+    aExp <= bExp &&
+    aUnknown <= bUnknown;
+  const strictlyBetter =
+    Number(a.storyClearGeometricScore || 0) > Number(b.storyClearGeometricScore || 0) ||
+    Number(a.score || 0) > Number(b.score || 0) ||
+    aExp < bExp ||
+    aUnknown < bUnknown;
+  return atLeastAsGood && strictlyBetter;
+}
+
+function selectRouteRiskBeam(states, width) {
+  if (states.length <= width) return states;
+  const bossLabels = [...new Set(
+    states.flatMap(state => (state.evaluation?.rows || []).map(row => String(row.boss)))
+  )].sort();
+  const dimensions = [
+    state => Number(state.evaluation?.storyClearGeometricScore || 0),
+    state => Number(state.evaluation?.score || 0),
+    state => evaluationExpBurden(state.evaluation),
+    ...bossLabels.map(label => state => {
+      const row = (state.evaluation?.rows || []).find(item => String(item.boss) === label);
+      return Number(row?.battleProgressScore ?? row?.winRate ?? 0);
+    }),
+  ];
+  const selected = [];
+  for (const layer of nonDominatedLayers(
+    states,
+    (a, b) => routeRiskEvaluationDominates(a.evaluation, b.evaluation),
+  )) {
+    const remaining = width - selected.length;
+    if (remaining <= 0) break;
+    if (layer.length <= remaining) {
+      selected.push(...layer.sort((a, b) =>
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      ));
+    } else {
+      selected.push(...crowdingSelect(layer, remaining, dimensions, stateTieKey));
+      break;
+    }
+  }
+  return selected.slice(0, width);
+}
+
+function selectRouteRiskCandidateScreenRows(rows, width) {
+  if (rows.length <= width) return rows;
+  const dominates = (a, b) => {
+    const am = routePostAvailabilityMetrics(a);
+    const bm = routePostAvailabilityMetrics(b);
+    const aExp = evaluationExpBurden(a.evaluation);
+    const bExp = evaluationExpBurden(b.evaluation);
+    const atLeastAsGood =
+      Number(a.evaluation?.storyClearGeometricScore || 0) >= Number(b.evaluation?.storyClearGeometricScore || 0) &&
+      am.progress >= bm.progress &&
+      am.score >= bm.score &&
+      aExp <= bExp;
+    const strictlyBetter =
+      Number(a.evaluation?.storyClearGeometricScore || 0) > Number(b.evaluation?.storyClearGeometricScore || 0) ||
+      am.progress > bm.progress ||
+      am.score > bm.score ||
+      aExp < bExp;
+    return atLeastAsGood && strictlyBetter;
+  };
+  const dimensions = [
+    row => Number(row.evaluation?.storyClearGeometricScore || 0),
+    row => Number(row.evaluation?.score || 0),
+    row => routePostAvailabilityMetrics(row).progress,
+    row => routePostAvailabilityMetrics(row).score,
+    row => Number(row.candidate?.availableFrom || 0),
+    row => Number(row.candidate?.entryLevelMax || 0),
+  ];
+  const selected = [];
+  for (const layer of nonDominatedLayers(rows, dominates)) {
+    const remaining = width - selected.length;
+    if (remaining <= 0) break;
+    if (layer.length <= remaining) {
+      selected.push(...layer.sort((a, b) =>
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+        candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
+      ));
+    } else {
+      selected.push(...crowdingSelect(layer, remaining, dimensions, candidateScreenTieKey));
+      break;
+    }
+  }
+  return selected.slice(0, width);
+}
+
+function routeRiskParetoFront(rows) {
+  return rows.filter((row, index) => !rows.some((other, otherIndex) => {
+    if (index === otherIndex) return false;
+    const atLeastAsGood =
+      Number(other.storyClearGeometricScore || 0) >= Number(row.storyClearGeometricScore || 0) &&
+      Number(other.score || 0) >= Number(row.score || 0) &&
+      Number(other.expBurden || 0) <= Number(row.expBurden || 0);
+    const strictlyBetter =
+      Number(other.storyClearGeometricScore || 0) > Number(row.storyClearGeometricScore || 0) ||
+      Number(other.score || 0) > Number(row.score || 0) ||
+      Number(other.expBurden || 0) < Number(row.expBurden || 0);
+    return atLeastAsGood && strictlyBetter;
+  }));
+}
+
 function selectRouteStoryBeam(states, width, objective = 'story-clear') {
+  if (objective === 'route-risk') return selectRouteRiskBeam(states, width);
   if (states.length <= width) return states;
 
   const front = states.filter((state, index) =>
@@ -1868,6 +2046,7 @@ function selectCandidateScreenRows(rows, width, objective = 'mean') {
 }
 
 function selectRouteCandidateScreenRows(rows, width, objective = 'story-clear') {
+  if (objective === 'route-risk') return selectRouteRiskCandidateScreenRows(rows, width);
   if (rows.length <= width) return rows;
 
   const selected = [];
@@ -2439,7 +2618,7 @@ async function runBeamSearch({
     memberContributionRerank: Boolean(memberContributionRerank),
     contributionRunsPerBoss: memberContributionRerank ? normalizedContributionRuns : null,
     baselineTop,
-    paretoFront: paretoFront(top),
+    paretoFront: objective === 'route-risk' ? routeRiskParetoFront(top) : paretoFront(top),
     top,
   };
 }
