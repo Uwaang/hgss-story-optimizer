@@ -81,6 +81,31 @@ function speciesForLandTime(value, version, time) {
   return [...new Set(speciesValues(resolved, version))];
 }
 
+function addRangeProbability(levelWeights, range, probability) {
+  const lo = Number(range?.min);
+  const hi = Number(range?.max);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || probability <= 0) return;
+  const start = Math.min(lo, hi);
+  const end = Math.max(lo, hi);
+  const count = Math.max(1, end - start + 1);
+  for (let level = start; level <= end; level += 1) {
+    levelWeights[level] = Number(levelWeights[level] || 0) + probability / count;
+  }
+}
+
+function normalizedLevelDistribution(levelWeights) {
+  const entries = Object.entries(levelWeights || {})
+    .map(([level, weight]) => ({ level: Number(level), weight: Number(weight) }))
+    .filter(row => Number.isFinite(row.level) && Number.isFinite(row.weight) && row.weight > 0)
+    .sort((a, b) => a.level - b.level);
+  const total = entries.reduce((sum, row) => sum + row.weight, 0);
+  if (!(total > 0)) return [];
+  return entries.map(row => ({
+    level: row.level,
+    probability: row.weight / total,
+  }));
+}
+
 function methodEntries(encounter, method, version) {
   const mons = methodMons(encounter, method);
   const weights = ENCOUNTER_SLOT_WEIGHTS[method] || [];
@@ -93,6 +118,8 @@ function methodEntries(encounter, method, version) {
       minLevel: null,
       maxLevel: null,
       probabilityByTime: {},
+      levelWeightsByTime: {},
+      levelWeights: {},
       encounterProbability: 0,
       bestTime: null,
     };
@@ -104,8 +131,11 @@ function methodEntries(encounter, method, version) {
     }
     if (time) {
       row.probabilityByTime[time] = (row.probabilityByTime[time] || 0) + probability;
+      if (!row.levelWeightsByTime[time]) row.levelWeightsByTime[time] = {};
+      addRangeProbability(row.levelWeightsByTime[time], range, probability);
     } else {
       row.encounterProbability += probability;
+      addRangeProbability(row.levelWeights, range, probability);
     }
     bySpecies.set(speciesConst, row);
   }
@@ -135,6 +165,9 @@ function methodEntries(encounter, method, version) {
       row.bestTime = times[0]?.[0] || null;
       row.encounterProbability = Number(times[0]?.[1] || 0);
     }
+    const levelWeights = method === 'land'
+      ? (row.levelWeightsByTime[row.bestTime] || {})
+      : row.levelWeights;
     return {
       speciesConst: row.speciesConst,
       minLevel: row.minLevel,
@@ -143,6 +176,7 @@ function methodEntries(encounter, method, version) {
       expectedEncounters: row.encounterProbability > 0 ? 100 / row.encounterProbability : null,
       encounterRate,
       bestTime: row.bestTime,
+      levelDistribution: normalizedLevelDistribution(levelWeights),
     };
   });
 }
@@ -158,6 +192,7 @@ function headbuttEntries(table, version) {
   for (const [group, slots] of groups) {
     const groupProbability = new Map();
     const levels = new Map();
+    const levelWeightsBySpecies = new Map();
     for (let index = 0; index < slots.length; index += 1) {
       const slot = slots[index];
       const probability = Number(HEADBUTT_SLOT_WEIGHTS[index] || 0);
@@ -170,6 +205,9 @@ function headbuttEntries(table, version) {
         if (Number.isFinite(min)) range.min = Number.isFinite(range.min) ? Math.min(range.min, min) : min;
         if (Number.isFinite(max)) range.max = Number.isFinite(range.max) ? Math.max(range.max, max) : max;
         levels.set(speciesConst, range);
+        const levelWeights = levelWeightsBySpecies.get(speciesConst) || {};
+        addRangeProbability(levelWeights, { min, max }, probability);
+        levelWeightsBySpecies.set(speciesConst, levelWeights);
       }
     }
 
@@ -185,6 +223,9 @@ function headbuttEntries(table, version) {
           expectedEncounters: probability > 0 ? 100 / probability : null,
           headbuttTreeGroup: group,
           conditionalTreeGroup: true,
+          levelDistribution: normalizedLevelDistribution(
+            levelWeightsBySpecies.get(speciesConst) || {}
+          ),
         });
       }
     }
@@ -589,6 +630,7 @@ export async function buildCanonicalCandidatePool({
               expectedEncounters: entry.expectedEncounters,
               encounterRate: entry.encounterRate,
               bestTime: entry.bestTime,
+              levelDistribution: entry.levelDistribution || [],
             });
           }
         }
@@ -608,6 +650,7 @@ export async function buildCanonicalCandidatePool({
             expectedEncounters: entry.expectedEncounters,
             headbuttTreeGroup: entry.headbuttTreeGroup,
             conditionalTreeGroup: true,
+            levelDistribution: entry.levelDistribution || [],
           });
         }
       }
