@@ -2579,6 +2579,8 @@ async function runBeamSearch({
   contributionRuns = null,
   battleOptions = {},
   searchPolicy = 'generic',
+  adaptiveRuns = null,
+  adaptiveConfidenceZ = 1.96,
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -2659,13 +2661,62 @@ async function runBeamSearch({
       }
     }
 
-    beam = routeStoryPolicy
+    const preliminaryBeam = routeStoryPolicy
       ? selectRouteStoryBeam(expanded, beamWidth, objective)
       : selectMultiObjectiveBeam(expanded, beamWidth, objective);
+
+    const normalizedAdaptiveRuns = Math.max(
+      runs,
+      Math.floor(Number(adaptiveRuns || runs)),
+    );
+    let adaptivePool = preliminaryBeam;
+    let adaptiveResampledCount = 0;
+    let adaptiveChallengerCount = 0;
+
+    if (
+      routeStoryPolicy &&
+      objective === 'route-risk' &&
+      normalizedAdaptiveRuns > runs &&
+      preliminaryBeam.length
+    ) {
+      const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
+      const boundaryRetry = Math.max(
+        ...preliminaryBeam.map(state => routeRiskExpectedRetryFailures(state.evaluation)),
+      );
+      const uncertainChallengers = expanded.filter(state => {
+        if (selectedKeys.has(stateTieKey(state))) return false;
+        const interval = routeRiskRetryInterval(state.evaluation, adaptiveConfidenceZ);
+        return interval.lower <= boundaryRetry + 1e-12;
+      });
+      const challengerBeam = selectRouteRiskBeam(
+        uncertainChallengers,
+        Math.min(beamWidth, uncertainChallengers.length),
+      );
+      adaptiveChallengerCount = challengerBeam.length;
+      adaptivePool = [
+        ...preliminaryBeam,
+        ...challengerBeam,
+      ];
+
+      const refined = [];
+      for (const state of adaptivePool) {
+        const evaluation = await evaluateTeamAtRuns(state.team, normalizedAdaptiveRuns);
+        refined.push({ team: state.team, evaluation });
+      }
+      adaptiveResampledCount = refined.length;
+      beam = selectRouteRiskBeam(refined, beamWidth);
+    } else {
+      beam = preliminaryBeam;
+    }
+
     beamTrace.push({
       targetSize,
       expandedCount: expanded.length,
       selectedCount: beam.length,
+      adaptiveRuns: normalizedAdaptiveRuns,
+      adaptivePoolCount: adaptivePool.length,
+      adaptiveChallengerCount,
+      adaptiveResampledCount,
       selected: beam.map(state => ({
         team: state.team.map(candidate => candidate.species),
         teamKeys: state.team.map(candidateIdentity),
@@ -2674,6 +2725,9 @@ async function runBeamSearch({
         bottom5BossWinRate: Number(state.evaluation?.bottom5BossWinRate || 0),
         storyClearGeometricScore: Number(state.evaluation?.storyClearGeometricScore || 0),
         storyClearCoverageScore: Number(state.evaluation?.storyClearCoverageScore || 0),
+        routeExpectedRetryFailures: routeRiskExpectedRetryFailures(state.evaluation),
+        routeRiskGeometricScore: routeRiskGeometricScore(state.evaluation),
+        routeRiskMeanWinRate: routeRiskMeanWinRate(state.evaluation),
         expBurden: evaluationExpBurden(state.evaluation),
         routeGrindProxyBattles: evaluationRouteGrindProxy(state.evaluation),
         routeGrindProxyUnknown: evaluationRouteGrindProxyUnknown(state.evaluation),
@@ -3100,6 +3154,14 @@ async function cmdRouteExpStorySearch() {
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
+  const adaptiveRuns = Math.max(
+    runs,
+    Math.floor(Number(arg('adaptive-runs', String(runs)))),
+  );
+  const adaptiveConfidenceZ = Math.max(
+    0.1,
+    Number(arg('adaptive-confidence-z', '1.96')),
+  );
   const routeGrindProxyTarget = Math.max(
     0.01,
     Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
@@ -3151,6 +3213,8 @@ async function cmdRouteExpStorySearch() {
     objective,
     battleOptions,
     searchPolicy: 'route-story',
+    adaptiveRuns,
+    adaptiveConfidenceZ,
   });
 
   await flushBattleCache();
@@ -3177,6 +3241,8 @@ async function cmdRouteExpStorySearch() {
       runs,
       screenRuns,
       finalRuns,
+      adaptiveRuns,
+      adaptiveConfidenceZ,
       beamWidth,
       candidateCap,
       routeBuildOptimization: true,
