@@ -16,11 +16,39 @@ export async function fetchText(url) {
     headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     headers.accept = 'application/vnd.github+json';
   }
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} while fetching ${url}`);
+
+  const attempts = Math.max(
+    1,
+    Math.floor(Number(process.env.HGSS_FETCH_ATTEMPTS || 4)),
+  );
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers });
+      if (response.ok) return response.text();
+
+      const retryable =
+        response.status === 408 ||
+        response.status === 425 ||
+        response.status === 429 ||
+        response.status >= 500;
+      if (!retryable || attempt >= attempts) {
+        throw new Error(`HTTP ${response.status} while fetching ${url}`);
+      }
+      lastError = new Error(`HTTP ${response.status} while fetching ${url}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) throw error;
+    }
+
+    // Raw GitHub occasionally resets concurrent CI connections. A small,
+    // deterministic exponential backoff makes this an infrastructure retry
+    // instead of aborting a long search stage.
+    const delayMs = 500 * (2 ** (attempt - 1));
+    await new Promise(resolve => setTimeout(resolve, delayMs));
   }
-  return response.text();
+
+  throw lastError || new Error(`Failed to fetch ${url}`);
 }
 
 export function parseTrainerConstants(headerText) {
