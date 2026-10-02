@@ -378,10 +378,27 @@ function arg(name, fallback) {
   return found ? found.slice(prefix.length) : fallback;
 }
 
-async function loadStory() {
-  const config = await readJson('config/story-bosses.json');
+function normalizeStoryRouteProfile(value) {
+  const profile = String(value || 'standard').toLowerCase();
+  if (!['standard', 'complete'].includes(profile)) {
+    throw new Error(`Unknown story route profile: ${value}. Use standard or complete.`);
+  }
+  return profile;
+}
+
+async function loadStory(routeProfile = 'standard') {
+  const profile = normalizeStoryRouteProfile(routeProfile);
+  const configPath = profile === 'complete'
+    ? 'config/practical-red-prep-bosses.json'
+    : 'config/story-bosses.json';
+  const config = await readJson(configPath);
   const source = await loadPretTrainerData(config.sourceCommit);
-  return { config, source, bosses: extractBosses(source, config) };
+  return {
+    config,
+    source,
+    bosses: extractBosses(source, config),
+    routeProfile: profile,
+  };
 }
 
 async function loadPracticalRedPrepStory() {
@@ -4668,6 +4685,7 @@ async function cmdRouteExpDataAudit() {
 }
 
 async function cmdRouteExpStoryEvaluate() {
+  const routeProfile = normalizeStoryRouteProfile(arg('route-profile', 'standard'));
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
   const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
@@ -4694,7 +4712,7 @@ async function cmdRouteExpStoryEvaluate() {
     throw new Error('route-exp-story-evaluate requires six --team species or six --team-keys');
   }
 
-  const story = await loadStory();
+  const story = await loadStory(routeProfile);
   const [pool, moveAccess, expContext] = await Promise.all([
     loadCanonicalPool(version, story, evolutionPolicy),
     loadMoveAccess(resourceProfile, spendPolicy),
@@ -4794,6 +4812,7 @@ async function cmdRouteExpStoryEvaluate() {
   console.log(JSON.stringify({
     schemaVersion: 1,
     model: 'route-exp-envelope-v1',
+    routeProfile,
     version,
     evolutionPolicy,
     starter: starterName,
