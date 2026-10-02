@@ -3736,6 +3736,8 @@ async function cmdRouteExpStoryBeamMerge() {
   const beam = selectRouteRiskBeam(refined, beamWidth);
   await flushBattleCache();
 
+  const mergeCache = battleCacheStats();
+  const shardCacheStats = shardDocs.map(doc => doc.battleCache || {});
   const timings = [
     ...(checkpoint.timings || []),
     {
@@ -3751,6 +3753,14 @@ async function cmdRouteExpStoryBeamMerge() {
       selectedCount: beam.length,
       runs,
       adaptiveRuns,
+      shardCacheHits: shardCacheStats.reduce((sum, row) => sum + Number(row.hits || 0), 0),
+      shardCacheMisses: shardCacheStats.reduce((sum, row) => sum + Number(row.misses || 0), 0),
+      shardCacheRestoredPerShard: shardCacheStats.map(row => Number(row.restored || 0)),
+      shardCacheEntriesPerShard: shardCacheStats.map(row => Number(row.entries || 0)),
+      mergeCacheHits: Number(mergeCache.hits || 0),
+      mergeCacheMisses: Number(mergeCache.misses || 0),
+      mergeCacheRestored: Number(mergeCache.restored || 0),
+      mergeCacheEntries: Number(mergeCache.entries || 0),
     },
   ];
 
