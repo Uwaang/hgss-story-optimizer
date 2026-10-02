@@ -169,6 +169,33 @@ function routeRiskExpectedRetryFailures(evaluation) {
   }, 0);
 }
 
+function routeRiskMeanRetryFailures(evaluation) {
+  const rows = routeRiskActiveRows(evaluation);
+  if (!rows.length) return Number.POSITIVE_INFINITY;
+  return routeRiskExpectedRetryFailures(evaluation) / rows.length;
+}
+
+function routeRiskRetryBounds(evaluation, z = 1.96) {
+  let optimistic = 0;
+  let pessimistic = 0;
+  for (const row of routeRiskActiveRows(evaluation)) {
+    const wins = Math.max(0, Number(row?.wins || 0));
+    const losses = Math.max(0, Number(row?.losses || 0));
+    const ties = Math.max(0, Number(row?.ties || 0));
+    const a = wins + 1;
+    const b = losses + ties + 1;
+    const total = a + b;
+    const mean = a / total;
+    const variance = (a * b) / (total * total * (total + 1));
+    const sd = Math.sqrt(Math.max(0, variance));
+    const pLow = Math.max(1e-6, mean - z * sd);
+    const pHigh = Math.min(1 - 1e-6, mean + z * sd);
+    optimistic += (1 - pHigh) / pHigh;
+    pessimistic += (1 - pLow) / pLow;
+  }
+  return { optimistic, pessimistic };
+}
+
 function routeRiskMeanWinRate(evaluation) {
   const rows = routeRiskActiveRows(evaluation);
   const totals = rows.reduce(
@@ -1879,7 +1906,12 @@ function routeRiskEvaluationDominates(a, b) {
 }
 
 function selectRouteRiskBeam(states, width) {
-  if (states.length <= width) return states;
+  if (states.length <= width) {
+    return [...states].sort((a, b) =>
+      evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+      stateTieKey(a).localeCompare(stateTieKey(b))
+    );
+  }
   const bossLabels = [...new Set(
     states.flatMap(state => (state.evaluation?.rows || []).map(row => String(row.boss)))
   )].sort();
@@ -1892,21 +1924,46 @@ function selectRouteRiskBeam(states, width) {
       return Number(row?.battleProgressScore ?? row?.winRate ?? 0);
     }),
   ];
-  const selected = [];
+
+  // One aggregate-risk elite is structural elitism, not a quota: the current
+  // best solution to the actual search objective can never be deleted merely
+  // because crowding prefers an extreme diversity point.
+  const objectiveOrder = [...states].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const selected = [objectiveOrder[0]];
+  const selectedKeys = new Set([stateTieKey(objectiveOrder[0])]);
+
   for (const layer of nonDominatedLayers(
     states,
     (a, b) => routeRiskEvaluationDominates(a.evaluation, b.evaluation),
   )) {
+    const eligible = layer.filter(state => !selectedKeys.has(stateTieKey(state)));
     const remaining = width - selected.length;
     if (remaining <= 0) break;
-    if (layer.length <= remaining) {
-      selected.push(...layer.sort((a, b) =>
-        evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-        stateTieKey(a).localeCompare(stateTieKey(b))
-      ));
-    } else {
-      selected.push(...crowdingSelect(layer, remaining, dimensions, stateTieKey));
-      break;
+    const ordered = eligible.length <= remaining
+      ? [...eligible].sort((a, b) =>
+          evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+          stateTieKey(a).localeCompare(stateTieKey(b))
+        )
+      : crowdingSelect(eligible, remaining, dimensions, stateTieKey);
+    for (const state of ordered) {
+      if (selected.length >= width) break;
+      const key = stateTieKey(state);
+      if (selectedKeys.has(key)) continue;
+      selectedKeys.add(key);
+      selected.push(state);
+    }
+  }
+
+  if (selected.length < width) {
+    for (const state of objectiveOrder) {
+      if (selected.length >= width) break;
+      const key = stateTieKey(state);
+      if (selectedKeys.has(key)) continue;
+      selectedKeys.add(key);
+      selected.push(state);
     }
   }
   return selected.slice(0, width);
@@ -1918,8 +1975,8 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
   const dominates = (a, b) => {
     const am = routePostAvailabilityMetrics(a);
     const bm = routePostAvailabilityMetrics(b);
-    const aRetries = routeRiskExpectedRetryFailures(a.evaluation);
-    const bRetries = routeRiskExpectedRetryFailures(b.evaluation);
+    const aRetries = routeRiskMeanRetryFailures(a.evaluation);
+    const bRetries = routeRiskMeanRetryFailures(b.evaluation);
     const aGeometric = routeRiskGeometricScore(a.evaluation);
     const bGeometric = routeRiskGeometricScore(b.evaluation);
     const atLeastAsGood =
@@ -1936,7 +1993,7 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
   };
 
   const dimensions = [
-    row => routeRiskExpectedRetryFailures(row.evaluation),
+    row => routeRiskMeanRetryFailures(row.evaluation),
     row => routeRiskGeometricScore(row.evaluation),
     row => routeRiskMeanWinRate(row.evaluation),
     row => routePostAvailabilityMetrics(row).progress,
@@ -2504,6 +2561,8 @@ async function runBeamSearch({
   contributionRuns = null,
   battleOptions = {},
   searchPolicy = 'generic',
+  adaptiveRuns = null,
+  adaptiveConfidenceZ = 1.96,
 }) {
   const screenRows = screenRowsOverride || await screenCandidates(
     candidates,
@@ -2584,13 +2643,68 @@ async function runBeamSearch({
       }
     }
 
-    beam = routeStoryPolicy
+    const preliminaryBeam = routeStoryPolicy
       ? selectRouteStoryBeam(expanded, beamWidth, objective)
       : selectMultiObjectiveBeam(expanded, beamWidth, objective);
+
+    const normalizedAdaptiveRuns = Math.max(
+      runs,
+      Math.floor(Number(adaptiveRuns || runs)),
+    );
+    let adaptivePool = preliminaryBeam;
+    let adaptiveChallengerCount = 0;
+    let adaptiveResampledCount = 0;
+
+    if (
+      routeStoryPolicy &&
+      objective === 'route-risk' &&
+      normalizedAdaptiveRuns > runs &&
+      preliminaryBeam.length
+    ) {
+      const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
+      const boundary = preliminaryBeam
+        .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ).pessimistic)
+        .sort((a, b) => a - b)
+        .at(-1);
+
+      const challengers = expanded
+        .filter(state => !selectedKeys.has(stateTieKey(state)))
+        .map(state => ({
+          state,
+          bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ),
+        }))
+        .filter(row => row.bounds.optimistic <= boundary + 1e-12)
+        .sort((a, b) =>
+          a.bounds.optimistic - b.bounds.optimistic ||
+          routeRiskExpectedRetryFailures(a.state.evaluation) -
+            routeRiskExpectedRetryFailures(b.state.evaluation) ||
+          stateTieKey(a.state).localeCompare(stateTieKey(b.state))
+        )
+        .slice(0, beamWidth)
+        .map(row => row.state);
+
+      adaptiveChallengerCount = challengers.length;
+      adaptivePool = [...preliminaryBeam, ...challengers];
+
+      const refined = [];
+      for (const state of adaptivePool) {
+        const evaluation = await evaluateTeamAtRuns(state.team, normalizedAdaptiveRuns);
+        refined.push({ team: state.team, evaluation });
+      }
+      adaptiveResampledCount = refined.length;
+      beam = selectRouteRiskBeam(refined, beamWidth);
+    } else {
+      beam = preliminaryBeam;
+    }
+
     beamTrace.push({
       targetSize,
       expandedCount: expanded.length,
       selectedCount: beam.length,
+      adaptiveRuns: normalizedAdaptiveRuns,
+      adaptivePoolCount: adaptivePool.length,
+      adaptiveChallengerCount,
+      adaptiveResampledCount,
       selected: beam.map(state => ({
         team: state.team.map(candidate => candidate.species),
         teamKeys: state.team.map(candidateIdentity),
@@ -2599,6 +2713,9 @@ async function runBeamSearch({
         bottom5BossWinRate: Number(state.evaluation?.bottom5BossWinRate || 0),
         storyClearGeometricScore: Number(state.evaluation?.storyClearGeometricScore || 0),
         storyClearCoverageScore: Number(state.evaluation?.storyClearCoverageScore || 0),
+        routeExpectedRetryFailures: routeRiskExpectedRetryFailures(state.evaluation),
+        routeRiskGeometricScore: routeRiskGeometricScore(state.evaluation),
+        routeRiskMeanWinRate: routeRiskMeanWinRate(state.evaluation),
         expBurden: evaluationExpBurden(state.evaluation),
         routeGrindProxyBattles: evaluationRouteGrindProxy(state.evaluation),
         routeGrindProxyUnknown: evaluationRouteGrindProxyUnknown(state.evaluation),
@@ -3025,6 +3142,14 @@ async function cmdRouteExpStorySearch() {
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const objective = normalizeSearchObjective(arg('objective', 'story-clear'));
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
+  const adaptiveRuns = Math.max(
+    runs,
+    Math.floor(Number(arg('adaptive-runs', String(runs)))),
+  );
+  const adaptiveConfidenceZ = Math.max(
+    0.1,
+    Number(arg('adaptive-confidence-z', '1.96')),
+  );
   const routeGrindProxyTarget = Math.max(
     0.01,
     Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
@@ -3076,6 +3201,8 @@ async function cmdRouteExpStorySearch() {
     objective,
     battleOptions,
     searchPolicy: 'route-story',
+    adaptiveRuns,
+    adaptiveConfidenceZ,
   });
 
   await flushBattleCache();
@@ -3102,6 +3229,8 @@ async function cmdRouteExpStorySearch() {
       runs,
       screenRuns,
       finalRuns,
+      adaptiveRuns,
+      adaptiveConfidenceZ,
       beamWidth,
       candidateCap,
       routeBuildOptimization: true,
