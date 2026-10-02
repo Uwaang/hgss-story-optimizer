@@ -1,6 +1,6 @@
 name: staged-route-search-v2
 
-# v2 benchmark: fingerprinted checkpoints + cumulative battle-cache reuse
+# v2 benchmark: fingerprinted checkpoints + cumulative battle-cache reuse (concurrency-isolated)
 
 on:
   push:
