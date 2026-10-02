@@ -159,7 +159,7 @@ jobs:
 
   expand:
     needs: hydrate
-    if: needs.hydrate.result == 'success' && env.RESUME_STAGE != 'final'
+    if: needs.hydrate.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.resume_stage != 'final')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -202,7 +202,7 @@ jobs:
 
   merge:
     needs: [hydrate, expand]
-    if: needs.hydrate.result == 'success' && needs.expand.result == 'success' && env.RESUME_STAGE != 'final'
+    if: needs.hydrate.result == 'success' && needs.expand.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.resume_stage != 'final')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -266,8 +266,8 @@ jobs:
       always() &&
       needs.hydrate.result == 'success' &&
       needs.merge.result == 'success' &&
-      env.RESUME_STAGE == 'beam6' &&
-      env.FINAL_AFTER_BEAM6 == 'true'
+      (github.event_name != 'workflow_dispatch' || inputs.resume_stage == 'beam6') &&
+      (github.event_name != 'workflow_dispatch' || inputs.final_after_beam6)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -304,7 +304,7 @@ jobs:
 
   final_only:
     needs: hydrate
-    if: needs.hydrate.result == 'success' && env.RESUME_STAGE == 'final'
+    if: needs.hydrate.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.resume_stage == 'final'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
