@@ -3242,6 +3242,503 @@ async function cmdRouteExpStorySearch() {
   }, null, 2));
 }
 
+
+function stagedShardIndex(key, shardCount) {
+  const count = Math.max(1, Math.floor(Number(shardCount || 1)));
+  const digest = createHash('sha256').update(String(key)).digest('hex').slice(0, 12);
+  return Number.parseInt(digest, 16) % count;
+}
+
+async function readJsonPath(filePath) {
+  return JSON.parse(await fs.readFile(path.resolve(process.cwd(), filePath), 'utf8'));
+}
+
+function stagedInputPaths(value) {
+  return String(value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+async function loadStagedRouteContext() {
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const starterName = String(arg('starter', 'Cyndaquil'));
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
+  const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
+  const expProfile = normalizeExpProfile(arg('exp-profile', 'normal-route'));
+  const grindPolicy = normalizeGrindPolicy(arg('grind-policy', 'none'));
+  const entryLevelPolicy = normalizeEntryLevelPolicy(arg('entry-level', 'expected'));
+  const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
+  const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
+  const objective = normalizeSearchObjective(arg('objective', 'route-risk'));
+  const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
+  const routeGrindProxyTarget = Math.max(
+    0.01,
+    Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
+  );
+
+  if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
+    throw new Error('staged route search currently supports HEARTGOLD + Cyndaquil only');
+  }
+  if (expProfile === 'ace') {
+    throw new Error('staged route search requires a route EXP profile');
+  }
+
+  const story = await loadStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess(resourceProfile, spendPolicy),
+    loadExpContext(
+      story,
+      expProfile,
+      version,
+      grindPolicy,
+      entryLevelPolicy,
+      sameStageJoinPolicy,
+      expAllocator,
+    ),
+  ]);
+  const requiredCandidate = findStarterCandidate(pool.candidates, starterName);
+  const battleOptions = {
+    p1AiMode: 'smart',
+    routeBuildOptimization: true,
+    routeGrindProxy,
+    routeGrindProxyTarget,
+  };
+  return {
+    version,
+    starterName,
+    evolutionPolicy,
+    resourceProfile,
+    spendPolicy,
+    expProfile,
+    grindPolicy,
+    entryLevelPolicy,
+    sameStageJoinPolicy,
+    expAllocator,
+    objective,
+    routeGrindProxy,
+    routeGrindProxyTarget,
+    story,
+    pool,
+    moveAccess,
+    expContext,
+    requiredCandidate,
+    battleOptions,
+  };
+}
+
+function stagedConfigSnapshot(ctx) {
+  return {
+    version: ctx.version,
+    starter: ctx.starterName,
+    evolutionPolicy: ctx.evolutionPolicy,
+    resourceProfile: ctx.resourceProfile,
+    spendPolicy: ctx.spendPolicy,
+    expProfile: ctx.expProfile,
+    grindPolicy: ctx.grindPolicy,
+    entryLevelPolicy: ctx.entryLevelPolicy,
+    sameStageJoinPolicy: ctx.sameStageJoinPolicy,
+    expAllocator: ctx.expAllocator,
+    objective: ctx.objective,
+    routeGrindProxy: ctx.routeGrindProxy,
+    routeGrindProxyTarget: ctx.routeGrindProxyTarget,
+  };
+}
+
+function stagedCandidateMap(ctx) {
+  return new Map(ctx.pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+}
+
+function stagedTeamFromKeys(keys, byKey) {
+  return (keys || []).map(key => {
+    const candidate = byKey.get(key);
+    if (!candidate) throw new Error('staged checkpoint candidate missing: ' + key);
+    return candidate;
+  });
+}
+
+async function stagedEvaluateTeam(ctx, team, runs) {
+  return evaluateCandidates(
+    team,
+    ctx.story.bosses,
+    runs,
+    ctx.moveAccess,
+    ctx.expContext,
+    ctx.grindPolicy,
+    ctx.objective,
+    ctx.battleOptions,
+  );
+}
+
+async function cmdRouteExpStoryScreenShard() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '2'))));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const shardIndex = Math.max(0, Math.floor(Number(arg('shard-index', '0'))));
+  if (shardIndex >= shardCount) throw new Error('shard-index must be < shard-count');
+
+  const shardCandidates = ctx.pool.candidates.filter(candidate =>
+    stagedShardIndex(candidateIdentity(candidate), shardCount) === shardIndex
+  );
+  const rows = await screenCandidates(
+    shardCandidates,
+    ctx.story,
+    ctx.moveAccess,
+    screenRuns,
+    ctx.expContext,
+    ctx.grindPolicy,
+    ctx.objective,
+    ctx.battleOptions,
+  );
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-screen-shard',
+    config: stagedConfigSnapshot(ctx),
+    shardCount,
+    shardIndex,
+    screenRuns,
+    totalCandidatePool: ctx.pool.candidates.length,
+    shardCandidateCount: shardCandidates.length,
+    wallMs: Date.now() - startedAt,
+    battleCache: battleCacheStats(),
+    rows: rows.map(row => ({
+      candidateKey: candidateIdentity(row.candidate),
+      evaluation: row.evaluation,
+    })),
+  }, null, 2));
+}
+
+async function cmdRouteExpStoryScreenMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const candidateCap = Math.max(6, Math.floor(Number(arg('candidate-cap', '36'))));
+  if (!inputs.length) throw new Error('route-exp-story-screen-merge requires --inputs');
+
+  const byKey = stagedCandidateMap(ctx);
+  const shardDocs = [];
+  const rows = [];
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    shardDocs.push(doc);
+    for (const row of doc.rows || []) {
+      const candidate = byKey.get(row.candidateKey);
+      if (!candidate) throw new Error('screen shard key missing from canonical pool: ' + row.candidateKey);
+      rows.push({ candidate, evaluation: row.evaluation });
+    }
+  }
+  rows.sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, ctx.objective) ||
+    candidateIdentity(a.candidate).localeCompare(candidateIdentity(b.candidate))
+  );
+
+  const requiredKey = candidateIdentity(ctx.requiredCandidate);
+  const eligibleRows = rows.filter(row =>
+    row.candidate.exclusiveGroup !== 'starter' ||
+    candidateIdentity(row.candidate) === requiredKey
+  );
+  let selectedRows = selectRouteCandidateScreenRows(eligibleRows, candidateCap, ctx.objective);
+  if (!selectedRows.some(row => candidateIdentity(row.candidate) === requiredKey)) {
+    selectedRows = [
+      { candidate: ctx.requiredCandidate, evaluation: rows.find(row => candidateIdentity(row.candidate) === requiredKey)?.evaluation || null },
+      ...selectedRows,
+    ];
+  }
+  const selectedKeys = [...new Set(selectedRows.map(row => candidateIdentity(row.candidate)))];
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-search-checkpoint',
+    stage: 'screen',
+    config: stagedConfigSnapshot(ctx),
+    candidateCap,
+    scannedCandidates: rows.length,
+    screenedCandidates: selectedKeys.length,
+    screenedCandidateFamilies: new Set(
+      selectedKeys.map(key => candidateFamilyIdentity(byKey.get(key)))
+    ).size,
+    screenedKeys: selectedKeys,
+    beam: [{
+      teamKeys: [requiredKey],
+      evaluation: rows.find(row => candidateIdentity(row.candidate) === requiredKey)?.evaluation || null,
+    }],
+    timings: [{
+      stage: 'screen',
+      shardCount: shardDocs.length,
+      maxShardMs: Math.max(0, ...shardDocs.map(doc => Number(doc.wallMs || 0))),
+      sumShardMs: shardDocs.reduce((sum, doc) => sum + Number(doc.wallMs || 0), 0),
+      mergeMs: Date.now() - startedAt,
+      candidates: rows.length,
+      screenedCandidates: selectedKeys.length,
+    }],
+    selectedCandidateDetails: selectedRows.map(row => ({
+      searchKey: candidateIdentity(row.candidate),
+      species: row.candidate.species,
+      terminalSpecies: row.candidate.terminalSpecies || null,
+      familyId: candidateFamilyIdentity(row.candidate),
+      availableFrom: Number(row.candidate.availableFrom || 0),
+      routeExpectedRetryFailures: row.evaluation ? routeRiskExpectedRetryFailures(row.evaluation) : null,
+      routeRiskGeometricScore: row.evaluation ? routeRiskGeometricScore(row.evaluation) : null,
+      postAvailabilityProgress: row.evaluation ? routePostAvailabilityMetrics(row).progress : null,
+    })),
+  }, null, 2));
+}
+
+async function cmdRouteExpStoryBeamShard() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  const targetSize = Math.max(2, Math.floor(Number(arg('target-size', '2'))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const shardIndex = Math.max(0, Math.floor(Number(arg('shard-index', '0'))));
+  if (shardIndex >= shardCount) throw new Error('shard-index must be < shard-count');
+
+  const byKey = stagedCandidateMap(ctx);
+  const screened = (checkpoint.screenedKeys || []).map(key => {
+    const candidate = byKey.get(key);
+    if (!candidate) throw new Error('screened candidate missing: ' + key);
+    return candidate;
+  });
+  const previousBeam = (checkpoint.beam || []).map(row => ({
+    team: stagedTeamFromKeys(row.teamKeys, byKey),
+    evaluation: row.evaluation || null,
+  }));
+  if (!previousBeam.length) throw new Error('checkpoint beam is empty');
+  if (!previousBeam.every(state => state.team.length === targetSize - 1)) {
+    throw new Error('checkpoint beam size does not match target-size');
+  }
+
+  const expanded = [];
+  const seen = new Set();
+  for (const state of previousBeam) {
+    const existing = new Set(state.team.map(candidateIdentity));
+    for (const candidate of screened) {
+      if (existing.has(candidateIdentity(candidate))) continue;
+      const team = [...state.team, candidate];
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      const teamKey = team.map(candidateIdentity).sort().join('|');
+      if (seen.has(teamKey)) continue;
+      seen.add(teamKey);
+      if (stagedShardIndex(teamKey, shardCount) !== shardIndex) continue;
+      const evaluation = await stagedEvaluateTeam(ctx, team, runs);
+      expanded.push({
+        teamKeys: team.map(candidateIdentity),
+        evaluation,
+      });
+    }
+  }
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-beam-shard',
+    config: stagedConfigSnapshot(ctx),
+    targetSize,
+    runs,
+    shardCount,
+    shardIndex,
+    expandedCount: expanded.length,
+    wallMs: Date.now() - startedAt,
+    battleCache: battleCacheStats(),
+    expanded,
+  }, null, 2));
+}
+
+async function cmdBattleCacheMerge() {
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const output = String(arg('output', 'results/battle-cache-merged.json'));
+  if (!inputs.length) throw new Error('battle-cache-merge requires --inputs');
+  let namespace = null;
+  const entries = {};
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (!doc?.entries) continue;
+    if (namespace === null) namespace = doc.namespace;
+    if (doc.namespace !== namespace) {
+      throw new Error('battle-cache namespace mismatch: ' + input);
+    }
+    Object.assign(entries, doc.entries);
+  }
+  const outPath = path.resolve(process.cwd(), output);
+  await fs.mkdir(path.dirname(outPath), { recursive: true });
+  await fs.writeFile(outPath, JSON.stringify({
+    schemaVersion: 2,
+    namespace: namespace || String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2'),
+    entries,
+  }));
+  console.log(JSON.stringify({
+    output,
+    namespace,
+    entries: Object.keys(entries).length,
+    inputs: inputs.length,
+  }, null, 2));
+}
+
+async function cmdRouteExpStoryBeamMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const targetSize = Math.max(2, Math.floor(Number(arg('target-size', '2'))));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '6'))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const adaptiveRuns = Math.max(runs, Math.floor(Number(arg('adaptive-runs', '4'))));
+  const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
+  if (!inputs.length) throw new Error('route-exp-story-beam-merge requires --inputs');
+
+  const byKey = stagedCandidateMap(ctx);
+  const shardDocs = [];
+  const expandedByKey = new Map();
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    shardDocs.push(doc);
+    for (const row of doc.expanded || []) {
+      const key = [...row.teamKeys].sort().join('|');
+      expandedByKey.set(key, row);
+    }
+  }
+  const expanded = [...expandedByKey.values()].map(row => ({
+    team: stagedTeamFromKeys(row.teamKeys, byKey),
+    evaluation: row.evaluation,
+  }));
+  if (!expanded.length) throw new Error('beam merge has no expanded states');
+
+  const preliminaryBeam = selectRouteStoryBeam(expanded, beamWidth, ctx.objective);
+  const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
+  let challengers = [];
+  if (ctx.objective === 'route-risk' && adaptiveRuns > runs && preliminaryBeam.length) {
+    const boundary = preliminaryBeam
+      .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ).pessimistic)
+      .sort((a, b) => a - b)
+      .at(-1);
+    challengers = expanded
+      .filter(state => !selectedKeys.has(stateTieKey(state)))
+      .map(state => ({
+        state,
+        bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ),
+      }))
+      .filter(row => row.bounds.optimistic <= boundary + 1e-12)
+      .sort((a, b) =>
+        a.bounds.optimistic - b.bounds.optimistic ||
+        routeRiskExpectedRetryFailures(a.state.evaluation) -
+          routeRiskExpectedRetryFailures(b.state.evaluation) ||
+        stateTieKey(a.state).localeCompare(stateTieKey(b.state))
+      )
+      .slice(0, beamWidth)
+      .map(row => row.state);
+  }
+
+  const adaptivePool = [...preliminaryBeam, ...challengers];
+  const refined = [];
+  if (adaptiveRuns > runs) {
+    for (const state of adaptivePool) {
+      const evaluation = await stagedEvaluateTeam(ctx, state.team, adaptiveRuns);
+      refined.push({ team: state.team, evaluation });
+    }
+  } else {
+    refined.push(...adaptivePool);
+  }
+  const beam = selectRouteRiskBeam(refined, beamWidth);
+  await flushBattleCache();
+
+  const timings = [
+    ...(checkpoint.timings || []),
+    {
+      stage: 'beam-' + targetSize,
+      shardCount: shardDocs.length,
+      maxShardMs: Math.max(0, ...shardDocs.map(doc => Number(doc.wallMs || 0))),
+      sumShardMs: shardDocs.reduce((sum, doc) => sum + Number(doc.wallMs || 0), 0),
+      mergeMs: Date.now() - startedAt,
+      expandedCount: expanded.length,
+      preliminaryCount: preliminaryBeam.length,
+      challengerCount: challengers.length,
+      adaptivePoolCount: adaptivePool.length,
+      selectedCount: beam.length,
+      runs,
+      adaptiveRuns,
+    },
+  ];
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-search-checkpoint',
+    stage: 'beam-' + targetSize,
+    config: stagedConfigSnapshot(ctx),
+    candidateCap: checkpoint.candidateCap,
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    beam: beam.map(state => ({
+      teamKeys: state.team.map(candidateIdentity),
+      evaluation: state.evaluation,
+      routeExpectedRetryFailures: routeRiskExpectedRetryFailures(state.evaluation),
+      routeRiskGeometricScore: routeRiskGeometricScore(state.evaluation),
+      routeRiskMeanWinRate: routeRiskMeanWinRate(state.evaluation),
+    })),
+    timings,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+async function cmdRouteExpStoryFinalStage() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  const finalRuns = Math.max(1, Math.floor(Number(arg('final-runs', '16'))));
+  const byKey = stagedCandidateMap(ctx);
+  const finalStates = [];
+
+  for (const row of checkpoint.beam || []) {
+    const team = stagedTeamFromKeys(row.teamKeys, byKey);
+    const evaluation = await stagedEvaluateTeam(ctx, team, finalRuns);
+    finalStates.push({ team, evaluation });
+  }
+  finalStates.sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, ctx.objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  await flushBattleCache();
+
+  const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-search-final',
+    purpose: 'checkpointed staged route search',
+    config: stagedConfigSnapshot(ctx),
+    assumptions: {
+      finalRuns,
+      beamWidth: finalStates.length,
+      candidateCap: checkpoint.candidateCap,
+    },
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'final',
+        finalRuns,
+        wallMs: Date.now() - startedAt,
+        finalists: finalStates.length,
+      },
+    ],
+    finalRescoredTeams: finalStates.length,
+    paretoFront: routeRiskParetoFront(top),
+    top,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
 async function cmdOptimize() {
   const versions = String(arg('versions', 'HEARTGOLD,SOULSILVER'))
     .split(',')
@@ -10784,6 +11281,12 @@ const commands = {
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'route-exp-story-rerank': cmdRouteExpStoryRerank,
   'route-exp-story-search': cmdRouteExpStorySearch,
+  'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
+  'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
+  'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
+  'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
+  'route-exp-story-final-stage': cmdRouteExpStoryFinalStage,
+  'battle-cache-merge': cmdBattleCacheMerge,
   'route-exp-practical-grind': cmdRouteExpPracticalGrind,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
