@@ -54,7 +54,7 @@ jobs:
           node src/cli.mjs route-exp-story-evaluate \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
-            --team=Cyndaquil,Abra,Phanpy,Chinchou,Diglett,Ponyta \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Phanpy::Donphan->Donphan#1,Chinchou::Lanturn->Lanturn#1,Diglett::Dugtrio->Dugtrio#1,Ponyta::Rapidash->Rapidash#1' \
             --exp-profile=normal-route --grind-policy=none \
             --exp-allocator=boss-aware-soft \
             --entry-level=expected --same-stage-join=map-order \
