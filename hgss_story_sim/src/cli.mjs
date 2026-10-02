@@ -3332,7 +3332,7 @@ async function cmdRouteExpStorySearch() {
 
 
 const STAGED_ROUTE_SEARCH_SCHEMA_VERSION = 2;
-const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-progression-safe-screening-v1';
+const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-progression-safe-complete-v1';
 
 function canonicalFingerprintValue(value) {
   if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
@@ -3413,6 +3413,7 @@ function stagedInputPaths(value) {
 }
 
 async function loadStagedRouteContext() {
+  const routeProfile = normalizeStoryRouteProfile(arg('route-profile', 'standard'));
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
   const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
@@ -3437,7 +3438,7 @@ async function loadStagedRouteContext() {
     throw new Error('staged route search requires a route EXP profile');
   }
 
-  const story = await loadStory();
+  const story = await loadStory(routeProfile);
   const [pool, moveAccess, expContext] = await Promise.all([
     loadCanonicalPool(version, story, evolutionPolicy),
     loadMoveAccess(resourceProfile, spendPolicy),
@@ -3459,6 +3460,7 @@ async function loadStagedRouteContext() {
     routeGrindProxyTarget,
   };
   return {
+    routeProfile,
     version,
     starterName,
     evolutionPolicy,
@@ -3489,6 +3491,7 @@ function stagedConfigSnapshot(ctx) {
     battleCacheNamespace: String(
       process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2'
     ),
+    routeProfile: ctx.routeProfile,
     version: ctx.version,
     starter: ctx.starterName,
     evolutionPolicy: ctx.evolutionPolicy,
