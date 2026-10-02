@@ -12,8 +12,10 @@ permissions:
   actions: write
 
 concurrency:
-  group: staged-route-search-v2-${{ github.ref }}
-  cancel-in-progress: true
+  # Use commit-local groups so unrelated docs/smoke pushes cannot cancel or
+  # block a deliberately triggered benchmark on the same branch.
+  group: staged-route-search-v2-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   screen:
