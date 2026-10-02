@@ -1,0 +1,72 @@
+name: progression-practical-grind-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  practical_grind_new:
+    if: contains(github.event.head_commit.message, '[practical-new-pareto-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/cli.mjs
+          node --check src/exp-budget.mjs
+      - name: Run practical grind for progression-safe winner
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Geodude::Graveler->Golem#1,Wynaut::Wobbuffet->Wobbuffet#1,Nidoran-F::Nidorina->Nidorina#1,Horsea::Horsea->Kingdra#1' \
+            --exp-profile=normal-route --exp-allocator=boss-aware-soft \
+            --entry-level=max --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --story-checkpoints='Falkner,Bugsy,Whitney,Morty,Chuck,Jasmine,Pryce,Clair,Will,Koga,Bruno,Karen,Lance,Lt. Surge,Sabrina,Erika,Janine,Misty,Brock,Blaine,Blue,Will 2,Koga 2,Bruno 2,Karen 2,Lance 2' \
+            --screen-runs=4 --verify-runs=32 --repair-runs=64 --final-runs=128 \
+            --max-repair-rounds=20 \
+            > results/practical-grind-progression-safe-v1.json
+      - name: Summarize Pareto coordinates
+        run: |
+          jq '{
+            team,
+            story: .storyFrontier[0] | {
+              storyGrindBattles,
+              storyGrindExp,
+              storyWorstBossWinRate,
+              repairConverged,
+              red25: .redFrontier[0] | {
+                additionalRedGrindBattles,
+                totalGrindBattles,
+                achievedWinRate,
+                finalLevels
+              },
+              red50: .redFrontier[1] | {
+                additionalRedGrindBattles,
+                totalGrindBattles,
+                achievedWinRate,
+                finalLevels
+              }
+            }
+          }' results/practical-grind-progression-safe-v1.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: progression-practical-grind-v1
+          path: hgss_story_sim/results/practical-grind-progression-safe-v1.json
+          if-no-files-found: warn
