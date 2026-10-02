@@ -1,0 +1,712 @@
+name: staged-route-search-v2
+
+on:
+  push:
+    branches:
+      - infra/staged-route-search-v2
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: staged-route-search-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    if: contains(github.event.head_commit.message, '[staged-search-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - name: Syntax check
+        working-directory: hgss_story_sim
+        run: node --check src/cli.mjs
+      - name: Screen candidate shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-screen-shard \
+            --screen-runs=2 --shard-count=4 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/screen-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-screen-${{ matrix.shard }}
+          path: hgss_story_sim/results/screen-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  screen_merge:
+    needs: screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-screen-*
+          path: hgss_story_sim/results/screen
+          merge-multiple: true
+      - name: Merge screening checkpoint
+        working-directory: hgss_story_sim
+        run: |
+          INPUTS="$(find results/screen -name 'screen-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-screen-merge \
+            --inputs="$INPUTS" --candidate-cap=36 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Screen summary
+        working-directory: hgss_story_sim
+        run: jq '{scannedCandidates,screenedCandidates,screenedCandidateFamilies,timings}' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-screen-merge
+          path: hgss_story_sim/results/checkpoint.json
+          if-no-files-found: error
+
+  beam2_shard:
+    needs: screen_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-2-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-screen-merge
+          path: hgss_story_sim/results/input
+      - name: Compute staged fingerprint
+        id: fingerprint
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          node src/cli.mjs route-exp-story-fingerprint \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/fingerprint.json
+          echo "value=$(jq -r '.fingerprint' results/fingerprint.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: hgss_story_sim/results/battle-cache-2-${{ matrix.shard }}.json
+          key: hgss-battle-${{ steps.fingerprint.outputs.value }}-${{ github.run_id }}-beam2-${{ matrix.shard }}
+          restore-keys: |
+            hgss-battle-${{ steps.fingerprint.outputs.value }}-
+      - name: Expand beam 2 shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=2 --runs=2 \
+            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/beam-2-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam2-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-2-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam2_merge:
+    needs: beam2_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-screen-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam2-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge battle caches
+        working-directory: hgss_story_sim
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$CACHES" \
+            --output=results/battle-cache-merged.json
+      - name: Merge beam 2 and adaptive race
+        working-directory: hgss_story_sim
+        run: |
+          SHARDS="$(find results/shards -name 'beam-2-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=2 --runs=2 \
+            --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Stage timing
+        working-directory: hgss_story_sim
+        run: jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam2-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam3_shard:
+    needs: beam2_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-3-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam2-merge
+          path: hgss_story_sim/results/input
+      - name: Seed shard cache from beam 2
+        working-directory: hgss_story_sim
+        run: cp results/input/battle-cache-merged.json "results/battle-cache-3-${{ matrix.shard }}.json"
+      - name: Expand beam 3 shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=3 --runs=2 \
+            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/beam-3-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam3-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-3-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam3_merge:
+    needs: beam3_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam2-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge battle caches
+        working-directory: hgss_story_sim
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-3-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$CACHES" \
+            --output=results/battle-cache-merged.json
+      - name: Merge beam 3 and adaptive race
+        working-directory: hgss_story_sim
+        run: |
+          SHARDS="$(find results/shards -name 'beam-3-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=3 --runs=2 \
+            --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Stage timing
+        working-directory: hgss_story_sim
+        run: jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam4_shard:
+    needs: beam3_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-4-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: hgss_story_sim/results/input
+      - name: Seed shard cache from beam 3
+        working-directory: hgss_story_sim
+        run: cp results/input/battle-cache-merged.json "results/battle-cache-4-${{ matrix.shard }}.json"
+      - name: Expand beam 4 shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=4 --runs=2 \
+            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/beam-4-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam4-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-4-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-4-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam4_merge:
+    needs: beam4_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge battle caches
+        working-directory: hgss_story_sim
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-4-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$CACHES" \
+            --output=results/battle-cache-merged.json
+      - name: Merge beam 4 and adaptive race
+        working-directory: hgss_story_sim
+        run: |
+          SHARDS="$(find results/shards -name 'beam-4-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=4 --runs=2 \
+            --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Stage timing
+        working-directory: hgss_story_sim
+        run: jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam4-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam5_shard:
+    needs: beam4_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-5-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam4-merge
+          path: hgss_story_sim/results/input
+      - name: Seed shard cache from beam 4
+        working-directory: hgss_story_sim
+        run: cp results/input/battle-cache-merged.json "results/battle-cache-5-${{ matrix.shard }}.json"
+      - name: Expand beam 5 shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=5 --runs=2 \
+            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/beam-5-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam5-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-5-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-5-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam5_merge:
+    needs: beam5_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam4-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam5-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge battle caches
+        working-directory: hgss_story_sim
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-5-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$CACHES" \
+            --output=results/battle-cache-merged.json
+      - name: Merge beam 5 and adaptive race
+        working-directory: hgss_story_sim
+        run: |
+          SHARDS="$(find results/shards -name 'beam-5-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=5 --runs=2 \
+            --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Stage timing
+        working-directory: hgss_story_sim
+        run: jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam5-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam6_shard:
+    needs: beam5_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-6-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam5-merge
+          path: hgss_story_sim/results/input
+      - name: Seed shard cache from beam 5
+        working-directory: hgss_story_sim
+        run: cp results/input/battle-cache-merged.json "results/battle-cache-6-${{ matrix.shard }}.json"
+      - name: Expand beam 6 shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=6 --runs=2 \
+            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/beam-6-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam6-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-6-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-6-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam6_merge:
+    needs: beam6_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam5-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam6-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge battle caches
+        working-directory: hgss_story_sim
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-6-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$CACHES" \
+            --output=results/battle-cache-merged.json
+      - name: Merge beam 6 and adaptive race
+        working-directory: hgss_story_sim
+        run: |
+          SHARDS="$(find results/shards -name 'beam-6-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=6 --runs=2 \
+            --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Stage timing
+        working-directory: hgss_story_sim
+        run: jq '.timings[-1]' results/checkpoint.json
+      - name: Read checkpoint fingerprint
+        id: checkpoint_fp
+        working-directory: hgss_story_sim
+        run: echo "value=$(jq -r '.fingerprint' results/checkpoint.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@v4
+        with:
+          path: hgss_story_sim/results/battle-cache-merged.json
+          key: hgss-battle-${{ steps.checkpoint_fp.outputs.value }}-${{ github.run_id }}-beam6
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-beam6-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  final:
+    needs: beam6_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/input/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam6-merge
+          path: hgss_story_sim/results/input
+      - name: Final 16-run validation
+        working-directory: hgss_story_sim
+        run: |
+          node src/cli.mjs route-exp-story-final-stage \
+            --input=results/input/checkpoint.json --final-runs=16 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/staged-route-search-final.json
+      - name: Performance summary
+        working-directory: hgss_story_sim
+        run: |
+          jq '{
+            top: [.top[] | {team,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}],
+            timings,
+            battleCache
+          }' results/staged-route-search-final.json | tee results/staged-route-search-summary.json
+      - name: Read final fingerprint
+        id: final_fp
+        working-directory: hgss_story_sim
+        run: echo "value=$(jq -r '.fingerprint' results/staged-route-search-final.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/save@v4
+        with:
+          path: hgss_story_sim/results/input/battle-cache-merged.json
+          key: hgss-battle-${{ steps.final_fp.outputs.value }}-${{ github.run_id }}-final
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-route-search-final
+          path: |
+            hgss_story_sim/results/staged-route-search-final.json
+            hgss_story_sim/results/staged-route-search-summary.json
+          if-no-files-found: error
