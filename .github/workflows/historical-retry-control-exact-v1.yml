@@ -1,0 +1,42 @@
+name: historical-retry-control-exact-v1
+
+on:
+  push:
+    branches:
+      - infra/staged-route-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  exact-control:
+    if: contains(github.event.head_commit.message, '[historical-control-exact-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - name: Evaluate exact retry-family winner variants
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Phanpy::Donphan->Donphan#1,Chinchou::Lanturn->Lanturn#1,Diglett::Dugtrio->Dugtrio#1,Ponyta::Rapidash->Rapidash#1' \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=16 \
+            > results/historical-retry-control-exact.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historical-retry-control-exact-v1
+          path: hgss_story_sim/results/historical-retry-control-exact.json
+          if-no-files-found: error
