@@ -1969,26 +1969,92 @@ function selectRouteRiskBeam(states, width) {
   return selected.slice(0, width);
 }
 
+function routeCandidateProgressionMetrics(row) {
+  const evaluation = row?.evaluation || {};
+  const battleRows = Array.isArray(evaluation.rows) ? evaluation.rows : [];
+  const activeIndexes = [];
+  for (let index = 0; index < battleRows.length; index += 1) {
+    if (!battleRows[index]?.skipped) activeIndexes.push(index);
+  }
+
+  const firstActiveIndex = activeIndexes.length
+    ? activeIndexes[0]
+    : Number.POSITIVE_INFINITY;
+  const firstSchedule = Number.isFinite(firstActiveIndex)
+    ? (evaluation.expSchedule?.battles?.[firstActiveIndex] || {})
+    : {};
+  const candidateKey = candidateIdentity(row.candidate);
+  const expBefore = Number(firstSchedule.expBefore?.[candidateKey]);
+  const routeAllocatedExpBefore = Number(
+    firstSchedule.routeAllocatedExpBefore?.[candidateKey] || 0
+  );
+  const entryEndowmentExp = Number.isFinite(expBefore)
+    ? Math.max(0, expBefore - routeAllocatedExpBefore)
+    : 0;
+  const entryLevel = Number(firstSchedule.levelsBefore?.[candidateKey]);
+
+  return {
+    firstActiveIndex,
+    firstActiveStage: Number(
+      firstSchedule.stage ?? row.candidate?.availableFrom ?? Number.POSITIVE_INFINITY
+    ),
+    activeCheckpointCount: activeIndexes.length,
+    entryLevel: Number.isFinite(entryLevel) ? entryLevel : null,
+    entryExpBefore: Number.isFinite(expBefore) ? expBefore : null,
+    entryEndowmentExp,
+    routeAllocatedExpBefore,
+  };
+}
+
 function selectRouteRiskCandidateScreenRows(rows, width) {
   if (!rows.length || width <= 0) return [];
 
-  const dominates = (a, b) => {
+  // Progression-safe dominance deliberately has no weighted score. A candidate
+  // may be removed only when another candidate is at least as good both in
+  // observed solo combat and in the route-progression properties that can make
+  // a weak solo candidate valuable in a six-member team.
+  //
+  // The progression axes encode the core trade-off:
+  // - activeCheckpointCount: earlier availability / more route coverage is useful.
+  // - entryEndowmentExp: EXP brought into the team at acquisition is useful.
+  // - routeAllocatedExpBefore: EXP that had to be taken from the route before
+  //   the first active checkpoint is a burden.
+  //
+  // This prevents a later high-level acquisition from being deleted merely
+  // because it has fewer solo checkpoints, while also preventing "late is
+  // always better" from becoming another arbitrary heuristic.
+  const dominates = (a, b, { withinFamily = false } = {}) => {
+    if (withinFamily) {
+      const aTerminal = String(a.candidate?.terminalSpecies || a.candidate?.species || '');
+      const bTerminal = String(b.candidate?.terminalSpecies || b.candidate?.species || '');
+      if (aTerminal !== bTerminal) return false;
+    }
+
     const am = routePostAvailabilityMetrics(a);
     const bm = routePostAvailabilityMetrics(b);
+    const ap = routeCandidateProgressionMetrics(a);
+    const bp = routeCandidateProgressionMetrics(b);
     const aRetries = routeRiskMeanRetryFailures(a.evaluation);
     const bRetries = routeRiskMeanRetryFailures(b.evaluation);
     const aGeometric = routeRiskGeometricScore(a.evaluation);
     const bGeometric = routeRiskGeometricScore(b.evaluation);
+
     const atLeastAsGood =
       aRetries <= bRetries &&
       aGeometric >= bGeometric &&
       am.progress >= bm.progress &&
-      am.score >= bm.score;
+      am.score >= bm.score &&
+      ap.activeCheckpointCount >= bp.activeCheckpointCount &&
+      ap.entryEndowmentExp >= bp.entryEndowmentExp &&
+      ap.routeAllocatedExpBefore <= bp.routeAllocatedExpBefore;
     const strictlyBetter =
       aRetries < bRetries ||
       aGeometric > bGeometric ||
       am.progress > bm.progress ||
-      am.score > bm.score;
+      am.score > bm.score ||
+      ap.activeCheckpointCount > bp.activeCheckpointCount ||
+      ap.entryEndowmentExp > bp.entryEndowmentExp ||
+      ap.routeAllocatedExpBefore < bp.routeAllocatedExpBefore;
     return atLeastAsGood && strictlyBetter;
   };
 
@@ -1998,31 +2064,37 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
     row => routeRiskMeanWinRate(row.evaluation),
     row => routePostAvailabilityMetrics(row).progress,
     row => routePostAvailabilityMetrics(row).score,
-    // Timing is diversity only, never a scalar bonus or fixed early/mid/late quota.
+    row => routeCandidateProgressionMetrics(row).activeCheckpointCount,
+    row => routeCandidateProgressionMetrics(row).entryEndowmentExp,
+    row => routeCandidateProgressionMetrics(row).routeAllocatedExpBefore,
+    // Timing is still a diversity coordinate. It is not given a scalar bonus.
     row => Number(row.candidate?.availableFrom || 0),
   ];
 
-  // First remove variants that are dominated by another acquisition/evolution
-  // path from the same evolution family. Remaining variants are genuinely
-  // different choices and stay eligible together.
   const rowsByFamily = new Map();
   for (const row of rows) {
     const family = candidateFamilyIdentity(row.candidate);
     if (!rowsByFamily.has(family)) rowsByFamily.set(family, []);
     rowsByFamily.get(family).push(row);
   }
+
+  // Only remove a same-terminal acquisition/evolution path when it is safely
+  // dominated in both combat and progression. Different terminal evolutions
+  // are never collapsed by this pass.
   const familyFrontRows = [];
   for (const familyRows of rowsByFamily.values()) {
-    for (const layer of nonDominatedLayers(familyRows, dominates).slice(0, 1)) {
+    for (const layer of nonDominatedLayers(
+      familyRows,
+      (a, b) => dominates(a, b, { withinFamily: true }),
+    ).slice(0, 1)) {
       familyFrontRows.push(...layer);
     }
   }
 
-  // candidate-cap is a FAMILY cap in route-risk mode. Walk global Pareto layers
-  // and select families without arbitrary early/mid/late or 80/20 quotas.
-  // Once a family is selected, every within-family nondominated variant remains
-  // available to the beam, so Dratini/Dragonair-like source alternatives are
-  // not silently collapsed.
+  // candidate-cap remains a FAMILY cap. Global family selection uses the same
+  // progression-safe dominance. This is intentionally not a quota for early or
+  // late Pokémon: a family survives when its combat/progression trade-off is
+  // non-dominated, not because it belongs to a hand-picked timing bucket.
   const selectedFamilies = new Set();
   for (const layer of nonDominatedLayers(familyFrontRows, dominates)) {
     for (const row of crowdingOrder(layer, dimensions, candidateScreenTieKey)) {
@@ -2040,7 +2112,6 @@ function selectRouteRiskCandidateScreenRows(rows, width) {
       candidateScreenTieKey(a).localeCompare(candidateScreenTieKey(b))
     );
 }
-
 function routeRiskParetoFront(rows) {
   return rows.filter((row, index) => !rows.some((other, otherIndex) => {
     if (index === otherIndex) return false;
@@ -3244,7 +3315,7 @@ async function cmdRouteExpStorySearch() {
 
 
 const STAGED_ROUTE_SEARCH_SCHEMA_VERSION = 2;
-const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-family-bayesian-racing-v1';
+const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-progression-safe-screening-v1';
 
 function canonicalFingerprintValue(value) {
   if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
@@ -3564,6 +3635,7 @@ async function cmdRouteExpStoryScreenMerge() {
       routeExpectedRetryFailures: row.evaluation ? routeRiskExpectedRetryFailures(row.evaluation) : null,
       routeRiskGeometricScore: row.evaluation ? routeRiskGeometricScore(row.evaluation) : null,
       postAvailabilityProgress: row.evaluation ? routePostAvailabilityMetrics(row).progress : null,
+      progression: routeCandidateProgressionMetrics(row),
     })),
   }, null, 2));
 }
