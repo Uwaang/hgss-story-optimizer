@@ -124,6 +124,7 @@ jobs:
             $SEARCH_ARGS \
             > results/resume/checkpoint.json
           test "$(jq -r '.fingerprint' results/resume/checkpoint.json)" = "${{ steps.fingerprint.outputs.value }}"
+          cp results/fingerprint.json results/resume/fingerprint.json
 
       - name: Build resume base cache
         working-directory: hgss_story_sim
@@ -151,10 +152,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: staged-resume-input
-          path: |
-            hgss_story_sim/results/resume/checkpoint.json
-            hgss_story_sim/results/resume/battle-cache-base.json
-            hgss_story_sim/results/fingerprint.json
+          path: hgss_story_sim/results/resume/
           if-no-files-found: error
 
   expand:
