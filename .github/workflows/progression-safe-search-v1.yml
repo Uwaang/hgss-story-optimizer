@@ -1,6 +1,6 @@
 name: progression-safe-search-v1
 
-# Progression-safe candidate-screening full search; staged runtime semantics otherwise unchanged.
+# Progression-safe full search: preserve all evolution families, prune only safely dominated within-family variants, and use six-way beam sharding.
 
 on:
   push:
@@ -81,7 +81,7 @@ jobs:
         run: |
           INPUTS="$(find results/screen -name 'screen-shard-*.json' -type f | sort | paste -sd, -)"
           node src/cli.mjs route-exp-story-screen-merge \
-            --inputs="$INPUTS" --candidate-cap=36 \
+            --inputs="$INPUTS" --candidate-cap=100 \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
@@ -106,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
       GITHUB_TOKEN: ${{ github.token }}
       HGSS_BATTLE_CACHE_PATH: results/battle-cache-2-${{ matrix.shard }}.json
@@ -149,7 +149,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-shard \
             --input=results/input/checkpoint.json \
             --target-size=2 --runs=2 \
-            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
@@ -231,7 +231,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
       GITHUB_TOKEN: ${{ github.token }}
       HGSS_BATTLE_CACHE_PATH: results/battle-cache-3-${{ matrix.shard }}.json
@@ -256,7 +256,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-shard \
             --input=results/input/checkpoint.json \
             --target-size=3 --runs=2 \
-            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
@@ -338,7 +338,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
       GITHUB_TOKEN: ${{ github.token }}
       HGSS_BATTLE_CACHE_PATH: results/battle-cache-4-${{ matrix.shard }}.json
@@ -363,7 +363,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-shard \
             --input=results/input/checkpoint.json \
             --target-size=4 --runs=2 \
-            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
@@ -445,7 +445,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
       GITHUB_TOKEN: ${{ github.token }}
       HGSS_BATTLE_CACHE_PATH: results/battle-cache-5-${{ matrix.shard }}.json
@@ -470,7 +470,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-shard \
             --input=results/input/checkpoint.json \
             --target-size=5 --runs=2 \
-            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
@@ -552,7 +552,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
       GITHUB_TOKEN: ${{ github.token }}
       HGSS_BATTLE_CACHE_PATH: results/battle-cache-6-${{ matrix.shard }}.json
@@ -577,7 +577,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-shard \
             --input=results/input/checkpoint.json \
             --target-size=6 --runs=2 \
-            --shard-count=3 --shard-index=${{ matrix.shard }} \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
             --version=HEARTGOLD --starter=Cyndaquil \
             --evolution-policy=trade-aware \
             --exp-profile=normal-route --grind-policy=none \
