@@ -1,0 +1,104 @@
+name: progression-safe-screening-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    if: contains(github.event.head_commit.message, '[progression-screen-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - name: Syntax check
+        working-directory: hgss_story_sim
+        run: node --check src/cli.mjs
+      - name: Screen shard
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-screen-shard \
+            --screen-runs=2 --shard-count=4 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/screen-shard-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: progression-screen-${{ matrix.shard }}
+          path: hgss_story_sim/results/screen-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: progression-screen-*
+          path: hgss_story_sim/results/screen
+          merge-multiple: true
+      - name: Merge progression-safe screening
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          INPUTS="$(find results/screen -name 'screen-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-screen-merge \
+            --inputs="$INPUTS" --candidate-cap=36 \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+
+          jq '{
+            fingerprint,
+            scannedCandidates,
+            screenedCandidates,
+            screenedCandidateFamilies,
+            historicalExact: {
+              phanpyDonphan: (.screenedKeys | index("Phanpy::Donphan->Donphan#1") != null),
+              chinchouLanturn: (.screenedKeys | index("Chinchou::Lanturn->Lanturn#1") != null),
+              diglettDugtrio: (.screenedKeys | index("Diglett::Dugtrio->Dugtrio#1") != null),
+              ponytaRapidash: (.screenedKeys | index("Ponyta::Rapidash->Rapidash#1") != null)
+            },
+            historicalFamilies: {
+              phanpy: ([.selectedCandidateDetails[] | select(.familyId=="Phanpy")] | length > 0),
+              chinchou: ([.selectedCandidateDetails[] | select(.familyId=="Chinchou")] | length > 0),
+              diglett: ([.selectedCandidateDetails[] | select(.familyId=="Diglett")] | length > 0),
+              ponyta: ([.selectedCandidateDetails[] | select(.familyId=="Ponyta")] | length > 0)
+            }
+          }' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: progression-safe-screening-v1
+          path: hgss_story_sim/results/checkpoint.json
+          if-no-files-found: error
