@@ -1,0 +1,185 @@
+name: deheuristic-bayesian-racing-v1
+
+on:
+  push:
+    branches:
+      - exp/deheuristic-bayesian-racing-v1
+
+concurrency:
+  group: deheuristic-bayesian-racing-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search:
+    if: contains(github.event.head_commit.message, '[bayesian-racing-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/acquisition.mjs
+          node --check src/exp-budget.mjs
+          node --check src/cli.mjs
+
+      - name: Run aggregate-risk Bayesian racing search
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-search \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk \
+            --route-grind-proxy=false \
+            --screen-runs=2 --runs=2 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --final-runs=16 \
+            --candidate-cap=36 --beam-width=6 \
+            > results/deheuristic-bayesian-racing-v1.json
+
+      - name: Evaluate previous retry-family winner
+        run: |
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team=Cyndaquil,Abra,Phanpy,Chinchou,Diglett,Ponyta \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=16 \
+            > results/previous-retry-winner.json
+
+      - name: Assert semantics
+        run: |
+          jq -e '
+            .objective == "route-risk" and
+            .assumptions.entryLevelPolicy == "expected" and
+            .assumptions.routeGrindProxy == false and
+            .assumptions.screenRuns == 2 and
+            .assumptions.runs == 2 and
+            .assumptions.adaptiveRuns == 4 and
+            .assumptions.adaptiveConfidenceZ == 1.96 and
+            .assumptions.finalRuns == 16 and
+            .assumptions.candidateCap == 36 and
+            .assumptions.beamWidth == 6 and
+            .screenedCandidateFamilies <= 36 and
+            (.beamTrace | length) == 5 and
+            ([.beamTrace[].adaptiveResampledCount] | max) > 0 and
+            (.top | length) >= 1 and
+            ([.top[].routeExpectedRetryFailures | numbers] | length) == (.top | length)
+          ' results/deheuristic-bayesian-racing-v1.json >/dev/null
+
+      - name: Summarize
+        run: |
+          jq '
+            [
+              "Cyndaquil::Cyndaquil->Typhlosion#1",
+              "Geodude::Geodude->Golem#1",
+              "Slowpoke::Slowpoke->Slowbro#1",
+              "Pineco::Pineco->Forretress#1",
+              "Mareep::Mareep->Ampharos#1",
+              "Rhyhorn::Rhyhorn->Rhyperior#1",
+              "Magnemite::Magnemite->Magneton#1",
+              "Abra::Abra->Alakazam#1",
+              "Wooper::Quagsire->Quagsire#1",
+              "Magikarp::Magikarp->Gyarados#1",
+              "Gastly::Gastly->Gengar#1",
+              "Larvitar::Pupitar->Tyranitar#1",
+              "Lapras::Lapras->Lapras#1",
+              "Chinchou::Lanturn->Lanturn#1",
+              "Horsea::Horsea->Kingdra#1"
+            ] as $required |
+            [.selectedCandidateDetails[].searchKey] as $keys |
+            {
+              objective,
+              screenedCandidates,
+              screenedCandidateFamilies,
+              evaluatedTeams,
+              finalRescoredTeams,
+              referenceRecall: {
+                count: ([$required[] as $k | select(($keys | index($k)) != null) | $k] | length),
+                present: [$required[] as $k | select(($keys | index($k)) != null) | $k],
+                missing: [$required[] as $k | select(($keys | index($k)) == null) | $k]
+              },
+              adaptiveTrace: [
+                .beamTrace[] | {
+                  targetSize,
+                  expandedCount,
+                  selectedCount,
+                  adaptiveRuns,
+                  adaptivePoolCount,
+                  adaptiveChallengerCount,
+                  adaptiveResampledCount,
+                  selected: [
+                    .selected[] | {
+                      team,
+                      routeExpectedRetryFailures,
+                      routeRiskGeometricScore,
+                      routeRiskMeanWinRate
+                    }
+                  ]
+                }
+              ],
+              paretoFront: [
+                .paretoFront[] | {
+                  team,
+                  teamKeys,
+                  routeExpectedRetryFailures,
+                  routeRiskGeometricScore,
+                  routeRiskMeanWinRate
+                }
+              ],
+              top: [
+                .top[] | {
+                  team,
+                  teamKeys,
+                  routeExpectedRetryFailures,
+                  routeRiskGeometricScore,
+                  routeRiskMeanWinRate,
+                  storyClearGeometricScore,
+                  score,
+                  bosses: [
+                    .bosses[] |
+                    select(.winRate <= 0.5) |
+                    {boss, wins, losses, winRate, battleProgressScore}
+                  ]
+                }
+              ]
+            }
+          ' results/deheuristic-bayesian-racing-v1.json |
+            tee results/deheuristic-bayesian-racing-v1-summary.json
+
+          jq '{
+            team,
+            performance,
+            weakBosses: [
+              .checkpoints[] |
+              select(.winRate <= 0.5) |
+              {boss, winRate, averageOpponentFaints}
+            ]
+          }' results/previous-retry-winner.json |
+            tee results/previous-retry-winner-summary.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deheuristic-bayesian-racing-v1
+          path: |
+            hgss_story_sim/results/deheuristic-bayesian-racing-v1.json
+            hgss_story_sim/results/deheuristic-bayesian-racing-v1-summary.json
+            hgss_story_sim/results/previous-retry-winner.json
+            hgss_story_sim/results/previous-retry-winner-summary.json
+          if-no-files-found: warn
