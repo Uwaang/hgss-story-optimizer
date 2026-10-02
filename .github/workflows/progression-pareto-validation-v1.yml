@@ -1,0 +1,54 @@
+name: progression-pareto-validation-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[pareto-validate-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - name: Evaluate new progression-safe winner at 100 runs
+        working-directory: hgss_story_sim
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Geodude::Graveler->Golem#1,Wynaut::Wobbuffet->Wobbuffet#1,Nidoran-F::Nidorina->Nidorina#1,Horsea::Horsea->Kingdra#1' \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=100 \
+            > results/new-winner-100.json
+      - name: Evaluate historical control at 100 runs
+        working-directory: hgss_story_sim
+        run: |
+          node src/cli.mjs route-exp-story-evaluate \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys='Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Phanpy::Donphan->Donphan#1,Chinchou::Lanturn->Lanturn#1,Diglett::Dugtrio->Dugtrio#1,Ponyta::Rapidash->Rapidash#1' \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=100 \
+            > results/historical-control-100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: progression-pareto-validation-v1
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
