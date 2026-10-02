@@ -3243,6 +3243,70 @@ async function cmdRouteExpStorySearch() {
 }
 
 
+const STAGED_ROUTE_SEARCH_SCHEMA_VERSION = 2;
+const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-family-bayesian-racing-v1';
+
+function canonicalFingerprintValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalFingerprintValue(entry)])
+    );
+  }
+  return value;
+}
+
+function stagedRouteSearchFingerprint(ctx) {
+  const payload = canonicalFingerprintValue({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    semanticsVersion: STAGED_ROUTE_SEARCH_SEMANTICS_VERSION,
+    battleCacheNamespace: String(
+      process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2'
+    ),
+    storySourceCommit: ctx.story?.config?.sourceCommit || null,
+    config: stagedConfigSnapshot(ctx),
+  });
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function stagedCheckpointCompatibility(checkpoint, ctx, { allowLegacy = false } = {}) {
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const actualFingerprint = checkpoint?.fingerprint || null;
+  if (actualFingerprint) {
+    if (actualFingerprint !== expectedFingerprint) {
+      throw new Error(
+        'staged checkpoint fingerprint mismatch: expected ' +
+        expectedFingerprint + ', got ' + actualFingerprint
+      );
+    }
+    return { fingerprint: expectedFingerprint, legacy: false };
+  }
+
+  if (!allowLegacy) {
+    throw new Error(
+      'staged checkpoint is missing fingerprint; stamp/recreate it explicitly before reuse'
+    );
+  }
+
+  const expectedConfig = stagedConfigSnapshot(ctx);
+  const actualConfig = checkpoint?.config || {};
+  for (const [key, value] of Object.entries(actualConfig)) {
+    if (!(key in expectedConfig)) continue;
+    if (JSON.stringify(canonicalFingerprintValue(value)) !==
+        JSON.stringify(canonicalFingerprintValue(expectedConfig[key]))) {
+      throw new Error(
+        'legacy staged checkpoint config mismatch for ' + key +
+        ': expected ' + JSON.stringify(expectedConfig[key]) +
+        ', got ' + JSON.stringify(value)
+      );
+    }
+  }
+  return { fingerprint: expectedFingerprint, legacy: true };
+}
+
 function stagedShardIndex(key, shardCount) {
   const count = Math.max(1, Math.floor(Number(shardCount || 1)));
   const digest = createHash('sha256').update(String(key)).digest('hex').slice(0, 12);
@@ -3331,6 +3395,12 @@ async function loadStagedRouteContext() {
 
 function stagedConfigSnapshot(ctx) {
   return {
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    semanticsVersion: STAGED_ROUTE_SEARCH_SEMANTICS_VERSION,
+    storySourceCommit: ctx.story?.config?.sourceCommit || null,
+    battleCacheNamespace: String(
+      process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2'
+    ),
     version: ctx.version,
     starter: ctx.starterName,
     evolutionPolicy: ctx.evolutionPolicy,
@@ -3396,8 +3466,9 @@ async function cmdRouteExpStoryScreenShard() {
   await flushBattleCache();
 
   console.log(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
     type: 'route-screen-shard',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
     config: stagedConfigSnapshot(ctx),
     shardCount,
     shardIndex,
@@ -3421,10 +3492,17 @@ async function cmdRouteExpStoryScreenMerge() {
   if (!inputs.length) throw new Error('route-exp-story-screen-merge requires --inputs');
 
   const byKey = stagedCandidateMap(ctx);
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
   const shardDocs = [];
   const rows = [];
   for (const input of inputs) {
     const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'screen shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
     shardDocs.push(doc);
     for (const row of doc.rows || []) {
       const candidate = byKey.get(row.candidateKey);
@@ -3452,9 +3530,10 @@ async function cmdRouteExpStoryScreenMerge() {
   const selectedKeys = [...new Set(selectedRows.map(row => candidateIdentity(row.candidate)))];
 
   console.log(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
     type: 'route-search-checkpoint',
     stage: 'screen',
+    fingerprint: expectedFingerprint,
     config: stagedConfigSnapshot(ctx),
     candidateCap,
     scannedCandidates: rows.length,
@@ -3493,6 +3572,7 @@ async function cmdRouteExpStoryBeamShard() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
   const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
   const targetSize = Math.max(2, Math.floor(Number(arg('target-size', '2'))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
@@ -3536,8 +3616,9 @@ async function cmdRouteExpStoryBeamShard() {
   await flushBattleCache();
 
   console.log(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
     type: 'route-beam-shard',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
     config: stagedConfigSnapshot(ctx),
     targetSize,
     runs,
@@ -3584,6 +3665,7 @@ async function cmdRouteExpStoryBeamMerge() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
   const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
   const inputs = stagedInputPaths(arg('inputs', ''));
   const targetSize = Math.max(2, Math.floor(Number(arg('target-size', '2'))));
   const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '6'))));
@@ -3593,10 +3675,17 @@ async function cmdRouteExpStoryBeamMerge() {
   if (!inputs.length) throw new Error('route-exp-story-beam-merge requires --inputs');
 
   const byKey = stagedCandidateMap(ctx);
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
   const shardDocs = [];
   const expandedByKey = new Map();
   for (const input of inputs) {
     const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'beam shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
     shardDocs.push(doc);
     for (const row of doc.expanded || []) {
       const key = [...row.teamKeys].sort().join('|');
@@ -3666,9 +3755,10 @@ async function cmdRouteExpStoryBeamMerge() {
   ];
 
   console.log(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
     type: 'route-search-checkpoint',
     stage: 'beam-' + targetSize,
+    fingerprint: expectedFingerprint,
     config: stagedConfigSnapshot(ctx),
     candidateCap: checkpoint.candidateCap,
     scannedCandidates: checkpoint.scannedCandidates,
@@ -3688,10 +3778,42 @@ async function cmdRouteExpStoryBeamMerge() {
   }, null, 2));
 }
 
+async function cmdRouteExpStoryFingerprint() {
+  const ctx = await loadStagedRouteContext();
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-search-fingerprint',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+  }, null, 2));
+}
+
+async function cmdRouteExpStoryStampCheckpoint() {
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  const allowLegacy = arg('allow-legacy', 'false') === 'true';
+  const compatibility = stagedCheckpointCompatibility(
+    checkpoint,
+    ctx,
+    { allowLegacy },
+  );
+  console.log(JSON.stringify({
+    ...checkpoint,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    fingerprint: compatibility.fingerprint,
+    config: stagedConfigSnapshot(ctx),
+    compatibility: {
+      stampedFromLegacy: compatibility.legacy,
+      stampedAt: new Date().toISOString(),
+    },
+  }, null, 2));
+}
+
 async function cmdRouteExpStoryFinalStage() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
   const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
   const finalRuns = Math.max(1, Math.floor(Number(arg('final-runs', '16'))));
   const byKey = stagedCandidateMap(ctx);
   const finalStates = [];
@@ -3709,9 +3831,10 @@ async function cmdRouteExpStoryFinalStage() {
 
   const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
   console.log(JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
     type: 'route-search-final',
     purpose: 'checkpointed staged route search',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
     config: stagedConfigSnapshot(ctx),
     assumptions: {
       finalRuns,
@@ -11281,6 +11404,8 @@ const commands = {
   'route-exp-story-evaluate': cmdRouteExpStoryEvaluate,
   'route-exp-story-rerank': cmdRouteExpStoryRerank,
   'route-exp-story-search': cmdRouteExpStorySearch,
+  'route-exp-story-fingerprint': cmdRouteExpStoryFingerprint,
+  'route-exp-story-stamp-checkpoint': cmdRouteExpStoryStampCheckpoint,
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
