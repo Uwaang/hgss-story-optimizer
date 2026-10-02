@@ -1,0 +1,338 @@
+name: staged-route-resume-v1
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Workflow run containing the predecessor checkpoint artifact"
+        required: true
+        type: string
+      resume_stage:
+        description: "Single stage to resume"
+        required: true
+        default: beam6
+        type: choice
+        options:
+          - beam2
+          - beam3
+          - beam4
+          - beam5
+          - beam6
+          - final
+      final_after_beam6:
+        description: "Run final 16-run validation immediately after a resumed beam6"
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches:
+      - infra/staged-route-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: staged-route-resume-v1-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id || '36968404654' }}
+  RESUME_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.resume_stage || 'beam6' }}
+  FINAL_AFTER_BEAM6: ${{ github.event_name == 'workflow_dispatch' && inputs.final_after_beam6 || 'true' }}
+  SEARCH_ARGS: >-
+    --version=HEARTGOLD --starter=Cyndaquil
+    --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none
+    --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  hydrate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[resume-smoke-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact_name: ${{ steps.pick.outputs.artifact_name }}
+      target_size: ${{ steps.pick.outputs.target_size }}
+      fingerprint: ${{ steps.fingerprint.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+
+      - name: Syntax check
+        working-directory: hgss_story_sim
+        run: node --check src/cli.mjs
+
+      - name: Pick predecessor artifact
+        id: pick
+        shell: bash
+        run: |
+          case "$RESUME_STAGE" in
+            beam2) artifact="staged-screen-merge"; size="2" ;;
+            beam3) artifact="staged-beam2-merge"; size="3" ;;
+            beam4) artifact="staged-beam3-merge"; size="4" ;;
+            beam5) artifact="staged-beam4-merge"; size="5" ;;
+            beam6) artifact="staged-beam5-merge"; size="6" ;;
+            final) artifact="staged-beam6-merge"; size="" ;;
+            *) echo "unsupported resume stage: $RESUME_STAGE" >&2; exit 2 ;;
+          esac
+          echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
+          echo "target_size=$size" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.pick.outputs.artifact_name }}
+          path: hgss_story_sim/results/source
+          repository: ${{ github.repository }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Compute current fingerprint
+        id: fingerprint
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          node src/cli.mjs route-exp-story-fingerprint $SEARCH_ARGS > results/fingerprint.json
+          FP="$(jq -r '.fingerprint' results/fingerprint.json)"
+          test -n "$FP"
+          echo "value=$FP" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$FP"
+
+      - name: Restore persistent battle cache
+        uses: actions/cache/restore@v4
+        with:
+          path: hgss_story_sim/results/persistent/battle-cache.json
+          key: hgss-battle-${{ steps.fingerprint.outputs.value }}-${{ github.run_id }}-hydrate
+          restore-keys: |
+            hgss-battle-${{ steps.fingerprint.outputs.value }}-
+
+      - name: Stamp and validate checkpoint
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          mkdir -p results/resume
+          node src/cli.mjs route-exp-story-stamp-checkpoint \
+            --input=results/source/checkpoint.json \
+            --allow-legacy=true \
+            $SEARCH_ARGS \
+            > results/resume/checkpoint.json
+          test "$(jq -r '.fingerprint' results/resume/checkpoint.json)" = "${{ steps.fingerprint.outputs.value }}"
+
+      - name: Build resume base cache
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          mkdir -p results/resume
+          INPUTS=()
+          if [ -f results/source/battle-cache-merged.json ]; then
+            INPUTS+=("results/source/battle-cache-merged.json")
+          fi
+          if [ -f results/persistent/battle-cache.json ]; then
+            INPUTS+=("results/persistent/battle-cache.json")
+          fi
+          if [ "${#INPUTS[@]}" -gt 0 ]; then
+            CSV="$(IFS=,; echo "${INPUTS[*]}")"
+            node src/cli.mjs battle-cache-merge \
+              --inputs="$CSV" \
+              --output=results/resume/battle-cache-base.json
+          else
+            printf '%s\n' '{"schemaVersion":2,"namespace":"hgss-battle-cache-v2","entries":{}}' \
+              > results/resume/battle-cache-base.json
+          fi
+          jq '{namespace, entries:(.entries|length)}' results/resume/battle-cache-base.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-resume-input
+          path: |
+            hgss_story_sim/results/resume/checkpoint.json
+            hgss_story_sim/results/resume/battle-cache-base.json
+            hgss_story_sim/results/fingerprint.json
+          if-no-files-found: error
+
+  expand:
+    needs: hydrate
+    if: needs.hydrate.result == 'success' && env.RESUME_STAGE != 'final'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-${{ matrix.shard }}.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-resume-input
+          path: hgss_story_sim/results/input
+      - name: Seed shard cache
+        working-directory: hgss_story_sim
+        run: cp results/input/battle-cache-base.json "results/battle-cache-${{ matrix.shard }}.json"
+      - name: Resume expansion shard
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=${{ needs.hydrate.outputs.target_size }} \
+            --runs=2 --shard-count=3 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/resume-${RESUME_STAGE}-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-resume-${{ env.RESUME_STAGE }}-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/resume-${{ env.RESUME_STAGE }}-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: [hydrate, expand]
+    if: needs.hydrate.result == 'success' && needs.expand.result == 'success' && env.RESUME_STAGE != 'final'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-resume-input
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-resume-${{ env.RESUME_STAGE }}-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+
+      - name: Merge resumed shard caches
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          INPUTS="results/input/battle-cache-base.json,$(find results/shards -name 'battle-cache-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge \
+            --inputs="$INPUTS" \
+            --output=results/battle-cache-merged.json
+
+      - name: Merge resumed beam and adaptive race
+        working-directory: hgss_story_sim
+        shell: bash
+        run: |
+          SHARDS="$(find results/shards -name 'resume-*-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json \
+            --inputs="$SHARDS" \
+            --target-size=${{ needs.hydrate.outputs.target_size }} \
+            --runs=2 --beam-width=6 --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            $SEARCH_ARGS \
+            > results/checkpoint.json
+          jq '{stage,fingerprint,beam:[.beam[]|{teamKeys,routeExpectedRetryFailures}]}' results/checkpoint.json
+
+      - uses: actions/cache/save@v4
+        with:
+          path: hgss_story_sim/results/battle-cache-merged.json
+          key: hgss-battle-${{ needs.hydrate.outputs.fingerprint }}-${{ github.run_id }}-${{ env.RESUME_STAGE }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-resume-${{ env.RESUME_STAGE }}
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  final_after_beam6:
+    needs: [hydrate, merge]
+    if: >-
+      always() &&
+      needs.hydrate.result == 'success' &&
+      needs.merge.result == 'success' &&
+      env.RESUME_STAGE == 'beam6' &&
+      env.FINAL_AFTER_BEAM6 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/input/battle-cache-merged.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-resume-beam6
+          path: hgss_story_sim/results/input
+      - name: Final validation after resumed beam6
+        working-directory: hgss_story_sim
+        run: |
+          node src/cli.mjs route-exp-story-final-stage \
+            --input=results/input/checkpoint.json --final-runs=16 \
+            $SEARCH_ARGS \
+            > results/resumed-final.json
+          jq '{fingerprint,top:[.top[]|{team,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}],battleCache}' \
+            results/resumed-final.json
+      - uses: actions/cache/save@v4
+        with:
+          path: hgss_story_sim/results/input/battle-cache-merged.json
+          key: hgss-battle-${{ needs.hydrate.outputs.fingerprint }}-${{ github.run_id }}-final
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-resume-final
+          path: hgss_story_sim/results/resumed-final.json
+          if-no-files-found: error
+
+  final_only:
+    needs: hydrate
+    if: needs.hydrate.result == 'success' && env.RESUME_STAGE == 'final'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/input/battle-cache-base.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: hgss_story_sim
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-resume-input
+          path: hgss_story_sim/results/input
+      - name: Resume final validation
+        working-directory: hgss_story_sim
+        run: |
+          node src/cli.mjs route-exp-story-final-stage \
+            --input=results/input/checkpoint.json --final-runs=16 \
+            $SEARCH_ARGS \
+            > results/resumed-final.json
+      - uses: actions/cache/save@v4
+        with:
+          path: hgss_story_sim/results/input/battle-cache-base.json
+          key: hgss-battle-${{ needs.hydrate.outputs.fingerprint }}-${{ github.run_id }}-final-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staged-resume-final
+          path: hgss_story_sim/results/resumed-final.json
+          if-no-files-found: error
