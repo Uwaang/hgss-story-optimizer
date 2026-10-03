@@ -1,0 +1,61 @@
+name: complete-route-pareto-1000-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[complete-pareto-1000-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - id: N04
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1,Sneasel::Sneasel->Sneasel#1"
+          - id: NewComplete
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1,Misdreavus::Misdreavus->Misdreavus#1"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate complete route at 1000 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=1000 \
+            > "results/complete-${{ matrix.id }}-1000.json"
+      - name: Print critical bosses
+        run: |
+          jq '{
+            team: .team | map(.species),
+            finalTeam,
+            finalLevels,
+            critical: [.checkpoints[] | select(.boss=="Lance" or .boss=="Lance 2" or .boss=="Red" or .boss=="Clair") | {boss,wins: (.winRate*1000|round),winRate}],
+            allCheckpoints: [.checkpoints[] | {boss,winRate}]
+          }' "results/complete-${{ matrix.id }}-1000.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-pareto-${{ matrix.id }}-1000
+          path: hgss_story_sim/results/complete-${{ matrix.id }}-1000.json
+          if-no-files-found: error
