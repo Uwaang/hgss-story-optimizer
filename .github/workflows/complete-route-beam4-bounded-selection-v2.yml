@@ -1,0 +1,110 @@
+name: complete-route-beam4-bounded-selection-v2
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[beam4-bounded-selection-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-recovery-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37112225313
+          github-token: ${{ github.token }}
+      - name: Diagnose finite posterior-logit bounds
+        run: |
+          node <<'NODE'
+          const fs=require('fs'), path=require('path');
+          const parentDoc=JSON.parse(fs.readFileSync('results/input/parent-info.json','utf8'));
+          const files=fs.readdirSync('results/children').filter(x=>/^beam-5-shard-\d+\.json$/.test(x));
+          const map=new Map();
+          for(const f of files){
+            const d=JSON.parse(fs.readFileSync(path.join('results/children',f),'utf8'));
+            for(const r of d.expanded||[]) map.set([...r.teamKeys].sort().join('|'),r);
+          }
+          const children=[...map.values()];
+          if(children.length!==1150) throw new Error('expected 1150 children, got '+children.length);
+
+          const active=e=>(e?.rows||[]).filter(r=>!r?.skipped);
+          const pmean=r=>{
+            const w=Number(r?.wins||0),l=Number(r?.losses||0),t=Number(r?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const retry=e=>active(e).reduce((s,r)=>{const p=pmean(r);return s+(1-p)/p;},0);
+          const logit=x=>Math.log(x/(1-x));
+          const logistic=x=>1/(1+Math.exp(-x));
+          const logitBounds=(e,z=1.96)=>{
+            let optimistic=0,pessimistic=0;
+            for(const r of active(e)){
+              const w=Math.max(0,Number(r?.wins||0));
+              const l=Math.max(0,Number(r?.losses||0));
+              const t=Math.max(0,Number(r?.ties||0));
+              const a=w+1,b=l+t+1;
+              const m=a/(a+b);
+              const se=Math.sqrt(1/a+1/b);
+              const center=logit(m);
+              const pLow=logistic(center-z*se);
+              const pHigh=logistic(center+z*se);
+              optimistic+=(1-pHigh)/pHigh;
+              pessimistic+=(1-pLow)/pLow;
+            }
+            return {optimistic,pessimistic};
+          };
+
+          const rows=[];
+          const union=new Map();
+          for(const parent of parentDoc.parents){
+            const comp=children.filter(c=>parent.teamKeys.every(k=>c.teamKeys.includes(k)));
+            comp.sort((a,b)=>retry(a.evaluation)-retry(b.evaluation));
+            const best=comp[0];
+            const boundary=logitBounds(best.evaluation,1.96).pessimistic;
+            const sel=comp.filter(c=>logitBounds(c.evaluation,1.96).optimistic<=boundary+1e-12);
+            for(const r of sel) union.set([...r.teamKeys].sort().join('|'),r);
+            rows.push({
+              parentKey:parent.key,kind:parent.kind,
+              compatibleCount:comp.length,selectedCount:sel.length,
+              bestRetry:retry(best.evaluation),
+              bestBounds:logitBounds(best.evaluation,1.96),
+              boundary
+            });
+          }
+          const out={sourceChildren:children.length,selectedUniqueChildren:union.size,z:1.96,rows};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-bounded-selection-v2
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
