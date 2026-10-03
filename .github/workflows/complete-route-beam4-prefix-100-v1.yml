@@ -1,0 +1,84 @@
+name: complete-route-beam4-prefix-100-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[beam4-prefix-100-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 9
+      matrix:
+        include:
+          - id: N04-Sneasel
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Sneasel::Sneasel->Sneasel#1"
+          - id: N04-Rhyhorn
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Rhyhorn::Rhyhorn->Rhyperior#1"
+          - id: N04-Lapras
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Lapras::Lapras->Lapras#1"
+          - id: Beam4-Dragonair-Rhyperior
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Rhyhorn::Rhyhorn->Rhyperior#1"
+          - id: Beam4-Dragonair-Pupitar
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Larvitar::Pupitar->Tyranitar#1"
+          - id: Beam4-Dragonair-Misdreavus
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Misdreavus::Misdreavus->Misdreavus#1"
+          - id: Beam4-Kingler-Natu
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Krabby::Kingler->Kingler#1,Abra::Abra->Alakazam#1,Natu::Natu->Xatu#1"
+          - id: Beam4-Kingler-Sneasel
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Krabby::Kingler->Kingler#1,Abra::Abra->Alakazam#1,Sneasel::Sneasel->Sneasel#1"
+          - id: Beam4-Dragonair-Sneasel
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Sneasel::Sneasel->Sneasel#1"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate 4-member prefix at 100 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --allow-partial-team=true --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ matrix.team_keys }}" \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural --runs=100 \
+            > "results/prefix-${{ matrix.id }}.json"
+      - name: Summarize route risk
+        run: |
+          ID="${{ matrix.id }}" node <<'NODE'
+          const fs=require('fs');
+          const id=process.env.ID;
+          const p='results/prefix-'+id+'.json';
+          const d=JSON.parse(fs.readFileSync(p,'utf8'));
+          const runs=100;
+          const probs=d.checkpoints.map(cp => {
+            const wins=Math.round(Number(cp.winRate||0)*runs);
+            return (wins+1)/(runs+2);
+          });
+          const retry=probs.reduce((s,p)=>s+(1-p)/p,0);
+          const geometric=Math.exp(probs.reduce((s,p)=>s+Math.log(p),0)/probs.length);
+          const mean=d.checkpoints.reduce((s,cp)=>s+Number(cp.winRate||0),0)/d.checkpoints.length;
+          const summary={id,retry,geometric,mean,finalTeam:d.finalTeam,finalLevels:d.finalLevels};
+          fs.writeFileSync('results/summary-'+id+'.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-prefix-${{ matrix.id }}
+          path: |
+            hgss_story_sim/results/prefix-${{ matrix.id }}.json
+            hgss_story_sim/results/summary-${{ matrix.id }}.json
+          if-no-files-found: error
