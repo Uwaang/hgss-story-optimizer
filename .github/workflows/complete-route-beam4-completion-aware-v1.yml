@@ -1,0 +1,289 @@
+name: complete-route-beam4-completion-aware-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[beam4-completion-aware-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download original beam3 checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37049242398
+          github-token: ${{ github.token }}
+      - name: Download full 16-run beam4 shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: highsample-beam4-shard-*
+          path: hgss_story_sim/results/beam4
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37100257051
+          github-token: ${{ github.token }}
+      - name: Build targeted completion-aware parent checkpoint
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const base = JSON.parse(fs.readFileSync('results/input/checkpoint.json','utf8'));
+          const shardFiles = fs.readdirSync('results/beam4')
+            .filter(x => /^beam-4-shard-\d+\.json$/.test(x))
+            .sort();
+          if (shardFiles.length !== 6) throw new Error('expected 6 beam4 shard files');
+
+          const betaP = row => {
+            const w = Number(row?.wins || 0);
+            const l = Number(row?.losses || 0);
+            const t = Number(row?.ties || 0);
+            return (w + 1) / (w + l + t + 2);
+          };
+          const metrics = evaluation => {
+            const rows = (evaluation?.rows || []).filter(r => !r?.skipped);
+            const ps = rows.map(betaP);
+            const retry = ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric = ps.length
+              ? Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length)
+              : 0;
+            const runs = rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins = rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            const mean = runs ? wins/runs : 0;
+            return {retry, geometric, mean};
+          };
+          const cmp = (a,b) => {
+            const ma=metrics(a.evaluation), mb=metrics(b.evaluation);
+            return ma.retry-mb.retry ||
+              mb.geometric-ma.geometric ||
+              mb.mean-ma.mean ||
+              [...a.teamKeys].sort().join('|').localeCompare([...b.teamKeys].sort().join('|'));
+          };
+
+          const allMap = new Map();
+          for (const file of shardFiles) {
+            const doc = JSON.parse(fs.readFileSync(path.join('results/beam4',file),'utf8'));
+            for (const row of doc.expanded || []) {
+              const key=[...row.teamKeys].sort().join('|');
+              allMap.set(key,row);
+            }
+          }
+          const all=[...allMap.values()];
+          if (all.length < 700) throw new Error('unexpectedly small beam4 state count: '+all.length);
+
+          const n04 = new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1',
+            'Sneasel::Sneasel->Sneasel#1',
+          ]);
+          const n04Parents = all.filter(r => r.teamKeys.every(k => n04.has(k))).sort(cmp);
+          const top6 = all.slice().sort(cmp).slice(0,6);
+
+          const selectedMap = new Map();
+          for (const row of [...n04Parents, ...top6]) {
+            selectedMap.set([...row.teamKeys].sort().join('|'),row);
+          }
+          const selected=[...selectedMap.values()];
+
+          const parentInfo = selected.map(row => {
+            const key=[...row.teamKeys].sort().join('|');
+            const m=metrics(row.evaluation);
+            return {
+              key,
+              teamKeys: row.teamKeys,
+              kind: n04Parents.some(x => [...x.teamKeys].sort().join('|')===key)
+                ? (top6.some(x => [...x.teamKeys].sort().join('|')===key) ? 'n04+baseline' : 'n04')
+                : 'baseline',
+              currentMetrics:m,
+            };
+          });
+
+          const checkpoint={
+            ...base,
+            stage:'beam-4-completion-diagnostic',
+            beam:selected.map(row=>({teamKeys:row.teamKeys,evaluation:row.evaluation})),
+          };
+          fs.writeFileSync('results/diagnostic-checkpoint.json',JSON.stringify(checkpoint,null,2));
+          fs.writeFileSync('results/parent-info.json',JSON.stringify({
+            sourceRun:37100257051,
+            allBeam4States:all.length,
+            n04CompatibleParents:n04Parents.length,
+            baselineTopParents:top6.length,
+            selectedParents:selected.length,
+            parents:parentInfo,
+          },null,2));
+          console.log(JSON.stringify({
+            allBeam4States:all.length,
+            n04CompatibleParents:n04Parents.length,
+            baselineTopParents:top6.length,
+            selectedParents:selected.length,
+            parents:parentInfo,
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: |
+            hgss_story_sim/results/diagnostic-checkpoint.json
+            hgss_story_sim/results/parent-info.json
+          if-no-files-found: error
+
+  expand5:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/completion-cache-5-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+      - name: Expand selected beam4 parents to all legal 5-member children
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/diagnostic-checkpoint.json \
+            --target-size=5 --runs=4 \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/beam-5-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-completion-aware-child-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/beam-5-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: expand5
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+      - name: Rank parent prefixes by best 5-member completion
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path=require('path');
+          const parentDoc=JSON.parse(fs.readFileSync('results/input/parent-info.json','utf8'));
+          const files=fs.readdirSync('results/children')
+            .filter(x=>/^beam-5-shard-\d+\.json$/.test(x))
+            .sort();
+          if(files.length!==6) throw new Error('expected 6 child shard files');
+
+          const betaP=row=>{
+            const w=Number(row?.wins||0), l=Number(row?.losses||0), t=Number(row?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const metrics=evaluation=>{
+            const rows=(evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const ps=rows.map(betaP);
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins=rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            return {retry,geometric,mean:runs?wins/runs:0};
+          };
+          const compare=(a,b)=>a.metrics.retry-b.metrics.retry ||
+            b.metrics.geometric-a.metrics.geometric ||
+            b.metrics.mean-a.metrics.mean ||
+            a.key.localeCompare(b.key);
+
+          const childMap=new Map();
+          for(const file of files){
+            const doc=JSON.parse(fs.readFileSync(path.join('results/children',file),'utf8'));
+            for(const row of doc.expanded||[]){
+              const key=[...row.teamKeys].sort().join('|');
+              childMap.set(key,{key,teamKeys:row.teamKeys,evaluation:row.evaluation,metrics:metrics(row.evaluation)});
+            }
+          }
+          const children=[...childMap.values()];
+          const rows=parentDoc.parents.map(parent=>{
+            const pset=new Set(parent.teamKeys);
+            const compatible=children.filter(c=>parent.teamKeys.every(k=>c.teamKeys.includes(k)));
+            compatible.sort(compare);
+            const best=compatible[0]||null;
+            return {
+              ...parent,
+              childCount:compatible.length,
+              bestChild:best?{
+                key:best.key,
+                teamKeys:best.teamKeys,
+                addedKey:best.teamKeys.find(k=>!pset.has(k))||null,
+                metrics:best.metrics,
+              }:null,
+            };
+          });
+          rows.sort((a,b)=>{
+            if(!a.bestChild && !b.bestChild) return a.key.localeCompare(b.key);
+            if(!a.bestChild) return 1;
+            if(!b.bestChild) return -1;
+            return compare({key:a.key,metrics:a.bestChild.metrics},{key:b.key,metrics:b.bestChild.metrics});
+          });
+          rows.forEach((r,i)=>r.completionRank=i+1);
+
+          const n04Rows=rows.filter(r=>r.kind.startsWith('n04'));
+          const baselineRows=rows.filter(r=>r.kind.includes('baseline'));
+          const out={
+            sourceBeam4Run:37100257051,
+            childRuns:4,
+            parentCount:rows.length,
+            uniqueChildren:children.length,
+            bestN04:n04Rows[0]||null,
+            bestBaseline:baselineRows[0]||null,
+            n04RecoveredIntoTop6ByCompletion:n04Rows.some(r=>r.completionRank<=6),
+            rows,
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-completion-aware-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
