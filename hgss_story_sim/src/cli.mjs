@@ -3764,6 +3764,10 @@ async function cmdRouteExpStoryBeamMerge() {
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const adaptiveRuns = Math.max(runs, Math.floor(Number(arg('adaptive-runs', '4'))));
   const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
+  const adaptiveChallengerCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('adaptive-challenger-cap', String(beamWidth)))),
+  );
   if (!inputs.length) throw new Error('route-exp-story-beam-merge requires --inputs');
 
   const byKey = stagedCandidateMap(ctx);
@@ -3811,7 +3815,7 @@ async function cmdRouteExpStoryBeamMerge() {
           routeRiskExpectedRetryFailures(b.state.evaluation) ||
         stateTieKey(a.state).localeCompare(stateTieKey(b.state))
       )
-      .slice(0, beamWidth)
+      .slice(0, adaptiveChallengerCap)
       .map(row => row.state);
   }
 
@@ -3841,6 +3845,7 @@ async function cmdRouteExpStoryBeamMerge() {
       expandedCount: expanded.length,
       preliminaryCount: preliminaryBeam.length,
       challengerCount: challengers.length,
+      adaptiveChallengerCap,
       adaptivePoolCount: adaptivePool.length,
       selectedCount: beam.length,
       runs,
