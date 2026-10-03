@@ -1,0 +1,176 @@
+name: complete-route-beam5-to6-screen1-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  expand6_screen1:
+    if: contains(github.event.head_commit.message, '[beam5-to6-screen1-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam6-screen1-cache-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Download 16-run selected 5-member checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: complete-route-beam5-bayesian-rescore16-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37116988448
+          github-token: ${{ github.token }}
+      - name: Expand retained 5-member prefixes to 6-member teams at 1 run
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/selected5-16run-checkpoint.json \
+            --target-size=6 --runs=1 \
+            --shard-count=32 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/beam-6-screen1-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam5-to6-screen1-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/beam-6-screen1-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: expand6_screen1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: beam5-to6-screen1-shard-*
+          path: hgss_story_sim/results/six
+          merge-multiple: true
+      - name: Deduplicate and build conservative first-pass candidate set
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/six').filter(x=>/^beam-6-screen1-shard-\d+\.json$/.test(x)).sort();
+          if(files.length!==32) throw new Error('expected 32 shard files, got '+files.length);
+
+          const betaP=r=>{
+            const w=Number(r?.wins||0),l=Number(r?.losses||0),t=Number(r?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const metrics=e=>{
+            const rows=(e?.rows||[]).filter(r=>!r?.skipped);
+            const ps=rows.map(betaP);
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins=rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            return {retry,geometric,mean:runs?wins/runs:0};
+          };
+          const map=new Map();
+          for(const f of files){
+            const d=JSON.parse(fs.readFileSync(path.join('results/six',f),'utf8'));
+            for(const row of d.expanded||[]){
+              const key=[...row.teamKeys].sort().join('|');
+              map.set(key,{key,teamKeys:row.teamKeys,evaluation:row.evaluation,metrics:metrics(row.evaluation)});
+            }
+          }
+          const teams=[...map.values()];
+          const dominates=(a,b)=>
+            a.metrics.retry<=b.metrics.retry &&
+            a.metrics.geometric>=b.metrics.geometric &&
+            a.metrics.mean>=b.metrics.mean &&
+            (a.metrics.retry<b.metrics.retry || a.metrics.geometric>b.metrics.geometric || a.metrics.mean>b.metrics.mean);
+
+          const pareto=[];
+          for(let i=0;i<teams.length;i++){
+            let dom=false;
+            for(let j=0;j<teams.length && !dom;j++){
+              if(i!==j && dominates(teams[j],teams[i])) dom=true;
+            }
+            if(!dom) pareto.push(teams[i]);
+          }
+
+          // Conservative expansion around the Pareto front: retain any team within
+          // a loose margin of the best observed values so 1-run noise does not over-prune.
+          const bestRetry=Math.min(...teams.map(t=>t.metrics.retry));
+          const bestGeo=Math.max(...teams.map(t=>t.metrics.geometric));
+          const bestMean=Math.max(...teams.map(t=>t.metrics.mean));
+          const selectedMap=new Map();
+          for(const t of teams){
+            if(
+              pareto.some(p=>p.key===t.key) ||
+              t.metrics.retry <= bestRetry*1.50 + 1e-12 ||
+              t.metrics.geometric >= bestGeo*0.90 - 1e-12 ||
+              t.metrics.mean >= bestMean*0.90 - 1e-12
+            ) selectedMap.set(t.key,t);
+          }
+          const selected=[...selectedMap.values()];
+
+          const n04=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1',
+            'Sneasel::Sneasel->Sneasel#1'
+          ]);
+          const exactN04=teams.find(t=>t.teamKeys.length===6&&t.teamKeys.every(k=>n04.has(k)))||null;
+
+          const sort=(a,b)=>a.metrics.retry-b.metrics.retry ||
+            b.metrics.geometric-a.metrics.geometric ||
+            b.metrics.mean-a.metrics.mean ||
+            a.key.localeCompare(b.key);
+          teams.sort(sort); selected.sort(sort); pareto.sort(sort);
+
+          const checkpoint={
+            schemaVersion:1,
+            type:'route-beam-checkpoint',
+            stage:'beam-6-screen1-selected',
+            fingerprint:null,
+            config:null,
+            beam:selected.map(t=>({teamKeys:t.teamKeys,evaluation:t.evaluation}))
+          };
+          fs.writeFileSync('results/selected6-screen1-checkpoint.json',JSON.stringify(checkpoint,null,2));
+          const out={
+            completedTeams:teams.length,
+            paretoCount:pareto.length,
+            selectedCount:selected.length,
+            bestRetry,bestGeo,bestMean,
+            exactN04:exactN04?{teamKeys:exactN04.teamKeys,metrics:exactN04.metrics,selected:selectedMap.has(exactN04.key)}:null,
+            top50:teams.slice(0,50).map((t,i)=>({rank:i+1,teamKeys:t.teamKeys,metrics:t.metrics})),
+            pareto:pareto.slice(0,100).map(t=>({teamKeys:t.teamKeys,metrics:t.metrics}))
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam5-to6-screen1-v1
+          path: |
+            hgss_story_sim/results/selected6-screen1-checkpoint.json
+            hgss_story_sim/results/summary.json
+          if-no-files-found: error
