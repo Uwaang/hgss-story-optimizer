@@ -4712,12 +4712,22 @@ async function cmdRouteExpStoryEvaluate() {
   );
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const allowPartialTeam = arg('allow-partial-team', 'false') === 'true';
 
   if (expProfile === 'ace') {
     throw new Error('route-exp-story-evaluate requires a route EXP profile, not ace');
   }
-  if (teamKeys.length !== 6 && teamNames.length !== 6) {
-    throw new Error('route-exp-story-evaluate requires six --team species or six --team-keys');
+  const requestedTeamSize = teamKeys.length || teamNames.length;
+  if (
+    (!allowPartialTeam && requestedTeamSize !== 6) ||
+    (allowPartialTeam && (requestedTeamSize < 1 || requestedTeamSize > 6)) ||
+    (teamKeys.length && teamNames.length)
+  ) {
+    throw new Error(
+      allowPartialTeam
+        ? 'route-exp-story-evaluate requires 1..6 --team species or --team-keys in partial mode'
+        : 'route-exp-story-evaluate requires six --team species or six --team-keys'
+    );
   }
 
   const story = await loadStory(routeProfile);
@@ -4843,6 +4853,7 @@ async function cmdRouteExpStoryEvaluate() {
       resourceProfile,
       spendPolicy,
       playerAi: 'smart',
+      allowPartialTeam,
       routeGrindProxy,
       routeGrindProxyTarget,
       routeExpInterpretation: expProfile === 'normal-route'
