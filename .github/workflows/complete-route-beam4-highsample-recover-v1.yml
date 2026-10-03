@@ -1,0 +1,104 @@
+name: complete-route-beam4-highsample-recover-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    if: contains(github.event.head_commit.message, '[beam4-highsample-recover-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/recovery-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Download original beam3 checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37049242398
+          github-token: ${{ github.token }}
+      - name: Download completed 16-run beam4 shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: highsample-beam4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37100257051
+          github-token: ${{ github.token }}
+      - name: Merge 16-run evaluations without battle-cache merge
+        run: |
+          SHARDS="$(find results/shards -name 'beam-4-shard-*.json' -type f | sort | paste -sd, -)"
+          test "$(find results/shards -name 'beam-4-shard-*.json' -type f | wc -l)" -eq 6
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=4 --runs=16 \
+            --beam-width=6 --adaptive-runs=16 \
+            --adaptive-confidence-z=1.96 --adaptive-challenger-cap=6 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Diagnose N04 recall
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const cp=JSON.parse(fs.readFileSync('results/checkpoint.json','utf8'));
+          const target=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1',
+            'Sneasel::Sneasel->Sneasel#1',
+          ]);
+          const compat=(cp.beam||[]).filter(row=>row.teamKeys.every(k=>target.has(k)));
+          const out={
+            sourceRun:37100257051,
+            selectionRuns:16,
+            beamWidth:6,
+            beamCount:(cp.beam||[]).length,
+            n04CompatibleCount:compat.length,
+            n04Compatible:compat.map(r=>({
+              teamKeys:r.teamKeys,
+              retry:r.routeExpectedRetryFailures,
+              geometric:r.routeRiskGeometricScore,
+              mean:r.routeRiskMeanWinRate,
+            })),
+            top:(cp.beam||[]).map(r=>({
+              teamKeys:r.teamKeys,
+              retry:r.routeExpectedRetryFailures,
+              geometric:r.routeRiskGeometricScore,
+              mean:r.routeRiskMeanWinRate,
+            })),
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-highsample-recover-v1
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/summary.json
+          if-no-files-found: error
