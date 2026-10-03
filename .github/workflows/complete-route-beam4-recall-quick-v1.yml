@@ -1,0 +1,91 @@
+name: complete-route-beam4-recall-quick-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  beam4_recall_quick:
+    if: contains(github.event.head_commit.message, '[beam4-recall-quick-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: staged-beam3-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37049242398
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staged-beam4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37049242398
+          github-token: ${{ github.token }}
+      - name: Merge original beam4 caches
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-4-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/battle-cache-merged.json
+      - name: Quick rerace beam4
+        run: |
+          SHARDS="$(find results/shards -name 'beam-4-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=4 --runs=2 --beam-width=6 \
+            --adaptive-runs=8 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=40 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/checkpoint.json
+      - name: Diagnose N04-compatible prefixes
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = JSON.parse(fs.readFileSync('results/checkpoint.json','utf8'));
+          const target = new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1',
+            'Sneasel::Sneasel->Sneasel#1',
+          ]);
+          const compatible = (cp.beam || []).filter(row => row.teamKeys.every(key => target.has(key)));
+          const out = {
+            timing: cp.timings?.at(-1) || null,
+            beam: cp.beam || [],
+            n04CompatibleCount: compatible.length,
+            n04Compatible: compatible,
+          };
+          fs.writeFileSync('results/summary.json', JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-recall-quick-v1
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/summary.json
+          if-no-files-found: error
