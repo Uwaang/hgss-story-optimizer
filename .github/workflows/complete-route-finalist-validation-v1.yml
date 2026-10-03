@@ -1,0 +1,54 @@
+name: complete-route-finalist-validation-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[complete-finalist-100-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - id: Misdreavus
+            last_key: "Misdreavus::Misdreavus->Misdreavus#1"
+          - id: Natu
+            last_key: "Natu::Natu->Xatu#1"
+          - id: Sneasel
+            last_key: "Sneasel::Sneasel->Sneasel#1"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate finalist variant at 100 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1,${{ matrix.last_key }}" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --runs=100 \
+            > "results/finalist-${{ matrix.id }}-100.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-finalist-${{ matrix.id }}-100
+          path: hgss_story_sim/results/finalist-${{ matrix.id }}-100.json
+          if-no-files-found: error
