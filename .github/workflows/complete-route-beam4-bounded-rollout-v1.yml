@@ -1,0 +1,309 @@
+name: complete-route-beam4-bounded-rollout-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare5:
+    if: contains(github.event.head_commit.message, '[beam4-bounded-rollout-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download parent metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download successful original 5-member shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download recovered 5-member shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-recovery-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37112225313
+          github-token: ${{ github.token }}
+      - name: Select bound-overlapping 5-member prefixes per parent
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path=require('path');
+          const parentDoc=JSON.parse(fs.readFileSync('results/input/parent-info.json','utf8'));
+          const files=fs.readdirSync('results/children').filter(x=>/^beam-5-shard-\d+\.json$/.test(x)).sort();
+
+          const betaP=row=>{
+            const w=Number(row?.wins||0), l=Number(row?.losses||0), t=Number(row?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const retry=evaluation=>(evaluation?.rows||[]).filter(r=>!r?.skipped)
+            .reduce((s,r)=>{const p=betaP(r); return s+(1-p)/p;},0);
+          const geo=evaluation=>{
+            const ps=(evaluation?.rows||[]).filter(r=>!r?.skipped).map(betaP);
+            return ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+          };
+          const mean=evaluation=>{
+            const rows=(evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const runs=rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins=rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            return runs?wins/runs:0;
+          };
+          const bounds=(evaluation,z=1.96)=>{
+            let optimistic=0,pessimistic=0;
+            for(const row of (evaluation?.rows||[]).filter(r=>!r?.skipped)){
+              const w=Math.max(0,Number(row?.wins||0));
+              const l=Math.max(0,Number(row?.losses||0));
+              const t=Math.max(0,Number(row?.ties||0));
+              const a=w+1,b=l+t+1,total=a+b;
+              const m=a/total;
+              const variance=(a*b)/(total*total*(total+1));
+              const sd=Math.sqrt(Math.max(0,variance));
+              const pLow=Math.max(1e-6,m-z*sd);
+              const pHigh=Math.min(1-1e-6,m+z*sd);
+              optimistic+=(1-pHigh)/pHigh;
+              pessimistic+=(1-pLow)/pLow;
+            }
+            return {optimistic,pessimistic};
+          };
+
+          const childMap=new Map();
+          for(const file of files){
+            const doc=JSON.parse(fs.readFileSync(path.join('results/children',file),'utf8'));
+            for(const row of doc.expanded||[]){
+              const key=[...row.teamKeys].sort().join('|');
+              childMap.set(key,row);
+            }
+          }
+          const children=[...childMap.values()];
+          if(children.length!==1150) throw new Error('expected 1150 unique 5-member children, got '+children.length);
+
+          const selectedMap=new Map();
+          const parentSelections=[];
+          for(const parent of parentDoc.parents){
+            const compatible=children.filter(c=>parent.teamKeys.every(k=>c.teamKeys.includes(k)));
+            compatible.sort((a,b)=>retry(a.evaluation)-retry(b.evaluation) ||
+              geo(b.evaluation)-geo(a.evaluation) ||
+              mean(b.evaluation)-mean(a.evaluation));
+            if(!compatible.length) throw new Error('no children for parent '+parent.key);
+            const best=compatible[0];
+            const boundary=bounds(best.evaluation).pessimistic;
+            const selected=compatible.filter(c=>bounds(c.evaluation).optimistic<=boundary+1e-12);
+            for(const row of selected){
+              selectedMap.set([...row.teamKeys].sort().join('|'),row);
+            }
+            parentSelections.push({
+              parentKey:parent.key,
+              kind:parent.kind,
+              compatibleCount:compatible.length,
+              selectedCount:selected.length,
+              best:{
+                teamKeys:best.teamKeys,
+                retry:retry(best.evaluation),
+                geometric:geo(best.evaluation),
+                mean:mean(best.evaluation),
+                bounds:bounds(best.evaluation),
+              },
+              boundary,
+            });
+          }
+
+          const selected=[...selectedMap.values()];
+          const base=JSON.parse(fs.readFileSync('results/input/diagnostic-checkpoint.json','utf8'));
+          const checkpoint={
+            ...base,
+            stage:'beam-5-bounded-rollout',
+            beam:selected.map(row=>({teamKeys:row.teamKeys,evaluation:row.evaluation})),
+          };
+          fs.writeFileSync('results/beam5-selected-checkpoint.json',JSON.stringify(checkpoint,null,2));
+          fs.writeFileSync('results/prepare-summary.json',JSON.stringify({
+            sourceChildren:children.length,
+            selectedUniqueChildren:selected.length,
+            parentSelections,
+          },null,2));
+          console.log(JSON.stringify({
+            sourceChildren:children.length,
+            selectedUniqueChildren:selected.length,
+            parentSelections,
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-bounded-rollout-selected5-v1
+          path: |
+            hgss_story_sim/results/beam5-selected-checkpoint.json
+            hgss_story_sim/results/prepare-summary.json
+          if-no-files-found: error
+
+  expand6:
+    needs: prepare5
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/bounded-rollout-cache-6-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-bounded-rollout-selected5-v1
+          path: hgss_story_sim/results/input
+      - name: Expand selected 5-member prefixes to legal 6-member teams
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/beam5-selected-checkpoint.json \
+            --target-size=6 --runs=4 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/beam-6-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-bounded-rollout-six-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/beam-6-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: expand6
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/parents
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-bounded-rollout-selected5-v1
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-bounded-rollout-six-shard-*
+          path: hgss_story_sim/results/six
+          merge-multiple: true
+      - name: Rank completed 6-member teams and trace parent completion
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path=require('path');
+          const parentDoc=JSON.parse(fs.readFileSync('results/parents/parent-info.json','utf8'));
+          const prep=JSON.parse(fs.readFileSync('results/input/prepare-summary.json','utf8'));
+          const files=fs.readdirSync('results/six').filter(x=>/^beam-6-shard-\d+\.json$/.test(x)).sort();
+          if(files.length!==12) throw new Error('expected 12 six-member shard files');
+
+          const betaP=row=>{
+            const w=Number(row?.wins||0),l=Number(row?.losses||0),t=Number(row?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const metrics=evaluation=>{
+            const rows=(evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const ps=rows.map(betaP);
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins=rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            return {retry,geometric,mean:runs?wins/runs:0};
+          };
+          const cmp=(a,b)=>a.metrics.retry-b.metrics.retry ||
+            b.metrics.geometric-a.metrics.geometric ||
+            b.metrics.mean-a.metrics.mean ||
+            a.key.localeCompare(b.key);
+
+          const teamMap=new Map();
+          for(const file of files){
+            const doc=JSON.parse(fs.readFileSync(path.join('results/six',file),'utf8'));
+            for(const row of doc.expanded||[]){
+              const key=[...row.teamKeys].sort().join('|');
+              teamMap.set(key,{key,teamKeys:row.teamKeys,evaluation:row.evaluation,metrics:metrics(row.evaluation)});
+            }
+          }
+          const teams=[...teamMap.values()].sort(cmp);
+
+          const exactN04Set=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1',
+            'Sneasel::Sneasel->Sneasel#1',
+          ]);
+          const exactN04=teams.find(t=>t.teamKeys.length===6 && t.teamKeys.every(k=>exactN04Set.has(k)))||null;
+
+          const parentRows=parentDoc.parents.map(parent=>{
+            const compatible=teams.filter(t=>parent.teamKeys.every(k=>t.teamKeys.includes(k))).sort(cmp);
+            return {
+              parentKey:parent.key,
+              kind:parent.kind,
+              teamKeys:parent.teamKeys,
+              completedCount:compatible.length,
+              bestCompletion:compatible[0]||null,
+            };
+          }).sort((a,b)=>{
+            if(!a.bestCompletion&&!b.bestCompletion) return a.parentKey.localeCompare(b.parentKey);
+            if(!a.bestCompletion) return 1;
+            if(!b.bestCompletion) return -1;
+            return cmp(a.bestCompletion,b.bestCompletion);
+          });
+          parentRows.forEach((r,i)=>r.completionRank=i+1);
+
+          const top=teams.slice(0,20).map((t,i)=>({rank:i+1,teamKeys:t.teamKeys,metrics:t.metrics}));
+          const exactN04Rank=exactN04 ? teams.findIndex(t=>t.key===exactN04.key)+1 : null;
+          const out={
+            childRuns:4,
+            selectedFiveMemberPrefixes:prep.selectedUniqueChildren,
+            completedSixMemberTeams:teams.length,
+            exactN04:exactN04?{rank:exactN04Rank,teamKeys:exactN04.teamKeys,metrics:exactN04.metrics}:null,
+            bestN04Parent:parentRows.find(r=>r.kind.startsWith('n04'))||null,
+            bestBaselineParent:parentRows.find(r=>r.kind.includes('baseline'))||null,
+            parentRows,
+            top,
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-bounded-rollout-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
