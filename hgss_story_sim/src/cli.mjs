@@ -3723,6 +3723,49 @@ async function cmdRouteExpStoryBeamShard() {
   }, null, 2));
 }
 
+
+async function cmdRouteExpStoryRescoreShard() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '16'))));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const shardIndex = Math.max(0, Math.floor(Number(arg('shard-index', '0'))));
+  if (shardIndex >= shardCount) throw new Error('shard-index must be < shard-count');
+
+  const byKey = stagedCandidateMap(ctx);
+  const sourceRows = checkpoint.beam || [];
+  if (!sourceRows.length) throw new Error('rescore checkpoint beam is empty');
+
+  const rescored = [];
+  for (const row of sourceRows) {
+    const team = stagedTeamFromKeys(row.teamKeys, byKey);
+    const teamKey = team.map(candidateIdentity).sort().join('|');
+    if (stagedShardIndex(teamKey, shardCount) !== shardIndex) continue;
+    const evaluation = await stagedEvaluateTeam(ctx, team, runs);
+    rescored.push({
+      teamKeys: row.teamKeys,
+      evaluation,
+    });
+  }
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-rescore-shard',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+    runs,
+    shardCount,
+    shardIndex,
+    rescoredCount: rescored.length,
+    wallMs: Date.now() - startedAt,
+    battleCache: battleCacheStats(),
+    rescored,
+  }, null, 2));
+}
+
 async function cmdBattleCacheMerge() {
   const inputs = stagedInputPaths(arg('inputs', ''));
   const output = String(arg('output', 'results/battle-cache-merged.json'));
@@ -11529,6 +11572,7 @@ const commands = {
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
+  'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
   'route-exp-story-final-stage': cmdRouteExpStoryFinalStage,
   'battle-cache-merge': cmdBattleCacheMerge,
