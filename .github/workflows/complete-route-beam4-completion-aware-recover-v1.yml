@@ -1,0 +1,203 @@
+name: complete-route-beam4-completion-aware-recover-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover_expand5:
+    if: contains(github.event.head_commit.message, '[beam4-completion-aware-recover-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1,2,4,7,8,10]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/completion-recovery-cache-5-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Download parent checkpoint from original diagnostic run
+        uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Recompute only missing old shards, split into 12-way residues
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/diagnostic-checkpoint.json \
+            --target-size=5 --runs=4 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/beam-5-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam4-completion-aware-recovery-child-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/beam-5-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: recover_expand5
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download parent metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download successful original child shards 0/3/5
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download recovered split child shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-recovery-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+      - name: Verify residue coverage and rank parent prefixes
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const path=require('path');
+          const crypto=require('crypto');
+          const parentDoc=JSON.parse(fs.readFileSync('results/input/parent-info.json','utf8'));
+          const files=fs.readdirSync('results/children')
+            .filter(x=>/^beam-5-shard-\d+\.json$/.test(x))
+            .sort();
+
+          const expectedFileSet=new Set([
+            'beam-5-shard-0.json','beam-5-shard-3.json','beam-5-shard-5.json',
+            'beam-5-shard-1.json','beam-5-shard-7.json',
+            'beam-5-shard-2.json','beam-5-shard-8.json',
+            'beam-5-shard-4.json','beam-5-shard-10.json',
+          ]);
+          for(const f of expectedFileSet){
+            if(!files.includes(f)) throw new Error('missing child shard file: '+f);
+          }
+
+          const betaP=row=>{
+            const w=Number(row?.wins||0), l=Number(row?.losses||0), t=Number(row?.ties||0);
+            return (w+1)/(w+l+t+2);
+          };
+          const metrics=evaluation=>{
+            const rows=(evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const ps=rows.map(betaP);
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=rows.reduce((s,r)=>s+Number(r?.runs||0),0);
+            const wins=rows.reduce((s,r)=>s+Number(r?.wins||0),0);
+            return {retry,geometric,mean:runs?wins/runs:0};
+          };
+          const compare=(a,b)=>a.metrics.retry-b.metrics.retry ||
+            b.metrics.geometric-a.metrics.geometric ||
+            b.metrics.mean-a.metrics.mean ||
+            a.key.localeCompare(b.key);
+
+          const childMap=new Map();
+          const sourceCounts={};
+          for(const file of files){
+            if(!expectedFileSet.has(file)) continue;
+            const doc=JSON.parse(fs.readFileSync(path.join('results/children',file),'utf8'));
+            sourceCounts[file]=(doc.expanded||[]).length;
+            for(const row of doc.expanded||[]){
+              const key=[...row.teamKeys].sort().join('|');
+              childMap.set(key,{key,teamKeys:row.teamKeys,evaluation:row.evaluation,metrics:metrics(row.evaluation)});
+            }
+          }
+          const children=[...childMap.values()];
+
+          // Verify every recovered 12-way residue maps back to one of the old failed 6-way residues 1/2/4.
+          for(const child of children){
+            const digest=crypto.createHash('sha256').update(child.key).digest('hex').slice(0,12);
+            const n=Number.parseInt(digest,16);
+            const r6=n%6, r12=n%12;
+            if([0,3,5].includes(r6)){
+              if(r12!==r6 && r12!==r6+6) throw new Error('unexpected successful-residue mapping');
+            } else if([1,2,4].includes(r6)){
+              if(![1,7,2,8,4,10].includes(r12)) throw new Error('unexpected recovery-residue mapping');
+            } else {
+              throw new Error('unexpected mod6 residue '+r6);
+            }
+          }
+
+          const rows=parentDoc.parents.map(parent=>{
+            const pset=new Set(parent.teamKeys);
+            const compatible=children.filter(c=>parent.teamKeys.every(k=>c.teamKeys.includes(k)));
+            compatible.sort(compare);
+            const best=compatible[0]||null;
+            return {
+              ...parent,
+              childCount:compatible.length,
+              bestChild:best?{
+                key:best.key,
+                teamKeys:best.teamKeys,
+                addedKey:best.teamKeys.find(k=>!pset.has(k))||null,
+                metrics:best.metrics,
+              }:null,
+            };
+          });
+          rows.sort((a,b)=>{
+            if(!a.bestChild&&!b.bestChild) return a.key.localeCompare(b.key);
+            if(!a.bestChild) return 1;
+            if(!b.bestChild) return -1;
+            return compare({key:a.key,metrics:a.bestChild.metrics},{key:b.key,metrics:b.bestChild.metrics});
+          });
+          rows.forEach((r,i)=>r.completionRank=i+1);
+
+          const n04Rows=rows.filter(r=>r.kind.startsWith('n04'));
+          const baselineRows=rows.filter(r=>r.kind.includes('baseline'));
+          const out={
+            sourceRun:37106088087,
+            recoveryMode:'reuse old mod6 residues 0/3/5 + split failed residues 1/2/4 into mod12 pairs',
+            childRuns:4,
+            parentCount:rows.length,
+            uniqueChildren:children.length,
+            sourceCounts,
+            bestN04:n04Rows[0]||null,
+            bestBaseline:baselineRows[0]||null,
+            n04RecoveredIntoTop6ByCompletion:n04Rows.some(r=>r.completionRank<=6),
+            n04Ranks:n04Rows.map(r=>({rank:r.completionRank,teamKeys:r.teamKeys,bestChild:r.bestChild})),
+            rows,
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-beam4-completion-aware-recover-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
