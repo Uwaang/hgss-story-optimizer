@@ -1,0 +1,412 @@
+name: grind-aware-coordinate-search-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[grind-aware-coordinate-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build historical Pareto one-slot neighborhood
+        run: |
+          mkdir -p results
+          node <<'NODE'
+          const fs=require('fs');
+
+          const C='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const K={
+            Golem:'Geodude::Geodude->Golem#1',
+            Slowbro:'Slowpoke::Slowpoke->Slowbro#1',
+            Forretress:'Pineco::Pineco->Forretress#1',
+            Ampharos:'Mareep::Mareep->Ampharos#1',
+            Rhyperior:'Rhyhorn::Rhyhorn->Rhyperior#1',
+            Magneton:'Magnemite::Magnemite->Magneton#1',
+            Alakazam:'Abra::Abra->Alakazam#1',
+            Quagsire:'Wooper::Quagsire->Quagsire#1',
+            Gyarados:'Magikarp::Magikarp->Gyarados#1',
+            Gengar:'Gastly::Gastly->Gengar#1',
+            Tyranitar:'Larvitar::Pupitar->Tyranitar#1',
+            Lapras:'Lapras::Lapras->Lapras#1',
+            Lanturn:'Chinchou::Lanturn->Lanturn#1',
+            Kingdra:'Horsea::Horsea->Kingdra#1',
+            Sneasel:'Sneasel::Sneasel->Sneasel#1',
+          };
+          const seeds={
+            A:[C,K.Golem,K.Slowbro,K.Forretress,K.Ampharos,K.Rhyperior],
+            B:[C,K.Magneton,K.Golem,K.Alakazam,K.Quagsire,K.Rhyperior],
+            D:[C,K.Magneton,K.Gyarados,K.Gengar,K.Rhyperior,K.Tyranitar],
+            N03:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Kingdra],
+            N04:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Sneasel],
+          };
+          const pool=[...new Set(Object.values(seeds).flat().filter(x=>x!==C))].sort();
+          const map=new Map();
+          const teamKey=t=>[...t].sort().join('|');
+          const add=(team,source)=>{
+            const k=teamKey(team);
+            if(!map.has(k)) map.set(k,{teamKeys:team,sources:[]});
+            map.get(k).sources.push(source);
+          };
+          for(const [seedName,seed] of Object.entries(seeds)){
+            add(seed,'seed:'+seedName);
+            for(let slot=1;slot<seed.length;slot++){
+              for(const replacement of pool){
+                if(seed.includes(replacement)) continue;
+                const team=[...seed];
+                const removed=team[slot];
+                team[slot]=replacement;
+                add(team,'replace:'+seedName+':'+removed+'->'+replacement);
+              }
+            }
+          }
+          const candidates=[...map.values()]
+            .sort((a,b)=>teamKey(a.teamKeys).localeCompare(teamKey(b.teamKeys)))
+            .map((x,i)=>({...x,index:i}));
+          if(candidates.length!==240) throw new Error('expected 240 unique teams, got '+candidates.length);
+          const out={
+            schemaVersion:1,
+            purpose:'historical practical-grind Pareto one-slot coordinate neighborhood',
+            seeds,
+            replacementPool:pool,
+            candidateCount:candidates.length,
+            candidates,
+          };
+          fs.writeFileSync('results/candidates.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({candidateCount:candidates.length,replacementPool:pool},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-coordinate-v1-input
+          path: hgss_story_sim/results/candidates.json
+          if-no-files-found: error
+
+  screen:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: grind-aware-coordinate-v1-input
+          path: hgss_story_sim/results/input
+      - name: Low-sample direct practical-grind screen
+        run: |
+          mkdir -p results/screen
+          node - "${{ matrix.shard }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const shard=Number(process.argv[2]), shardCount=32;
+          const input=JSON.parse(fs.readFileSync('results/input/candidates.json','utf8'));
+          const allocators=['boss-aware-soft','boss-aware-saturation','balanced'];
+          const assigned=input.candidates.filter(x=>x.index%shardCount===shard);
+          const rows=[];
+          let failures=0;
+          for(const candidate of assigned){
+            for(const allocator of allocators){
+              const args=[
+                'src/cli.mjs','route-exp-practical-grind',
+                '--version=HEARTGOLD','--starter=Cyndaquil',
+                '--evolution-policy=trade-aware',
+                '--team-keys='+candidate.teamKeys.join(','),
+                '--exp-profile=normal-route','--exp-allocator='+allocator,
+                '--entry-level=expected','--same-stage-join=map-order',
+                '--resources=all','--spend-policy=natural',
+                '--story-targets=0.5','--red-targets=0.25,0.5',
+                '--screen-runs=1','--verify-runs=4','--repair-runs=8','--final-runs=16',
+                '--max-repair-rounds=10',
+              ];
+              const p=cp.spawnSync(process.execPath,args,{
+                cwd:process.cwd(),encoding:'utf8',
+                env:process.env,maxBuffer:32*1024*1024,timeout:20*60*1000
+              });
+              if(p.status!==0){
+                failures++;
+                rows.push({
+                  index:candidate.index,teamKeys:candidate.teamKeys,sources:candidate.sources,
+                  allocator,error:(p.stderr||p.stdout||'unknown failure').slice(-4000)
+                });
+                continue;
+              }
+              let d;
+              try{d=JSON.parse(p.stdout);}catch(e){
+                failures++;
+                rows.push({index:candidate.index,teamKeys:candidate.teamKeys,sources:candidate.sources,allocator,error:'JSON parse: '+e.message});
+                continue;
+              }
+              const s=d.storyFrontier?.[0]||null;
+              const r25=s?.redFrontier?.find(x=>Math.abs(Number(x.targetWinRate)-0.25)<1e-9)||null;
+              const r50=s?.redFrontier?.find(x=>Math.abs(Number(x.targetWinRate)-0.5)<1e-9)||null;
+              rows.push({
+                index:candidate.index,teamKeys:candidate.teamKeys,sources:candidate.sources,allocator,
+                repairConverged:Boolean(s?.repairConverged),
+                storyGrindBattles:Number(s?.storyGrindBattles??Infinity),
+                storyGrindExp:Number(s?.storyGrindExp??Infinity),
+                storyWorstBossWinRate:Number(s?.storyWorstBossWinRate??0),
+                redBaselineWinRate:Number(s?.redBaseline?.winRate??0),
+                red25:r25?{
+                  totalGrindBattles:Number(r25.totalGrindBattles),
+                  additionalRedGrindBattles:Number(r25.additionalRedGrindBattles),
+                  achievedWinRate:Number(r25.achievedWinRate)
+                }:null,
+                red50:r50?{
+                  totalGrindBattles:Number(r50.totalGrindBattles),
+                  additionalRedGrindBattles:Number(r50.additionalRedGrindBattles),
+                  achievedWinRate:Number(r50.achievedWinRate)
+                }:null,
+              });
+            }
+          }
+          fs.writeFileSync('results/screen/shard-'+shard+'.json',JSON.stringify({shard,assignedTeams:assigned.length,rows},null,2));
+          console.log(JSON.stringify({shard,assignedTeams:assigned.length,stateCount:rows.length,failures}));
+          if(failures) process.exitCode=1;
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grind-aware-coordinate-v1-screen-${{ matrix.shard }}
+          path: hgss_story_sim/results/screen/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select:
+    needs: screen
+    if: always() && needs.screen.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: grind-aware-coordinate-v1-screen-*
+          path: hgss_story_sim/results/screens
+          merge-multiple: true
+      - name: Select low-sample grind Pareto + historical controls
+        run: |
+          mkdir -p results/select
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/screens').filter(x=>/^shard-\d+\.json$/.test(x));
+          if(files.length!==32) throw new Error('expected 32 screen files, got '+files.length);
+          const rows=files.flatMap(f=>JSON.parse(fs.readFileSync(path.join('results/screens',f),'utf8')).rows||[]);
+          if(rows.length!==720) throw new Error('expected 720 states, got '+rows.length);
+          const failed=rows.filter(r=>r.error);
+          if(failed.length) throw new Error('screen failures: '+failed.length+' first='+JSON.stringify(failed[0]));
+
+          const feasible=rows.filter(r=>
+            r.repairConverged &&
+            r.red25 && r.red50 &&
+            Number(r.red25.achievedWinRate)>=0.25 &&
+            Number(r.red50.achievedWinRate)>=0.5
+          );
+          const dominates=(a,b)=>{
+            const av=[a.storyGrindBattles,a.red25.totalGrindBattles,a.red50.totalGrindBattles];
+            const bv=[b.storyGrindBattles,b.red25.totalGrindBattles,b.red50.totalGrindBattles];
+            return av.every((x,i)=>x<=bv[i]) && av.some((x,i)=>x<bv[i]);
+          };
+          const pareto=feasible.filter((b,i)=>!feasible.some((a,j)=>i!==j&&dominates(a,b)));
+
+          const controlNames=new Set(['seed:A','seed:B','seed:D','seed:N03','seed:N04']);
+          const controls=rows.filter(r=>r.sources?.some(s=>controlNames.has(s)));
+          const key=r=>[...r.teamKeys].sort().join('|')+'@@'+r.allocator;
+          const selectedMap=new Map();
+          for(const r of [...pareto,...controls]) selectedMap.set(key(r),r);
+          const selected=[...selectedMap.values()].sort((a,b)=>
+            a.storyGrindBattles-b.storyGrindBattles ||
+            a.red50.totalGrindBattles-b.red50.totalGrindBattles ||
+            key(a).localeCompare(key(b))
+          );
+          if(selected.length>64) throw new Error('low-sample frontier/control set unexpectedly large: '+selected.length);
+
+          const summary={
+            schemaVersion:1,
+            totalStates:rows.length,
+            feasibleStates:feasible.length,
+            paretoStates:pareto.length,
+            selectedStates:selected.length,
+            lowSamplePareto:pareto,
+            selected
+          };
+          fs.writeFileSync('results/select/selected.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            totalStates:rows.length,feasibleStates:feasible.length,
+            paretoStates:pareto.length,selectedStates:selected.length,
+            pareto:pareto.map(r=>({
+              sources:r.sources,allocator:r.allocator,
+              story:r.storyGrindBattles,red25:r.red25.totalGrindBattles,red50:r.red50.totalGrindBattles
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-coordinate-v1-selected
+          path: hgss_story_sim/results/select/selected.json
+          if-no-files-found: error
+
+  validate:
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: grind-aware-coordinate-v1-selected
+          path: hgss_story_sim/results/input
+      - name: High-sample practical-grind validation
+        run: |
+          mkdir -p results/validate/full
+          node - "${{ matrix.shard }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const shard=Number(process.argv[2]), shardCount=16;
+          const input=JSON.parse(fs.readFileSync('results/input/selected.json','utf8'));
+          const assigned=input.selected.filter((_,i)=>i%shardCount===shard);
+          const rows=[]; let failures=0;
+          for(let i=0;i<assigned.length;i++){
+            const state=assigned[i];
+            const args=[
+              'src/cli.mjs','route-exp-practical-grind',
+              '--version=HEARTGOLD','--starter=Cyndaquil',
+              '--evolution-policy=trade-aware',
+              '--team-keys='+state.teamKeys.join(','),
+              '--exp-profile=normal-route','--exp-allocator='+state.allocator,
+              '--entry-level=expected','--same-stage-join=map-order',
+              '--resources=all','--spend-policy=natural',
+              '--story-targets=0.5','--red-targets=0.25,0.5',
+              '--screen-runs=4','--verify-runs=32','--repair-runs=64','--final-runs=128',
+              '--max-repair-rounds=24',
+            ];
+            const p=cp.spawnSync(process.execPath,args,{
+              cwd:process.cwd(),encoding:'utf8',
+              env:process.env,maxBuffer:64*1024*1024,timeout:120*60*1000
+            });
+            const tag='state-'+shard+'-'+i;
+            if(p.status!==0){
+              failures++;
+              rows.push({...state,error:(p.stderr||p.stdout||'unknown failure').slice(-4000)});
+              continue;
+            }
+            let d;
+            try{d=JSON.parse(p.stdout);}catch(e){
+              failures++; rows.push({...state,error:'JSON parse: '+e.message}); continue;
+            }
+            fs.writeFileSync('results/validate/full/'+tag+'.json',JSON.stringify(d,null,2));
+            const s=d.storyFrontier?.[0]||null;
+            const r25=s?.redFrontier?.find(x=>Math.abs(Number(x.targetWinRate)-0.25)<1e-9)||null;
+            const r50=s?.redFrontier?.find(x=>Math.abs(Number(x.targetWinRate)-0.5)<1e-9)||null;
+            rows.push({
+              teamKeys:state.teamKeys,sources:state.sources,allocator:state.allocator,
+              repairConverged:Boolean(s?.repairConverged),
+              storyGrindBattles:Number(s?.storyGrindBattles??Infinity),
+              storyGrindExp:Number(s?.storyGrindExp??Infinity),
+              storyWorstBossWinRate:Number(s?.storyWorstBossWinRate??0),
+              redBaselineWinRate:Number(s?.redBaseline?.winRate??0),
+              red25:r25?{totalGrindBattles:Number(r25.totalGrindBattles),additionalRedGrindBattles:Number(r25.additionalRedGrindBattles),achievedWinRate:Number(r25.achievedWinRate),finalLevels:r25.finalLevels}:null,
+              red50:r50?{totalGrindBattles:Number(r50.totalGrindBattles),additionalRedGrindBattles:Number(r50.additionalRedGrindBattles),achievedWinRate:Number(r50.achievedWinRate),finalLevels:r50.finalLevels}:null,
+              storyPlan:s?.storyPlan||{}
+            });
+          }
+          fs.writeFileSync('results/validate/shard-'+shard+'.json',JSON.stringify({shard,rows},null,2));
+          console.log(JSON.stringify({shard,states:assigned.length,failures}));
+          if(failures) process.exitCode=1;
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grind-aware-coordinate-v1-validate-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/validate/shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/validate/full/*.json
+          if-no-files-found: warn
+
+  summarize:
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: grind-aware-coordinate-v1-validate-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Build validated grind-aware Pareto
+        run: |
+          mkdir -p results/final
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/all').filter(x=>/^shard-\d+\.json$/.test(x));
+          if(files.length!==16) throw new Error('expected 16 validation shard summaries, got '+files.length);
+          const rows=files.flatMap(f=>JSON.parse(fs.readFileSync(path.join('results/all',f),'utf8')).rows||[]);
+          const failed=rows.filter(r=>r.error);
+          if(failed.length) throw new Error('validation failures: '+failed.length);
+          const feasible=rows.filter(r=>
+            r.repairConverged && r.red25 && r.red50 &&
+            r.red25.achievedWinRate>=0.25 && r.red50.achievedWinRate>=0.5
+          );
+          const dominates=(a,b)=>{
+            const av=[a.storyGrindBattles,a.red25.totalGrindBattles,a.red50.totalGrindBattles];
+            const bv=[b.storyGrindBattles,b.red25.totalGrindBattles,b.red50.totalGrindBattles];
+            return av.every((x,i)=>x<=bv[i]) && av.some((x,i)=>x<bv[i]);
+          };
+          const pareto=feasible.filter((b,i)=>!feasible.some((a,j)=>i!==j&&dominates(a,b)))
+            .sort((a,b)=>a.storyGrindBattles-b.storyGrindBattles||a.red50.totalGrindBattles-b.red50.totalGrindBattles);
+          const out={
+            schemaVersion:1,
+            purpose:'validated grind-aware one-slot coordinate search around historical practical-grind Pareto seeds',
+            dimensions:['storyGrindBattles','red25TotalGrindBattles','red50TotalGrindBattles'],
+            validatedStates:rows.length,
+            feasibleStates:feasible.length,
+            pareto
+          };
+          fs.writeFileSync('results/final/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-coordinate-search-v1
+          path: hgss_story_sim/results/final/summary.json
+          if-no-files-found: error
