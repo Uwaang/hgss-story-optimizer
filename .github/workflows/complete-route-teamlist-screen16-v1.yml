@@ -1,0 +1,218 @@
+name: complete-route-teamlist-screen16-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[teamlist-screen16-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen4-input-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37192799510
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37192799510
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/parents
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Build 60-percent posterior occupancy credible set plus controls
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const cp=JSON.parse(fs.readFileSync('results/input/screen4-checkpoint.json','utf8'));
+          const parentDoc=JSON.parse(fs.readFileSync('results/parents/parent-info.json','utf8'));
+          const files=fs.readdirSync('results/shards').filter(x=>/^compact-\d+\.json$/.test(x));
+          const key=r=>[...r.teamKeys].sort().join('|');
+          const map=new Map();
+          for(const f of files){const d=JSON.parse(fs.readFileSync(path.join('results/shards',f),'utf8'));for(const r of d.rows||[])map.set(key(r),r);}
+          const teams=[...map.values()];
+          if(teams.length!==2335) throw new Error('expected 2335 teams');
+
+          function mulberry32(seed){return function(){let t=seed+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
+          function normal(rng){let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+          function gamma(shape,rng){if(shape<1)return gamma(shape+1,rng)*Math.pow(Math.max(rng(),1e-15),1/shape);const d=shape-1/3,c=1/Math.sqrt(9*d);for(;;){let x,v;do{x=normal(rng);v=1+c*x;}while(v<=0);v=v*v*v;const u=rng();if(u<1-0.0331*x*x*x*x)return d*v;if(Math.log(u)<0.5*x*x+d*(1-v+Math.log(v)))return d*v;}}
+          function beta(a,b,rng){const x=gamma(a,rng),y=gamma(b,rng);return x/(x+y);}
+          const params=teams.map(t=>(t.bosses||[]).map(r=>[Number(r.wins||0)+1,Number(r.losses||0)+Number(r.ties||0)+1]));
+          const draws=1024,topK=Math.ceil(teams.length*0.10),occ=new Uint32Array(teams.length),rng=mulberry32(0x4B415954),risks=new Array(teams.length);
+          for(let d=0;d<draws;d++){for(let i=0;i<teams.length;i++){let risk=0;for(const [a,b] of params[i]){const p=Math.max(1e-9,beta(a,b,rng));risk+=(1-p)/p;}risks[i]=[risk,i];}risks.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);for(let j=0;j<topK;j++)occ[risks[j][1]]++;}
+          const ranked=teams.map((t,i)=>({team:t,key:key(t),occ:Number(occ[i]),prob:Number(occ[i])/draws}))
+            .sort((a,b)=>b.occ-a.occ||a.key.localeCompare(b.key));
+          const totalMass=draws*topK,target=0.60*totalMass;
+          let cumulative=0; const selected=[];
+          for(const x of ranked){if(cumulative>=target&&selected.length)break;selected.push(x);cumulative+=x.occ;}
+          const selectedMap=new Map(selected.map(x=>[x.key,x]));
+
+          const n04Set=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1','Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1','Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1','Sneasel::Sneasel->Sneasel#1'
+          ]);
+          const n04=ranked.find(x=>x.team.teamKeys.length===6&&x.team.teamKeys.every(k=>n04Set.has(k)));
+          if(!n04) throw new Error('N04 missing');
+          const n04NaturallySelected=selectedMap.has(n04.key);
+          selectedMap.set(n04.key,n04);
+
+          const parentControls=[];
+          for(const parent of parentDoc.parents){
+            const best=ranked.find(x=>parent.teamKeys.every(k=>x.team.teamKeys.includes(k)));
+            if(!best) continue;
+            const natural=selectedMap.has(best.key);
+            selectedMap.set(best.key,best);
+            parentControls.push({parentKey:parent.key,kind:parent.kind,teamKey:best.key,topDecileProbability:best.prob,naturallySelected:natural});
+          }
+
+          const inputByKey=new Map((cp.beam||[]).map(r=>[[...r.teamKeys].sort().join('|'),r]));
+          const final=[...selectedMap.values()];
+          const outCp={...cp,stage:'beam-6-screen16-input',beam:final.map(x=>({teamKeys:x.team.teamKeys,evaluation:null}))};
+          const summary={
+            sourceTeams:teams.length,draws,topK,credibleMassTarget:0.60,
+            posteriorSelected:selected.length,
+            posteriorMass:cumulative/totalMass,
+            finalSelectedTeams:final.length,
+            exactN04:{included:true,naturallySelected:n04NaturallySelected,topDecileProbability:n04.prob},
+            parentControls
+          };
+          fs.writeFileSync('results/screen16-checkpoint.json',JSON.stringify(outCp,null,2));
+          fs.writeFileSync('results/prepare-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamlist-screen16-input-v1
+          path: |
+            hgss_story_sim/results/screen16-checkpoint.json
+            hgss_story_sim/results/prepare-summary.json
+          if-no-files-found: error
+
+  screen16:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen16-input-v1
+          path: hgss_story_sim/results/input
+      - name: Evaluate posterior-selected complete teams at 16 runs
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/screen16-checkpoint.json --runs=16 \
+            --shard-count=64 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/full-${{ matrix.shard }}.json"
+      - name: Compact shard result
+        run: |
+          node - "${{ matrix.shard }}" <<'NODE'
+          const fs=require('fs');
+          const shard=process.argv[2];
+          const d=JSON.parse(fs.readFileSync('results/full-'+shard+'.json','utf8'));
+          const rows=(d.rescored||[]).map(x=>{
+            const active=(x.evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const ps=active.map(r=>(Number(r.wins||0)+1)/(Number(r.wins||0)+Number(r.losses||0)+Number(r.ties||0)+2));
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=active.reduce((s,r)=>s+Number(r.runs||0),0);
+            const wins=active.reduce((s,r)=>s+Number(r.wins||0),0);
+            return {
+              teamKeys:x.teamKeys,retry,geometric,mean:runs?wins/runs:0,
+              bosses:active.map(r=>({boss:r.boss,wins:Number(r.wins||0),losses:Number(r.losses||0),ties:Number(r.ties||0),runs:Number(r.runs||0)}))
+            };
+          });
+          fs.writeFileSync('results/compact-'+shard+'.json',JSON.stringify({shard:Number(shard),rows}));
+          fs.unlinkSync('results/full-'+shard+'.json');
+          console.log(JSON.stringify({shard:Number(shard),teams:rows.length}));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamlist-screen16-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/compact-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: screen16
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen16-input-v1
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen16-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Summarize 16-run complete-team evaluation
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const prep=JSON.parse(fs.readFileSync('results/input/prepare-summary.json','utf8'));
+          const files=fs.readdirSync('results/shards').filter(x=>/^compact-\d+\.json$/.test(x));
+          if(files.length!==64) throw new Error('expected 64 compact shards, got '+files.length);
+          const key=r=>[...r.teamKeys].sort().join('|');
+          const map=new Map();
+          for(const f of files){const d=JSON.parse(fs.readFileSync(path.join('results/shards',f),'utf8'));for(const r of d.rows||[])map.set(key(r),r);}
+          const teams=[...map.values()];
+          if(teams.length!==prep.finalSelectedTeams) throw new Error('coverage mismatch '+teams.length+' vs '+prep.finalSelectedTeams);
+          teams.sort((a,b)=>a.retry-b.retry||b.geometric-a.geometric||b.mean-a.mean||key(a).localeCompare(key(b)));
+          const n04Set=new Set(['Cyndaquil::Cyndaquil->Typhlosion#1','Abra::Abra->Alakazam#1','Rhyhorn::Rhyhorn->Rhyperior#1','Lapras::Lapras->Lapras#1','Chinchou::Lanturn->Lanturn#1','Sneasel::Sneasel->Sneasel#1']);
+          const n04=teams.find(t=>t.teamKeys.length===6&&t.teamKeys.every(k=>n04Set.has(k)))||null;
+          const rank=n04?teams.findIndex(t=>key(t)===key(n04))+1:null;
+          const out={...prep,evaluatedUniqueTeams:teams.length,exactN04:n04?{rank,retry:n04.retry,geometric:n04.geometric,mean:n04.mean,teamKeys:n04.teamKeys,bosses:n04.bosses}:null,top200:teams.slice(0,200).map((t,i)=>({rank:i+1,retry:t.retry,geometric:t.geometric,mean:t.mean,teamKeys:t.teamKeys,bosses:t.bosses}))};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-teamlist-screen16-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
