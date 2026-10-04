@@ -867,7 +867,11 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   );
   const purchasablePlan = purchasable.assignments;
   const routeBuildOptimization = Boolean(battleOptions.routeBuildOptimization);
-  const routeBuildPlan = routeBuildOptimization
+  const routeBuildScope = String(battleOptions.routeBuildScope || 'route').toLowerCase();
+  if (!['route', 'boss'].includes(routeBuildScope)) {
+    throw new Error('Unknown route build scope: ' + routeBuildScope + '. Use route or boss.');
+  }
+  const routeBuildPlan = routeBuildOptimization && routeBuildScope === 'route'
     ? buildRouteExpRouteBuildPlan(
         candidates,
         routeBosses,
@@ -899,11 +903,22 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate, boss },
     );
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+    let heldItemPolicy = null;
     if (routeBuildOptimization) {
+      const activeBuildPlan = routeBuildScope === 'boss'
+        ? buildRouteExpRouteBuildPlan(
+            candidates,
+            [boss],
+            moveAccess,
+            singleUsePlan,
+            purchasablePlan,
+            [levelsByCandidate || {}],
+          )
+        : routeBuildPlan;
       playerTeam = playerTeam.map(mon => {
         const key = mon._candidateKey || mon.species;
         const candidate = candidatesByKey.get(key);
-        const build = routeBuildPlan[key];
+        const build = activeBuildPlan[key];
         let built = applyPlayerRouteBuild(mon, build);
         if (candidate && build?.routeMoves) {
           built = equalLevelRouteMovesAtStage(
@@ -918,7 +933,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         }
         return built;
       });
-      playerTeam = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss).team;
+      const heldItems = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
+      playerTeam = heldItems.team;
+      heldItemPolicy = heldItems.policy;
     }
     if (!playerTeam.length) {
       weightedRuns += runs;
@@ -946,6 +963,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         ...Object.fromEntries(
           Object.entries(battleOptions).filter(([key]) =>
             key !== 'routeBuildOptimization' &&
+            key !== 'routeBuildScope' &&
             key !== 'bossLabels' &&
             key !== 'routeGrindProxy' &&
             key !== 'routeGrindProxyTarget'
@@ -962,6 +980,19 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       playerLead: playerTeam[0]?.species || null,
       naturalExpBefore: expSchedule?.battles?.[battleIndex]?.mapExpBefore || 0,
       availableMons: playerTeam.map(x => x.species),
+      playerBuilds: Object.fromEntries(playerTeam.map(mon => [
+        mon._candidateKey || mon.species,
+        {
+          species: mon.species,
+          nature: mon.nature,
+          ability: mon.ability,
+          item: mon.item || '',
+          ivs: mon.ivs,
+          evs: mon.evs,
+          moves: mon.moves,
+        },
+      ])),
+      heldItemPolicy,
       ...result,
     });
   }
@@ -1018,6 +1049,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     singleUsePlan,
     purchasablePlan,
     routeBuildOptimization,
+    routeBuildScope,
     routeBuildPlan,
     purchaseCosts,
     resourceBudget,
@@ -4753,6 +4785,14 @@ async function cmdRouteExpStoryEvaluate() {
     0.01,
     Math.min(1, Number(arg('route-grind-proxy-target', String(STORY_CLEAR_TARGET_WIN_RATE)))),
   );
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const buildScope = String(arg('build-scope', 'route')).toLowerCase();
+  if (!['route', 'boss'].includes(buildScope)) {
+    throw new Error('route-exp-story-evaluate --build-scope must be route or boss');
+  }
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
   const allowPartialTeam = arg('allow-partial-team', 'false') === 'true';
@@ -4833,14 +4873,19 @@ async function cmdRouteExpStoryEvaluate() {
     {
       p1AiMode: 'smart',
       routeBuildOptimization: true,
+      routeBuildScope: buildScope,
+      bossLabels: bossLabels.length ? bossLabels : null,
       routeGrindProxy,
       routeGrindProxyTarget,
     },
   );
 
   const scheduleRows = evaluation.expSchedule?.battles || [];
+  const scheduleByLabel = new Map(
+    scheduleRows.map(row => [String(row.label), row])
+  );
   const checkpoints = evaluation.rows.map((row, index) => {
-    const ledger = scheduleRows[index] || {};
+    const ledger = scheduleByLabel.get(String(row.boss)) || scheduleRows[index] || {};
     return {
       index,
       boss: row.boss,
@@ -4896,6 +4941,8 @@ async function cmdRouteExpStoryEvaluate() {
       resourceProfile,
       spendPolicy,
       playerAi: 'smart',
+      bosses: bossLabels,
+      buildScope,
       allowPartialTeam,
       routeGrindProxy,
       routeGrindProxyTarget,
