@@ -1,0 +1,58 @@
+name: complete-route-teamlist-bayesian-mass4-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  mass:
+    if: contains(github.event.head_commit.message, '[teamlist-bayesmass4-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37192799510
+          github-token: ${{ github.token }}
+      - name: Posterior occupancy mass diagnostics
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/shards').filter(x=>/^compact-\d+\.json$/.test(x));
+          const key=r=>[...r.teamKeys].sort().join('|');
+          const map=new Map();
+          for(const f of files){const d=JSON.parse(fs.readFileSync(path.join('results/shards',f),'utf8'));for(const r of d.rows||[])map.set(key(r),r);}
+          const teams=[...map.values()];
+          function mulberry32(seed){return function(){let t=seed+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
+          function normal(rng){let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+          function gamma(shape,rng){if(shape<1)return gamma(shape+1,rng)*Math.pow(Math.max(rng(),1e-15),1/shape);const d=shape-1/3,c=1/Math.sqrt(9*d);for(;;){let x,v;do{x=normal(rng);v=1+c*x;}while(v<=0);v=v*v*v;const u=rng();if(u<1-0.0331*x*x*x*x)return d*v;if(Math.log(u)<0.5*x*x+d*(1-v+Math.log(v)))return d*v;}}
+          function beta(a,b,rng){const x=gamma(a,rng),y=gamma(b,rng);return x/(x+y);}
+          const params=teams.map(t=>(t.bosses||[]).map(r=>[Number(r.wins||0)+1,Number(r.losses||0)+Number(r.ties||0)+1]));
+          const draws=1024,topK=Math.ceil(teams.length*0.10),occupancy=new Uint32Array(teams.length),rng=mulberry32(0x4B415954),risks=new Array(teams.length);
+          for(let d=0;d<draws;d++){for(let i=0;i<teams.length;i++){let risk=0;for(const [a,b] of params[i]){const p=Math.max(1e-9,beta(a,b,rng));risk+=(1-p)/p;}risks[i]=[risk,i];}risks.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);for(let j=0;j<topK;j++)occupancy[risks[j][1]]++;}
+          const ranked=teams.map((t,i)=>({key:key(t),teamKeys:t.teamKeys,occ:Number(occupancy[i]),prob:Number(occupancy[i])/draws,retry:t.retry,geometric:t.geometric,mean:t.mean})).sort((a,b)=>b.occ-a.occ||a.key.localeCompare(b.key));
+          const total=draws*topK, targets=[0.5,0.6,0.7,0.8,0.9,0.95], counts={};
+          for(const target of targets){let c=0,n=0;for(const x of ranked){if(c>=target*total&&n)break;c+=x.occ;n++;}counts[String(target)]={teams:n,mass:c/total,minProbability:ranked[n-1]?.prob??null};}
+          const n04=new Set(['Cyndaquil::Cyndaquil->Typhlosion#1','Abra::Abra->Alakazam#1','Rhyhorn::Rhyhorn->Rhyperior#1','Lapras::Lapras->Lapras#1','Chinchou::Lanturn->Lanturn#1','Sneasel::Sneasel->Sneasel#1']);
+          const idx=ranked.findIndex(x=>x.teamKeys.every(k=>n04.has(k))&&x.teamKeys.length===6);
+          const out={sourceTeams:teams.length,draws,topK,massTargets:counts,n04:{rankByOccupancy:idx+1,probability:ranked[idx]?.prob??null}};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-teamlist-bayesian-mass4-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
