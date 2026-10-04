@@ -1,0 +1,103 @@
+name: n04-allocator-1000-validation-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[n04-allocator-1000-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [boss-aware-soft, boss-aware-saturation, balanced]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate N04 allocator at 1000 runs
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Rhyhorn::Rhyhorn->Rhyperior#1,Sneasel::Sneasel->Sneasel#1,Lapras::Lapras->Lapras#1" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator="${{ matrix.allocator }}" \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --build-scope=route --runs=1000 --route-grind-proxy=false \
+            > "results/N04__${{ matrix.allocator }}__1000.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: n04-allocator-1000-${{ matrix.allocator }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  summarize:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: n04-allocator-1000-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Summarize 1000-run allocator validation
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/all').filter(x=>x.endsWith('.json'));
+          if(files.length!==3) throw new Error('expected 3 results, got '+files.length);
+          const rows=files.map(f=>{
+            const d=JSON.parse(fs.readFileSync(path.join('results/all',f),'utf8'));
+            const allocator=f.replace(/^N04__/,'').replace(/__1000\.json$/,'');
+            const cps=d.checkpoints||[];
+            const ps=cps.map(cp=>{
+              const wins=Math.round(Number(cp.winRate||0)*1000);
+              return (wins+1)/(1000+2);
+            });
+            return {
+              allocator,
+              totalNaturalExp:Number(d.ledger?.totalNaturalExp||0),
+              retry:ps.reduce((s,p)=>s+(1-p)/p,0),
+              geometric:Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length),
+              mean:cps.reduce((s,cp)=>s+Number(cp.winRate||0),0)/cps.length,
+              zeroBosses:cps.filter(cp=>Number(cp.winRate||0)===0).map(cp=>cp.boss),
+              hard:Object.fromEntries(['Clair','Lance','Blue','Will 2','Bruno 2','Karen 2','Lance 2','Red'].map(b=>{
+                const cp=cps.find(x=>x.boss===b);
+                return [b,cp?Number(cp.winRate||0):null];
+              })),
+              finalLevels:d.finalLevels||{}
+            };
+          }).sort((a,b)=>a.retry-b.retry||b.geometric-a.geometric||b.mean-a.mean);
+          const exp=[...new Set(rows.map(r=>r.totalNaturalExp))];
+          if(exp.length!==1) throw new Error('natural EXP mismatch');
+          const out={runsPerCheckpoint:1000,totalNaturalExp:exp[0],ranking:rows};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: n04-allocator-1000-validation-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
