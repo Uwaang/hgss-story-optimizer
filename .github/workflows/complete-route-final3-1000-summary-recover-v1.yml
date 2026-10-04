@@ -1,0 +1,79 @@
+name: complete-route-final3-1000-summary-recover-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    if: contains(github.event.head_commit.message, '[final3-1000-summary-recover-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: final3-*-1000
+          path: hgss_story_sim/results/final
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37212203528
+          github-token: ${{ github.token }}
+      - name: Recover summary from route-exp-story-evaluate checkpoints
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/final').filter(x=>/^final3-.*-1000\.json$/.test(x)).sort();
+          if(files.length!==3) throw new Error('expected 3 result files, got '+files.length);
+          const idFrom=f=>f.match(/^final3-(.*)-1000\.json$/)[1];
+          const rows=files.map(f=>{
+            const d=JSON.parse(fs.readFileSync(path.join('results/final',f),'utf8'));
+            const checkpoints=(d.checkpoints||[]).filter(x=>!x.skipped);
+            if(!checkpoints.length) throw new Error('missing checkpoints in '+f);
+            const ps=checkpoints.map(x=>{
+              const w=Math.round(Number(x.winRate||0)*1000);
+              const l=1000-w;
+              return (w+1)/(w+l+2);
+            });
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=Math.exp(ps.reduce((s,p)=>s+Math.log(Math.max(p,1e-12)),0)/ps.length);
+            const totalWins=checkpoints.reduce((s,x)=>s+Math.round(Number(x.winRate||0)*1000),0);
+            const criticalNames=['Clair','Will','Karen','Lance','Blue','Will 2','Koga 2','Bruno 2','Karen 2','Lance 2','Red'];
+            const cpRows=checkpoints.map(x=>({
+              boss:x.boss,
+              wins:Math.round(Number(x.winRate||0)*1000),
+              losses:1000-Math.round(Number(x.winRate||0)*1000),
+              winRate:Number(x.winRate||0)
+            }));
+            return {
+              id:idFrom(f),
+              team:(d.team||[]).map(x=>x.terminalSpecies||x.species),
+              teamKeys:(d.team||[]).map(x=>x.key),
+              retry,
+              geometric,
+              mean:totalWins/(checkpoints.length*1000),
+              critical:Object.fromEntries(criticalNames.map(name=>[name,cpRows.find(x=>x.boss===name)||null])),
+              checkpoints:cpRows
+            };
+          });
+          rows.sort((a,b)=>a.retry-b.retry||b.geometric-a.geometric||b.mean-a.mean||a.id.localeCompare(b.id));
+          rows.forEach((r,i)=>r.rank=i+1);
+          const dominates=(a,b)=>a.retry<=b.retry&&a.geometric>=b.geometric&&a.mean>=b.mean&&(a.retry<b.retry||a.geometric>b.geometric||a.mean>b.mean);
+          const pareto=rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b))).map(x=>x.id);
+          const out={runsPerCheckpoint:1000,ranking:rows,pareto};
+          fs.writeFileSync('results/summary-recovered.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-final3-1000-summary-recovered-v1
+          path: hgss_story_sim/results/summary-recovered.json
+          if-no-files-found: error
