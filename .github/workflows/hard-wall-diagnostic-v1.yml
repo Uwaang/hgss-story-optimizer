@@ -1,0 +1,210 @@
+name: hard-wall-diagnostic-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[hard-wall-diagnostic-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        team:
+          - N04
+          - PreviousComplete
+          - DewgongLeader
+        allocator: [balanced, boss-aware, boss-aware-soft, boss-aware-depth, boss-aware-saturation, breakpoint-aware]
+        build_scope: [route, boss]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Resolve team keys
+        id: team
+        shell: bash
+        run: |
+          case "${{ matrix.team }}" in
+            N04)
+              echo 'keys=Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Chinchou::Lanturn->Lanturn#1,Rhyhorn::Rhyhorn->Rhyperior#1,Sneasel::Sneasel->Sneasel#1,Lapras::Lapras->Lapras#1' >> "$GITHUB_OUTPUT"
+              ;;
+            PreviousComplete)
+              echo 'keys=Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Dratini::Dragonair->Dragonite#1,Rhyhorn::Rhyhorn->Rhyperior#1,Larvitar::Pupitar->Tyranitar#1,Misdreavus::Misdreavus->Misdreavus#1' >> "$GITHUB_OUTPUT"
+              ;;
+            DewgongLeader)
+              echo 'keys=Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Seel::Dewgong->Dewgong#1,Sandshrew::Sandslash->Sandslash#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1' >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - name: Evaluate hard walls
+        run: |
+          mkdir -p results
+          node src/cli.mjs route-exp-story-evaluate \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --team-keys="${{ steps.team.outputs.keys }}" \
+            --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator="${{ matrix.allocator }}" \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --bosses="Clair,Lance,Lance 2,Red" \
+            --build-scope="${{ matrix.build_scope }}" \
+            --runs=128 --route-grind-proxy=false \
+            > "results/${{ matrix.team }}__${{ matrix.allocator }}__${{ matrix.build_scope }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hard-wall-${{ matrix.team }}-${{ matrix.allocator }}-${{ matrix.build_scope }}
+          path: hgss_story_sim/results/*.json
+          if-no-files-found: error
+
+  summarize:
+    needs: diagnose
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hard-wall-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Summarize factorized hard-wall diagnostic
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const dir='results/all';
+          const files=fs.readdirSync(dir).filter(x=>x.endsWith('.json'));
+          if(files.length!==36) throw new Error('expected 36 result files, got '+files.length);
+          const rows=files.map(f=>{
+            const d=JSON.parse(fs.readFileSync(path.join(dir,f),'utf8'));
+            const [team,allocator,buildScope]=f.replace(/\.json$/,'').split('__');
+            return {
+              team,allocator,buildScope,
+              totalNaturalExp:Number(d.ledger?.totalNaturalExp||0),
+              totalGrindExp:Number(d.ledger?.totalGrindExp||0),
+              checkpoints:Object.fromEntries((d.checkpoints||[]).map(cp=>[cp.boss,{
+                winRate:Number(cp.winRate||0),
+                levels:cp.playerLevels||{},
+                builds:cp.playerBuilds||{},
+              }]))
+            };
+          });
+          const teams=[...new Set(rows.map(r=>r.team))];
+          const bosses=['Clair','Lance','Lance 2','Red'];
+          const allocators=[...new Set(rows.map(r=>r.allocator))];
+
+          const diagnostics=[];
+          for(const team of teams){
+            const teamRows=rows.filter(r=>r.team===team);
+            const naturalExpValues=[...new Set(teamRows.map(r=>r.totalNaturalExp))];
+            const grindValues=[...new Set(teamRows.map(r=>r.totalGrindExp))];
+            if(naturalExpValues.length!==1) throw new Error(team+' natural EXP changed across conditions: '+naturalExpValues);
+            if(grindValues.some(x=>x!==0)) throw new Error(team+' unexpectedly used grind EXP');
+
+            for(const boss of bosses){
+              const baseline=teamRows.find(r=>r.allocator==='boss-aware-soft'&&r.buildScope==='route');
+              const baselineBoss=teamRows.find(r=>r.allocator==='boss-aware-soft'&&r.buildScope==='boss');
+              const routeRows=teamRows.filter(r=>r.buildScope==='route')
+                .sort((a,b)=>(b.checkpoints[boss]?.winRate||0)-(a.checkpoints[boss]?.winRate||0));
+              const bossRows=teamRows.filter(r=>r.buildScope==='boss')
+                .sort((a,b)=>(b.checkpoints[boss]?.winRate||0)-(a.checkpoints[boss]?.winRate||0));
+              const bestRoute=routeRows[0];
+              const bestBoss=bossRows[0];
+              diagnostics.push({
+                team,boss,
+                totalNaturalExp:naturalExpValues[0],
+                baseline:{
+                  allocator:'boss-aware-soft',buildScope:'route',
+                  winRate:baseline.checkpoints[boss]?.winRate??null,
+                  levels:baseline.checkpoints[boss]?.levels||{}
+                },
+                buildOnly:{
+                  allocator:'boss-aware-soft',buildScope:'boss',
+                  winRate:baselineBoss.checkpoints[boss]?.winRate??null,
+                  delta:(baselineBoss.checkpoints[boss]?.winRate||0)-(baseline.checkpoints[boss]?.winRate||0),
+                  levels:baselineBoss.checkpoints[boss]?.levels||{}
+                },
+                allocatorEnvelope:{
+                  allocator:bestRoute.allocator,buildScope:'route',
+                  winRate:bestRoute.checkpoints[boss]?.winRate??null,
+                  delta:(bestRoute.checkpoints[boss]?.winRate||0)-(baseline.checkpoints[boss]?.winRate||0),
+                  levels:bestRoute.checkpoints[boss]?.levels||{}
+                },
+                jointEnvelope:{
+                  allocator:bestBoss.allocator,buildScope:'boss',
+                  winRate:bestBoss.checkpoints[boss]?.winRate??null,
+                  delta:(bestBoss.checkpoints[boss]?.winRate||0)-(baseline.checkpoints[boss]?.winRate||0),
+                  levels:bestBoss.checkpoints[boss]?.levels||{}
+                },
+                allAllocators:Object.fromEntries(allocators.map(a=>{
+                  const route=teamRows.find(r=>r.allocator===a&&r.buildScope==='route');
+                  const bossLocal=teamRows.find(r=>r.allocator===a&&r.buildScope==='boss');
+                  return [a,{
+                    route:route?.checkpoints[boss]?.winRate??null,
+                    bossLocal:bossLocal?.checkpoints[boss]?.winRate??null
+                  }];
+                }))
+              });
+            }
+          }
+
+          const summary={
+            schemaVersion:1,
+            purpose:'Factor hard-wall performance into EXP-allocation sensitivity and boss-local build headroom while holding natural EXP budget and no-grind constraint fixed.',
+            runsPerBoss:128,
+            bosses,
+            conditions:{
+              baseline:'boss-aware-soft + route-wide build',
+              buildOnly:'boss-aware-soft + boss-local relaxed build (same machine/resource assignments)',
+              allocatorEnvelope:'best of six progression-feasible EXP allocators + route-wide build',
+              jointEnvelope:'best of six allocators + boss-local relaxed build'
+            },
+            caveats:[
+              'allocatorEnvelope is not a globally optimal EXP scheduler; it is the envelope of six existing progression-feasible heuristics.',
+              'boss-local build is a relaxed upper bound because nature/EV/ability/moves may vary by boss; machine/resource assignments remain the route-wide plan.',
+              'normal-route EXP is the current curated source-visible trainer envelope, not a proven mandatory-only trainer subset.'
+            ],
+            diagnostics
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(summary,null,2));
+
+          const pct=x=>x===null?'—':(100*x).toFixed(1)+'%';
+          const md=['# Hard-wall diagnostic v1','',
+            'Natural EXP budget is held constant within each team; grind EXP must remain 0.','',
+            '| Team | Boss | Baseline | Build-only | Best allocator | Joint envelope |',
+            '|---|---|---:|---:|---:|---:|'];
+          for(const d of diagnostics){
+            md.push('| '+d.team+' | '+d.boss+' | '+pct(d.baseline.winRate)+' | '+
+              pct(d.buildOnly.winRate)+' ('+(d.buildOnly.delta>=0?'+':'')+(100*d.buildOnly.delta).toFixed(1)+'pp) | '+
+              pct(d.allocatorEnvelope.winRate)+' '+d.allocatorEnvelope.allocator+' ('+
+              (d.allocatorEnvelope.delta>=0?'+':'')+(100*d.allocatorEnvelope.delta).toFixed(1)+'pp) | '+
+              pct(d.jointEnvelope.winRate)+' '+d.jointEnvelope.allocator+' ('+
+              (d.jointEnvelope.delta>=0?'+':'')+(100*d.jointEnvelope.delta).toFixed(1)+'pp) |');
+          }
+          fs.writeFileSync('results/summary.md',md.join('\n')+'\n');
+          console.log(JSON.stringify(summary,null,2));
+          console.log(md.join('\n'));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hard-wall-diagnostic-v1
+          path: |
+            hgss_story_sim/results/summary.json
+            hgss_story_sim/results/summary.md
+          if-no-files-found: error
