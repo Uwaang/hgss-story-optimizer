@@ -1,0 +1,155 @@
+name: complete-route-teamlist-screen1-recover-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover42:
+    if: contains(github.event.head_commit.message, '[teamlist-screen1-recover-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [42,106]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen1-input-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37178665394
+          github-token: ${{ github.token }}
+      - name: Recover old mod64 residue 42 via mod128 split
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/teamlist6-checkpoint.json --runs=1 \
+            --shard-count=128 --shard-index=${{ matrix.shard }} \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/full-${{ matrix.shard }}.json"
+      - name: Compact recovered shard
+        run: |
+          node - "${{ matrix.shard }}" <<'NODE'
+          const fs=require('fs');
+          const shard=process.argv[2];
+          const d=JSON.parse(fs.readFileSync('results/full-'+shard+'.json','utf8'));
+          const rows=(d.rescored||[]).map(x=>{
+            const active=(x.evaluation?.rows||[]).filter(r=>!r?.skipped);
+            const ps=active.map(r=>(Number(r.wins||0)+1)/(Number(r.wins||0)+Number(r.losses||0)+Number(r.ties||0)+2));
+            const retry=ps.reduce((s,p)=>s+(1-p)/p,0);
+            const geometric=ps.length?Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length):0;
+            const runs=active.reduce((s,r)=>s+Number(r.runs||0),0);
+            const wins=active.reduce((s,r)=>s+Number(r.wins||0),0);
+            return {
+              teamKeys:x.teamKeys,
+              retry,geometric,mean:runs?wins/runs:0,
+              bosses:active.map(r=>({boss:r.boss,wins:Number(r.wins||0),losses:Number(r.losses||0),ties:Number(r.ties||0),runs:Number(r.runs||0)}))
+            };
+          });
+          fs.writeFileSync('results/compact-recover-'+shard+'.json',JSON.stringify({shard:Number(shard),rows}));
+          fs.unlinkSync('results/full-'+shard+'.json');
+          console.log(JSON.stringify({shard:Number(shard),teams:rows.length}));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamlist-screen1-recover-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/compact-recover-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: recover42
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen1-input-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37178665394
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen1-shard-*
+          path: hgss_story_sim/results/old
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37178665394
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen1-recover-shard-*
+          path: hgss_story_sim/results/recover
+          merge-multiple: true
+      - name: Merge 63 original shards plus recovered residue 42
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const prep=JSON.parse(fs.readFileSync('results/input/prepare-summary.json','utf8'));
+          const readDir=dir=>fs.readdirSync(dir).filter(x=>x.endsWith('.json')).flatMap(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')).rows||[]);
+          const old=readDir('results/old');
+          const recover=readDir('results/recover');
+          const key=r=>[...r.teamKeys].sort().join('|');
+          const map=new Map();
+          for(const r of [...old,...recover]) map.set(key(r),r);
+          const teams=[...map.values()];
+          if(teams.length!==prep.selectedUniqueSixMemberTeams){
+            throw new Error('coverage mismatch: expected '+prep.selectedUniqueSixMemberTeams+', got '+teams.length);
+          }
+          teams.sort((a,b)=>a.retry-b.retry||b.geometric-a.geometric||b.mean-a.mean||key(a).localeCompare(key(b)));
+
+          const n04=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1','Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1','Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1','Sneasel::Sneasel->Sneasel#1'
+          ]);
+          const exact=teams.find(t=>t.teamKeys.length===6&&t.teamKeys.every(k=>n04.has(k)))||null;
+          const exactRank=exact?teams.findIndex(t=>key(t)===key(exact))+1:null;
+
+          const out={
+            ...prep,
+            originalShardRows:old.length,
+            recoveredRows:recover.length,
+            evaluatedUniqueTeams:teams.length,
+            exactN04:exact?{
+              rank:exactRank,retry:exact.retry,geometric:exact.geometric,mean:exact.mean,
+              teamKeys:exact.teamKeys,bosses:exact.bosses
+            }:null,
+            top100:teams.slice(0,100).map((t,i)=>({
+              rank:i+1,retry:t.retry,geometric:t.geometric,mean:t.mean,teamKeys:t.teamKeys,bosses:t.bosses
+            }))
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-teamlist-screen1-recover-v1
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
