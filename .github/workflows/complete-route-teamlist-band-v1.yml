@@ -1,0 +1,75 @@
+name: complete-route-teamlist-band-v1
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  band:
+    if: contains(github.event.head_commit.message, '[teamlist-band-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen1-shard-*
+          path: hgss_story_sim/results/old
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37178665394
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: teamlist-screen1-recover-shard-*
+          path: hgss_story_sim/results/recover
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37188637149
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamlist-screen1-input-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37178665394
+          github-token: ${{ github.token }}
+      - name: Build win-count histogram and candidate bands
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const readDir=dir=>fs.readdirSync(dir).filter(x=>x.endsWith('.json')).flatMap(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')).rows||[]);
+          const key=r=>[...r.teamKeys].sort().join('|');
+          const map=new Map();
+          for(const r of [...readDir('results/old'),...readDir('results/recover')]) map.set(key(r),r);
+          const teams=[...map.values()];
+          if(teams.length!==8365) throw new Error('expected 8365 teams, got '+teams.length);
+          const wins=t=>(t.bosses||[]).reduce((s,b)=>s+Number(b.wins||0),0);
+          const hist={};
+          for(const t of teams) hist[wins(t)]=(hist[wins(t)]||0)+1;
+          const thresholds={};
+          for(let w=20;w<=35;w++) thresholds[w]=teams.filter(t=>wins(t)>=w).length;
+
+          const n04=new Set([
+            'Cyndaquil::Cyndaquil->Typhlosion#1','Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1','Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1','Sneasel::Sneasel->Sneasel#1'
+          ]);
+          const exact=teams.find(t=>t.teamKeys.length===6&&t.teamKeys.every(k=>n04.has(k)));
+          const out={total:teams.length,histogram:hist,thresholdCounts:thresholds,n04Wins:exact?wins(exact):null};
+          fs.writeFileSync('results/band-summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-route-teamlist-band-v1
+          path: hgss_story_sim/results/band-summary.json
+          if-no-files-found: error
