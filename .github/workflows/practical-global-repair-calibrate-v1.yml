@@ -45,7 +45,7 @@ jobs:
         run: |
           mkdir -p results
           START=$(date +%s)
-          node src/cli.mjs route-exp-practical-grind             --version=HEARTGOLD --starter=Cyndaquil             --evolution-policy=trade-aware             --team-keys="${{ matrix.team_keys }}"             --exp-profile=normal-route --exp-allocator="${{ matrix.allocator }}"             --entry-level=expected --same-stage-join=map-order             --resources=all --spend-policy=natural             --story-targets=0.5 --red-targets=0.25,0.5             --repair-mode=global-only --skip-red=true             --screen-runs=1 --verify-runs=2 --repair-runs=4 --final-runs=8             --max-repair-rounds=16             > "results/${{ matrix.id }}.json"
+          node src/cli.mjs route-exp-practical-grind             --version=HEARTGOLD --starter=Cyndaquil             --evolution-policy=trade-aware             --team-keys="${{ matrix.team_keys }}"             --exp-profile=normal-route --exp-allocator="${{ matrix.allocator }}"             --entry-level=expected --same-stage-join=map-order             --resources=all --spend-policy=natural             --story-targets=0.5 --red-targets=0.25,0.5             --repair-mode=global-only --skip-red=true --lean-repair=true             --screen-runs=1 --verify-runs=2 --repair-runs=4 --final-runs=8             --max-repair-rounds=16             > "results/${{ matrix.id }}.json"
           END=$(date +%s)
           node - "${{ matrix.id }}" "${{ matrix.known_story }}" "$((END-START))" <<'NODE'
           const fs=require('fs');
