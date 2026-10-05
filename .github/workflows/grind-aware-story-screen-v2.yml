@@ -262,3 +262,5 @@ jobs:
           name: grind-aware-story-screen-v2-summary
           path: hgss_story_sim/results/final/summary.json
           if-no-files-found: error
+
+# trigger: story-screen-v2
