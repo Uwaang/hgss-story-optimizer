@@ -5068,6 +5068,11 @@ async function cmdRouteExpPracticalGrind() {
   const repairRuns = Math.max(verifyRuns, Math.floor(Number(arg('repair-runs', '32'))));
   const finalRuns = Math.max(repairRuns, Math.floor(Number(arg('final-runs', '64'))));
   const maxRepairRounds = Math.max(1, Math.floor(Number(arg('max-repair-rounds', '12'))));
+  const repairMode = String(arg('repair-mode', 'sequential')).toLowerCase();
+  if (!['sequential', 'global-only'].includes(repairMode)) {
+    throw new Error('route-exp-practical-grind --repair-mode must be sequential or global-only');
+  }
+  const skipRed = arg('skip-red', 'false') === 'true';
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -5501,7 +5506,8 @@ async function cmdRouteExpPracticalGrind() {
   for (const storyTarget of storyTargets) {
     const plan = {};
     const decisions = [];
-    for (const bossLabel of storyBossLabels) {
+    if (repairMode === 'sequential') {
+      for (const bossLabel of storyBossLabels) {
       const before = await evaluateBoss(plan, bossLabel, screenRuns);
       const beforeRate = Number(
         before.rows.find(row => String(row.boss) === bossLabel)?.winRate || 0
@@ -5532,6 +5538,7 @@ async function cmdRouteExpPracticalGrind() {
         bestWildSpecies: ledger?.bestWildGrind?.species || null,
         achieved: search.achieved,
       });
+      }
     }
 
     const repair = await globallyRepairStoryPlan(
@@ -5559,7 +5566,7 @@ async function cmdRouteExpPracticalGrind() {
     const redBaseline = storyEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
     const redFrontier = [];
 
-    if (repairConverged) {
+    if (repairConverged && !skipRed) {
       for (const redTarget of redTargets) {
         const redPlan = { ...storyPlan };
         const search = await minimumAdditionalBattlesValidated(
@@ -5651,6 +5658,8 @@ async function cmdRouteExpPracticalGrind() {
       repairRuns,
       finalRuns,
       maxRepairRounds,
+      repairMode,
+      skipRed,
       globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
