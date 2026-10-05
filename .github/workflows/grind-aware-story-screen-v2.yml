@@ -264,3 +264,5 @@ jobs:
           if-no-files-found: error
 
 # trigger: story-screen-v2
+
+# rerun-trigger: 2026-10-06
