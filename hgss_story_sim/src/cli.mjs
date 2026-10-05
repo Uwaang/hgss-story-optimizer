@@ -5073,6 +5073,7 @@ async function cmdRouteExpPracticalGrind() {
     throw new Error('route-exp-practical-grind --repair-mode must be sequential or global-only');
   }
   const skipRed = arg('skip-red', 'false') === 'true';
+  const leanRepair = arg('lean-repair', 'false') === 'true';
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -5464,11 +5465,15 @@ async function cmdRouteExpPracticalGrind() {
 
       plan[failure.label] =
         Number(plan[failure.label] || 0) + search.additionalBattles;
-      const afterBoss = await evaluateBoss(plan, failure.label, runs);
-      const afterRate = Number(
-        afterBoss.rows.find(row => String(row.boss) === failure.label)?.winRate || 0
-      );
-      const ledger = practicalGrindScheduleRow(afterBoss, failure.label);
+      let afterRate = null;
+      let ledger = null;
+      if (!leanRepair) {
+        const afterBoss = await evaluateBoss(plan, failure.label, runs);
+        afterRate = Number(
+          afterBoss.rows.find(row => String(row.boss) === failure.label)?.winRate || 0
+        );
+        ledger = practicalGrindScheduleRow(afterBoss, failure.label);
+      }
       history.push({
         phase,
         round,
@@ -5477,8 +5482,8 @@ async function cmdRouteExpPracticalGrind() {
         afterWinRate: afterRate,
         addedGrindBattles: search.additionalBattles,
         cumulativeGrindBattles: practicalGrindPlanTotalBattles(plan),
-        grindExpBefore: Number(ledger?.grindExpBefore || 0),
-        bestWildExpPerBattle: Number(ledger?.bestWildGrind?.expectedExpPerBattle || 0),
+        grindExpBefore: ledger ? Number(ledger.grindExpBefore || 0) : null,
+        bestWildExpPerBattle: ledger ? Number(ledger.bestWildGrind?.expectedExpPerBattle || 0) : null,
         bestWildSpecies: ledger?.bestWildGrind?.species || null,
         searchMode: search.searchMode || null,
         monotonicityViolation: Boolean(search.monotonicityViolation),
@@ -5660,6 +5665,7 @@ async function cmdRouteExpPracticalGrind() {
       maxRepairRounds,
       repairMode,
       skipRed,
+      leanRepair,
       globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
