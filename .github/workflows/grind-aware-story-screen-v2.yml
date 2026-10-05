@@ -1,0 +1,264 @@
+name: grind-aware-story-screen-v2
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[grind-aware-story-screen-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build historical Pareto one-slot neighborhood
+        run: |
+          mkdir -p results
+          node <<'NODE'
+          const fs=require('fs');
+          const C='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const K={
+            Golem:'Geodude::Geodude->Golem#1',
+            Slowbro:'Slowpoke::Slowpoke->Slowbro#1',
+            Forretress:'Pineco::Pineco->Forretress#1',
+            Ampharos:'Mareep::Mareep->Ampharos#1',
+            Rhyperior:'Rhyhorn::Rhyhorn->Rhyperior#1',
+            Magneton:'Magnemite::Magnemite->Magneton#1',
+            Alakazam:'Abra::Abra->Alakazam#1',
+            Quagsire:'Wooper::Quagsire->Quagsire#1',
+            Gyarados:'Magikarp::Magikarp->Gyarados#1',
+            Gengar:'Gastly::Gastly->Gengar#1',
+            Tyranitar:'Larvitar::Pupitar->Tyranitar#1',
+            Lapras:'Lapras::Lapras->Lapras#1',
+            Lanturn:'Chinchou::Lanturn->Lanturn#1',
+            Kingdra:'Horsea::Horsea->Kingdra#1',
+            Sneasel:'Sneasel::Sneasel->Sneasel#1',
+          };
+          const seeds={
+            A:[C,K.Golem,K.Slowbro,K.Forretress,K.Ampharos,K.Rhyperior],
+            B:[C,K.Magneton,K.Golem,K.Alakazam,K.Quagsire,K.Rhyperior],
+            D:[C,K.Magneton,K.Gyarados,K.Gengar,K.Rhyperior,K.Tyranitar],
+            N03:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Kingdra],
+            N04:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Sneasel],
+          };
+          const pool=[...new Set(Object.values(seeds).flat().filter(x=>x!==C))].sort();
+          const map=new Map();
+          const teamKey=t=>[...t].sort().join('|');
+          const add=(team,source)=>{
+            const k=teamKey(team);
+            if(!map.has(k)) map.set(k,{teamKeys:team,sources:[]});
+            map.get(k).sources.push(source);
+          };
+          for(const [seedName,seed] of Object.entries(seeds)){
+            add(seed,'seed:'+seedName);
+            for(let slot=1;slot<seed.length;slot++){
+              for(const replacement of pool){
+                if(seed.includes(replacement)) continue;
+                const team=[...seed];
+                const removed=team[slot];
+                team[slot]=replacement;
+                add(team,'replace:'+seedName+':'+removed+'->'+replacement);
+              }
+            }
+          }
+          const candidates=[...map.values()]
+            .sort((a,b)=>teamKey(a.teamKeys).localeCompare(teamKey(b.teamKeys)))
+            .map((x,i)=>({...x,index:i}));
+          if(candidates.length!==240) throw new Error('expected 240 unique teams, got '+candidates.length);
+          fs.writeFileSync('results/candidates.json',JSON.stringify({
+            schemaVersion:2,purpose:'grind-aware story-only screen input',
+            seeds,replacementPool:pool,candidateCount:candidates.length,candidates
+          },null,2));
+          console.log(JSON.stringify({candidateCount:candidates.length,replacementPool:pool},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-story-screen-v2-input
+          path: hgss_story_sim/results/candidates.json
+          if-no-files-found: error
+
+  screen:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: grind-aware-story-screen-v2-input
+          path: hgss_story_sim/results/input
+      - name: Story-only actual-grind screen
+        run: |
+          mkdir -p results/screen
+          node - "${{ matrix.shard }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const index=Number(process.argv[2]);
+          const input=JSON.parse(fs.readFileSync('results/input/candidates.json','utf8'));
+          const candidate=input.candidates[index];
+          if(!candidate) throw new Error('missing candidate '+index);
+          const allocators=['boss-aware-soft','boss-aware-saturation','balanced'];
+          const rows=[];
+          const save=()=>fs.writeFileSync(
+            'results/screen/shard-'+index+'.json',
+            JSON.stringify({index,teamKeys:candidate.teamKeys,sources:candidate.sources,rows},null,2)
+          );
+          save();
+          for(const allocator of allocators){
+            const started=Date.now();
+            const args=[
+              'src/cli.mjs','route-exp-practical-grind',
+              '--version=HEARTGOLD','--starter=Cyndaquil',
+              '--evolution-policy=trade-aware',
+              '--team-keys='+candidate.teamKeys.join(','),
+              '--exp-profile=normal-route','--exp-allocator='+allocator,
+              '--entry-level=expected','--same-stage-join=map-order',
+              '--resources=all','--spend-policy=natural',
+              '--story-targets=0.5','--red-targets=0.25,0.5',
+              '--repair-mode=global-only','--skip-red=true','--lean-repair=true',
+              '--screen-runs=1','--verify-runs=2','--repair-runs=4','--final-runs=8',
+              '--max-repair-rounds=16',
+            ];
+            const p=cp.spawnSync(process.execPath,args,{
+              cwd:process.cwd(),encoding:'utf8',env:process.env,
+              maxBuffer:32*1024*1024,timeout:30*60*1000
+            });
+            const elapsedSeconds=Math.round((Date.now()-started)/1000);
+            if(p.status!==0){
+              rows.push({
+                allocator,elapsedSeconds,
+                error:(p.stderr||p.stdout||'unknown failure').slice(-5000)
+              });
+              save();
+              continue;
+            }
+            let d;
+            try{d=JSON.parse(p.stdout);}catch(e){
+              rows.push({allocator,elapsedSeconds,error:'JSON parse: '+e.message});
+              save();
+              continue;
+            }
+            const s=d.storyFrontier?.[0]||{};
+            rows.push({
+              allocator,elapsedSeconds,
+              repairConverged:Boolean(s.repairConverged),
+              storyGrindBattles:Number(s.storyGrindBattles??Infinity),
+              storyGrindExp:Number(s.storyGrindExp??Infinity),
+              storyWorstBossWinRate:Number(s.storyWorstBossWinRate??0),
+              repairRounds:Number(s.repairRounds||0),
+              evaluationCacheEntries:Number(d.evaluationCacheEntries||0),
+              storyPlan:s.storyPlan||{},
+            });
+            save();
+            console.log(JSON.stringify({
+              index,allocator,elapsedSeconds,
+              converged:Boolean(s.repairConverged),
+              storyGrindBattles:s.storyGrindBattles??null,
+              repairRounds:s.repairRounds??null
+            }));
+          }
+          console.log(JSON.stringify({
+            index,stateCount:rows.length,
+            errors:rows.filter(r=>r.error).length,
+            converged:rows.filter(r=>r.repairConverged).length
+          }));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grind-aware-story-screen-v2-${{ matrix.shard }}
+          path: hgss_story_sim/results/screen/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: screen
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: grind-aware-story-screen-v2-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Build story-only screen summary
+        run: |
+          mkdir -p results/final
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const files=fs.readdirSync('results/all').filter(x=>/^shard-\d+\.json$/.test(x));
+          const shards=files.map(f=>JSON.parse(fs.readFileSync(path.join('results/all',f),'utf8')));
+          const rows=shards.flatMap(s=>(s.rows||[]).map(r=>({
+            index:s.index,teamKeys:s.teamKeys,sources:s.sources,...r
+          })));
+          const ok=rows.filter(r=>!r.error&&r.repairConverged&&Number.isFinite(r.storyGrindBattles));
+          const errors=rows.filter(r=>r.error);
+          const nonconverged=rows.filter(r=>!r.error&&!r.repairConverged);
+          ok.sort((a,b)=>a.storyGrindBattles-b.storyGrindBattles||a.elapsedSeconds-b.elapsedSeconds);
+          const byAllocator={};
+          for(const a of ['boss-aware-soft','boss-aware-saturation','balanced']){
+            const v=ok.filter(r=>r.allocator===a).sort((x,y)=>x.storyGrindBattles-y.storyGrindBattles);
+            byAllocator[a]={
+              count:v.length,
+              min:v[0]?.storyGrindBattles??null,
+              median:v.length?v[Math.floor(v.length/2)].storyGrindBattles:null,
+              p90:v.length?v[Math.floor(v.length*0.9)].storyGrindBattles:null,
+              max:v.at(-1)?.storyGrindBattles??null
+            };
+          }
+          const out={
+            schemaVersion:2,
+            expectedStates:720,
+            artifactShards:shards.length,
+            observedStates:rows.length,
+            convergedStates:ok.length,
+            errorStates:errors.length,
+            nonconvergedStates:nonconverged.length,
+            byAllocator,
+            top50:ok.slice(0,50),
+            errors,
+            nonconverged,
+            all:rows
+          };
+          fs.writeFileSync('results/final/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            artifactShards:out.artifactShards,
+            observedStates:out.observedStates,
+            convergedStates:out.convergedStates,
+            errorStates:out.errorStates,
+            nonconvergedStates:out.nonconvergedStates,
+            byAllocator:out.byAllocator,
+            top10:out.top50.slice(0,10).map(r=>({
+              index:r.index,allocator:r.allocator,story:r.storyGrindBattles,
+              sources:r.sources,elapsedSeconds:r.elapsedSeconds
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-story-screen-v2-summary
+          path: hgss_story_sim/results/final/summary.json
+          if-no-files-found: error
