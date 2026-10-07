@@ -27,10 +27,12 @@ export async function fetchText(url) {
       const response = await fetch(url, { headers });
       if (response.ok) return response.text();
 
+      const isGithubRaw = String(url).startsWith('https://raw.githubusercontent.com/');
       const retryable =
         response.status === 408 ||
         response.status === 425 ||
         response.status === 429 ||
+        (response.status === 403 && isGithubRaw) ||
         response.status >= 500;
       if (!retryable || attempt >= attempts) {
         throw new Error(`HTTP ${response.status} while fetching ${url}`);
