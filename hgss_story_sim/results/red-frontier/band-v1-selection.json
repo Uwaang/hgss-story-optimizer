@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "sourceStorySummaryRun": 37622900748,
+  "sourceStorySummaryArtifact": "grind-story-summary-recovery-v5",
+  "incumbent": {
+    "label": "D-soft",
+    "storyGrindBattles": 820,
+    "red25TotalGrindBattles": 914,
+    "red50TotalGrindBattles": 946
+  },
+  "survivorRule": {
+    "expression": "repairConverged && !error && storyGrindBattles < 946",
+    "rationale": "For every state, Red25/Red50 total grind is at least Story50 grind. Any state with Story50 >= 946 is therefore no better than incumbent D-soft on Story50, Red25 total, or Red50 total, and is safely dominated.",
+    "expectedStateCount": 305
+  },
+  "evaluation": {
+    "redTargets": [
+      0.25,
+      0.5
+    ],
+    "screenRuns": 1,
+    "verifyRuns": 2,
+    "repairRuns": 4,
+    "finalRuns": 8,
+    "reuseStoryPlan": true
+  }
+}
