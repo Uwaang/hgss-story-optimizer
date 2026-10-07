@@ -1,0 +1,116 @@
+name: grind-aware-story-screen-recover-v2
+
+on:
+  push:
+    branches:
+      - exp/progression-safe-screening-v1
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  recover:
+    if: contains(github.event.head_commit.message, '[grind-aware-story-screen-recover-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cancel redundant full rerun
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REDUNDANT_RUN_ID: '37381342600'
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${REDUNDANT_RUN_ID}/cancel" || true
+
+      - name: Download original 239 screen artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37348845991
+          pattern: grind-aware-story-screen-v2-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+
+      - name: Overlay recovered shard 3 from rerun
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37381342600
+          name: grind-aware-story-screen-v2-3
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+
+      - name: Build complete 720-state recovery summary
+        run: |
+          mkdir -p results/final
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const dir='results/all';
+          const files=fs.readdirSync(dir).filter(x=>/^shard-\d+\.json$/.test(x));
+          const indices=files.map(f=>Number(f.match(/shard-(\d+)\.json/)[1])).sort((a,b)=>a-b);
+          const missing=Array.from({length:240},(_,i)=>i).filter(i=>!indices.includes(i));
+          if(files.length!==240 || missing.length){
+            throw new Error('incomplete recovered shard set: files='+files.length+' missing='+missing.join(','));
+          }
+          const shards=files.map(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')));
+          const rows=shards.flatMap(s=>(s.rows||[]).map(r=>({
+            index:s.index,teamKeys:s.teamKeys,sources:s.sources,...r
+          })));
+          if(rows.length!==720) throw new Error('expected 720 states, got '+rows.length);
+          const ok=rows.filter(r=>!r.error&&r.repairConverged&&Number.isFinite(r.storyGrindBattles));
+          const errors=rows.filter(r=>r.error);
+          const nonconverged=rows.filter(r=>!r.error&&!r.repairConverged);
+          ok.sort((a,b)=>a.storyGrindBattles-b.storyGrindBattles||a.elapsedSeconds-b.elapsedSeconds);
+          const byAllocator={};
+          for(const a of ['boss-aware-soft','boss-aware-saturation','balanced']){
+            const v=ok.filter(r=>r.allocator===a).sort((x,y)=>x.storyGrindBattles-y.storyGrindBattles);
+            byAllocator[a]={
+              count:v.length,
+              min:v[0]?.storyGrindBattles??null,
+              median:v.length?v[Math.floor(v.length/2)].storyGrindBattles:null,
+              p90:v.length?v[Math.floor(v.length*0.9)].storyGrindBattles:null,
+              max:v.at(-1)?.storyGrindBattles??null
+            };
+          }
+          const out={
+            schemaVersion:3,
+            purpose:'recovered complete 720-state story-only grind screen',
+            sourceRuns:{original:37348845991,recoveredShard3:37381342600},
+            expectedShards:240,
+            artifactShards:shards.length,
+            expectedStates:720,
+            observedStates:rows.length,
+            convergedStates:ok.length,
+            errorStates:errors.length,
+            nonconvergedStates:nonconverged.length,
+            byAllocator,
+            top50:ok.slice(0,50),
+            errors,
+            nonconverged,
+            all:rows
+          };
+          fs.writeFileSync('results/final/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            artifactShards:out.artifactShards,
+            observedStates:out.observedStates,
+            convergedStates:out.convergedStates,
+            errorStates:out.errorStates,
+            nonconvergedStates:out.nonconvergedStates,
+            byAllocator:out.byAllocator,
+            top10:out.top50.slice(0,10).map(r=>({
+              index:r.index,allocator:r.allocator,story:r.storyGrindBattles,
+              sources:r.sources,teamKeys:r.teamKeys,elapsedSeconds:r.elapsedSeconds
+            }))
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-aware-story-screen-v2-recovered-summary
+          path: hgss_story_sim/results/final/summary.json
+          if-no-files-found: error
