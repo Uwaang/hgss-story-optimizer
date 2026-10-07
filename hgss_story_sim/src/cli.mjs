@@ -5074,6 +5074,13 @@ async function cmdRouteExpPracticalGrind() {
   }
   const skipRed = arg('skip-red', 'false') === 'true';
   const leanRepair = arg('lean-repair', 'false') === 'true';
+  const reuseStoryPlanBase64 = String(arg('reuse-story-plan-base64', '')).trim();
+  const reusedStoryPlan = reuseStoryPlanBase64
+    ? JSON.parse(Buffer.from(reuseStoryPlanBase64, 'base64').toString('utf8'))
+    : null;
+  if (reusedStoryPlan && (typeof reusedStoryPlan !== 'object' || Array.isArray(reusedStoryPlan))) {
+    throw new Error('route-exp-practical-grind --reuse-story-plan-base64 must decode to an object');
+  }
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -5508,6 +5515,79 @@ async function cmdRouteExpPracticalGrind() {
   }
 
   const storyFrontier = [];
+  if (reusedStoryPlan) {
+    if (storyTargets.length !== 1) {
+      throw new Error('route-exp-practical-grind reused story plan requires exactly one --story-targets value');
+    }
+    const storyTarget = storyTargets[0];
+    const storyPlan = { ...reusedStoryPlan };
+    const storyEvaluation = await evaluateFull(storyPlan, finalRuns);
+    const finalRowsByBoss = new Map(
+      (storyEvaluation.rows || []).map(row => [String(row.boss), row])
+    );
+    const constrainedWinRates = storyBossLabels.map(
+      label => Number(finalRowsByBoss.get(label)?.winRate || 0)
+    );
+    const repairConverged = storyBossLabels.every(
+      label => Number(finalRowsByBoss.get(label)?.winRate || 0) >= storyTarget
+    );
+    const redBaseline = storyEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
+    const redFrontier = [];
+
+    if (repairConverged && !skipRed) {
+      for (const redTarget of redTargets) {
+        const redPlan = { ...storyPlan };
+        const search = await minimumAdditionalBattlesValidated(
+          redPlan,
+          'Red',
+          redTarget,
+          finalRuns,
+        );
+        if (search.additionalBattles > 0) {
+          redPlan.Red = Number(redPlan.Red || 0) + search.additionalBattles;
+        }
+        const finalEvaluation = await evaluateFull(redPlan, finalRuns);
+        const red = finalEvaluation.rows.find(row => String(row.boss) === 'Red') || null;
+        const redLedger = practicalGrindScheduleRow(finalEvaluation, 'Red');
+        redFrontier.push({
+          targetWinRate: redTarget,
+          additionalRedGrindBattles: search.additionalBattles,
+          totalGrindBattles: practicalGrindPlanTotalBattles(redPlan),
+          totalGrindExp: Number(finalEvaluation.expSchedule?.totalGrindExp || 0),
+          achievedWinRate: Number(red?.winRate || 0),
+          averageOpponentFaints: Number(red?.averageOpponentFaints || 0),
+          redGrindExp: Number(redLedger?.grindExpBefore || 0),
+          redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
+          finalLevels: finalEvaluation.finalLevels,
+          plan: redPlan,
+        });
+      }
+    }
+
+    storyFrontier.push({
+      storyTargetWinRate: storyTarget,
+      storyPlan,
+      initialGreedyPlan: storyPlan,
+      storyGrindBattles: practicalGrindPlanTotalBattles(storyPlan),
+      storyGrindExp: Number(storyEvaluation.expSchedule?.totalGrindExp || 0),
+      storyScore: Number(storyEvaluation.score || 0),
+      storyWorstBossWinRate: constrainedWinRates.length
+        ? Math.min(...constrainedWinRates)
+        : 0,
+      repairConverged,
+      repairRounds: 0,
+      repairHistory: [],
+      redBaseline: redBaseline ? {
+        winRate: Number(redBaseline.winRate || 0),
+        averageOpponentFaints: Number(redBaseline.averageOpponentFaints || 0),
+        playerLevels: redBaseline.playerLevels || {},
+      } : null,
+      decisions: [],
+      checkpoints: practicalGrindCheckpoints(storyEvaluation),
+      redFrontier,
+      reusedStoryPlan: true,
+    });
+  } else {
   for (const storyTarget of storyTargets) {
     const plan = {};
     const decisions = [];
@@ -5632,6 +5712,7 @@ async function cmdRouteExpPracticalGrind() {
     });
   }
 
+  }
   await flushBattleCache();
 
   console.log(JSON.stringify({
