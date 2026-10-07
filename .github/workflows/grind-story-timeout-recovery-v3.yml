@@ -1,0 +1,269 @@
+name: grind-story-timeout-recovery-v3
+
+on:
+  push:
+    branches:
+      - recovery/grind-story-timeouts-v3
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[grind-story-timeout-recovery-v3]')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - id: matrix
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const states=JSON.parse(fs.readFileSync('results/recovery/grind-aware-story-timeout-states-v3.json','utf8'));
+          if(states.length!==241) throw new Error('expected 241 timeout states, got '+states.length);
+          console.log('matrix='+JSON.stringify(Array.from({length:states.length},(_,i)=>i)));
+          NODE
+
+  recover:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 105
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        state: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 6
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Recover one timed-out team/allocator state
+        run: |
+          mkdir -p results/recovered
+          node - "${{ matrix.state }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const ordinal=Number(process.argv[2]);
+          const states=JSON.parse(fs.readFileSync('results/recovery/grind-aware-story-timeout-states-v3.json','utf8'));
+          const target=states[ordinal];
+          if(!target) throw new Error('missing recovery state '+ordinal);
+
+          const C='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const K={
+            Golem:'Geodude::Geodude->Golem#1',
+            Slowbro:'Slowpoke::Slowpoke->Slowbro#1',
+            Forretress:'Pineco::Pineco->Forretress#1',
+            Ampharos:'Mareep::Mareep->Ampharos#1',
+            Rhyperior:'Rhyhorn::Rhyhorn->Rhyperior#1',
+            Magneton:'Magnemite::Magnemite->Magneton#1',
+            Alakazam:'Abra::Abra->Alakazam#1',
+            Quagsire:'Wooper::Quagsire->Quagsire#1',
+            Gyarados:'Magikarp::Magikarp->Gyarados#1',
+            Gengar:'Gastly::Gastly->Gengar#1',
+            Tyranitar:'Larvitar::Pupitar->Tyranitar#1',
+            Lapras:'Lapras::Lapras->Lapras#1',
+            Lanturn:'Chinchou::Lanturn->Lanturn#1',
+            Kingdra:'Horsea::Horsea->Kingdra#1',
+            Sneasel:'Sneasel::Sneasel->Sneasel#1',
+          };
+          const seeds={
+            A:[C,K.Golem,K.Slowbro,K.Forretress,K.Ampharos,K.Rhyperior],
+            B:[C,K.Magneton,K.Golem,K.Alakazam,K.Quagsire,K.Rhyperior],
+            D:[C,K.Magneton,K.Gyarados,K.Gengar,K.Rhyperior,K.Tyranitar],
+            N03:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Kingdra],
+            N04:[C,K.Alakazam,K.Rhyperior,K.Lapras,K.Lanturn,K.Sneasel],
+          };
+          const pool=[...new Set(Object.values(seeds).flat().filter(x=>x!==C))].sort();
+          const map=new Map();
+          const teamKey=t=>[...t].sort().join('|');
+          const add=(team,source)=>{
+            const k=teamKey(team);
+            if(!map.has(k)) map.set(k,{teamKeys:team,sources:[]});
+            map.get(k).sources.push(source);
+          };
+          for(const [seedName,seed] of Object.entries(seeds)){
+            add(seed,'seed:'+seedName);
+            for(let slot=1;slot<seed.length;slot++){
+              for(const replacement of pool){
+                if(seed.includes(replacement)) continue;
+                const team=[...seed];
+                const removed=team[slot];
+                team[slot]=replacement;
+                add(team,'replace:'+seedName+':'+removed+'->'+replacement);
+              }
+            }
+          }
+          const candidates=[...map.values()]
+            .sort((a,b)=>teamKey(a.teamKeys).localeCompare(teamKey(b.teamKeys)))
+            .map((x,i)=>({...x,index:i}));
+          if(candidates.length!==240) throw new Error('expected 240 unique teams, got '+candidates.length);
+          const candidate=candidates[target.index];
+          if(!candidate) throw new Error('missing candidate '+target.index);
+
+          const started=Date.now();
+          const args=[
+            'src/cli.mjs','route-exp-practical-grind',
+            '--version=HEARTGOLD','--starter=Cyndaquil',
+            '--evolution-policy=trade-aware',
+            '--team-keys='+candidate.teamKeys.join(','),
+            '--exp-profile=normal-route','--exp-allocator='+target.allocator,
+            '--entry-level=expected','--same-stage-join=map-order',
+            '--resources=all','--spend-policy=natural',
+            '--story-targets=0.5','--red-targets=0.25,0.5',
+            '--repair-mode=global-only','--skip-red=true','--lean-repair=true',
+            '--screen-runs=1','--verify-runs=2','--repair-runs=4','--final-runs=8',
+            '--max-repair-rounds=16',
+          ];
+          const p=cp.spawnSync(process.execPath,args,{
+            cwd:process.cwd(),encoding:'utf8',env:process.env,
+            maxBuffer:32*1024*1024,timeout:90*60*1000
+          });
+          const elapsedSeconds=Math.round((Date.now()-started)/1000);
+          let row={
+            ordinal,index:target.index,allocator:target.allocator,
+            teamKeys:candidate.teamKeys,sources:candidate.sources,elapsedSeconds
+          };
+          if(p.status!==0){
+            row.error=(p.stderr||p.stdout||'unknown failure').slice(-5000);
+          }else{
+            try{
+              const d=JSON.parse(p.stdout);
+              const s=d.storyFrontier?.[0]||{};
+              Object.assign(row,{
+                repairConverged:Boolean(s.repairConverged),
+                storyGrindBattles:Number(s.storyGrindBattles??Infinity),
+                storyGrindExp:Number(s.storyGrindExp??Infinity),
+                storyWorstBossWinRate:Number(s.storyWorstBossWinRate??0),
+                repairRounds:Number(s.repairRounds||0),
+                evaluationCacheEntries:Number(d.evaluationCacheEntries||0),
+                storyPlan:s.storyPlan||{}
+              });
+            }catch(e){
+              row.error='JSON parse: '+e.message;
+            }
+          }
+          fs.writeFileSync('results/recovered/state-'+ordinal+'.json',JSON.stringify(row,null,2));
+          console.log(JSON.stringify({
+            ordinal,index:row.index,allocator:row.allocator,elapsedSeconds,
+            converged:row.repairConverged??false,
+            story:row.storyGrindBattles??null,
+            error:Boolean(row.error)
+          }));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grind-story-timeout-v3-${{ matrix.state }}
+          path: hgss_story_sim/results/recovered/state-${{ matrix.state }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: recover
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download original 239 shards
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37348845991
+          pattern: grind-aware-story-screen-v2-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Overlay recovered original shard 3
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37381342600
+          name: grind-aware-story-screen-v2-3
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Download timeout recovery states
+        uses: actions/download-artifact@v4
+        with:
+          pattern: grind-story-timeout-v3-*
+          path: hgss_story_sim/results/recovered
+          merge-multiple: true
+      - name: Merge recovered states and build final story summary
+        run: |
+          mkdir -p results/final
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const allDir='results/all',recDir='results/recovered';
+          const shardFiles=fs.readdirSync(allDir).filter(x=>/^shard-\d+\.json$/.test(x));
+          if(shardFiles.length!==240) throw new Error('expected 240 shards, got '+shardFiles.length);
+          const shards=shardFiles.map(f=>JSON.parse(fs.readFileSync(path.join(allDir,f),'utf8')));
+          const recovered=fs.readdirSync(recDir).filter(x=>/^state-\d+\.json$/.test(x))
+            .map(f=>JSON.parse(fs.readFileSync(path.join(recDir,f),'utf8')));
+          const recMap=new Map(recovered.map(r=>[r.index+'|'+r.allocator,r]));
+          let replaced=0;
+          for(const s of shards){
+            s.rows=(s.rows||[]).map(r=>{
+              const rr=recMap.get(s.index+'|'+r.allocator);
+              if(r.error&&rr){
+                replaced++;
+                const {ordinal,index,teamKeys,sources,...clean}=rr;
+                return clean;
+              }
+              return r;
+            });
+          }
+          const rows=shards.flatMap(s=>(s.rows||[]).map(r=>({
+            index:s.index,teamKeys:s.teamKeys,sources:s.sources,...r
+          })));
+          if(rows.length!==720) throw new Error('expected 720 states, got '+rows.length);
+          const ok=rows.filter(r=>!r.error&&r.repairConverged&&Number.isFinite(r.storyGrindBattles));
+          const errors=rows.filter(r=>r.error);
+          const nonconverged=rows.filter(r=>!r.error&&!r.repairConverged);
+          ok.sort((a,b)=>a.storyGrindBattles-b.storyGrindBattles||a.elapsedSeconds-b.elapsedSeconds);
+          const byAllocator={};
+          for(const a of ['boss-aware-soft','boss-aware-saturation','balanced']){
+            const v=ok.filter(r=>r.allocator===a).sort((x,y)=>x.storyGrindBattles-y.storyGrindBattles);
+            byAllocator[a]={
+              count:v.length,
+              min:v[0]?.storyGrindBattles??null,
+              median:v.length?v[Math.floor(v.length/2)].storyGrindBattles:null,
+              p90:v.length?v[Math.floor(v.length*0.9)].storyGrindBattles:null,
+              max:v.at(-1)?.storyGrindBattles??null
+            };
+          }
+          const out={
+            schemaVersion:4,
+            purpose:'complete story-grind screen after targeted timeout recovery',
+            sourceRuns:{original:37348845991,shard3:37381342600,recovery:process.env.GITHUB_RUN_ID},
+            expectedStates:720,observedStates:rows.length,recoveredStates:recovered.length,replacedStates:replaced,
+            convergedStates:ok.length,errorStates:errors.length,nonconvergedStates:nonconverged.length,
+            byAllocator,top50:ok.slice(0,50),errors,nonconverged,all:rows
+          };
+          fs.writeFileSync('results/final/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            recoveredStates:out.recoveredStates,replacedStates:out.replacedStates,
+            convergedStates:out.convergedStates,errorStates:out.errorStates,
+            nonconvergedStates:out.nonconvergedStates,byAllocator:out.byAllocator,
+            top10:out.top50.slice(0,10).map(r=>({
+              index:r.index,allocator:r.allocator,story:r.storyGrindBattles,sources:r.sources
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grind-story-timeout-recovery-v3-summary
+          path: hgss_story_sim/results/final/summary.json
+          if-no-files-found: error
