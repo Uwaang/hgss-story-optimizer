@@ -5081,6 +5081,16 @@ async function cmdRouteExpPracticalGrind() {
   if (reusedStoryPlan && (typeof reusedStoryPlan !== 'object' || Array.isArray(reusedStoryPlan))) {
     throw new Error('route-exp-practical-grind --reuse-story-plan-base64 must decode to an object');
   }
+  const seedStoryPlanBase64 = String(arg('seed-story-plan-base64', '')).trim();
+  const seededStoryPlan = seedStoryPlanBase64
+    ? JSON.parse(Buffer.from(seedStoryPlanBase64, 'base64').toString('utf8'))
+    : null;
+  if (seededStoryPlan && (typeof seededStoryPlan !== 'object' || Array.isArray(seededStoryPlan))) {
+    throw new Error('route-exp-practical-grind --seed-story-plan-base64 must decode to an object');
+  }
+  if (reusedStoryPlan && seededStoryPlan) {
+    throw new Error('route-exp-practical-grind cannot combine --reuse-story-plan-base64 and --seed-story-plan-base64');
+  }
   const storyTargets = parseRateTargets(arg('story-targets', '0.5,0.75,0.9'), '0.5,0.75,0.9');
   const redTargets = parseRateTargets(arg('red-targets', '0.25,0.5,0.75,0.9'), '0.25,0.5,0.75,0.9');
   const storyCheckpointLabels = String(arg('story-checkpoints', ''))
@@ -5589,7 +5599,7 @@ async function cmdRouteExpPracticalGrind() {
     });
   } else {
   for (const storyTarget of storyTargets) {
-    const plan = {};
+    const plan = seededStoryPlan ? { ...seededStoryPlan } : {};
     const decisions = [];
     if (repairMode === 'sequential') {
       for (const bossLabel of storyBossLabels) {
@@ -5747,6 +5757,7 @@ async function cmdRouteExpPracticalGrind() {
       repairMode,
       skipRed,
       leanRepair,
+      seededStoryPlan: Boolean(seededStoryPlan),
       globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
