@@ -1,0 +1,212 @@
+name: red-frontier-band-v1-error-recovery
+
+on:
+  push:
+    branches:
+      - recovery/red-frontier-band-v1-errors
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[red-frontier-band-v1-error-recovery]')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node --check src/cli.mjs
+          node --check src/hgss-data.mjs
+      - id: matrix
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('results/red-frontier/band-v1-error-recovery-manifest.json','utf8'));
+          if(m.states.length!==7) throw new Error('expected 7 recovery states');
+          console.log('matrix='+JSON.stringify(m.states.map((_,i)=>i)));
+          NODE
+
+  red:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        state: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      HGSS_FETCH_ATTEMPTS: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Stagger GitHub fetches
+        run: sleep $(( ${{ matrix.state }} * 3 ))
+      - name: Re-evaluate failed Red25/Red50 state
+        run: |
+          mkdir -p results/red-frontier/band-v1-error-recovery
+          node - "${{ matrix.state }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const slot=Number(process.argv[2]);
+          const manifest=JSON.parse(fs.readFileSync('results/red-frontier/band-v1-error-recovery-manifest.json','utf8'));
+          const state=manifest.states[slot];
+          if(!state) throw new Error('missing recovery slot '+slot);
+          const plan64=Buffer.from(JSON.stringify(state.storyPlan),'utf8').toString('base64');
+          const args=[
+            'src/cli.mjs','route-exp-practical-grind',
+            '--version=HEARTGOLD','--starter=Cyndaquil',
+            '--evolution-policy=trade-aware',
+            '--team-keys='+state.teamKeys.join(','),
+            '--exp-profile=normal-route','--exp-allocator='+state.allocator,
+            '--entry-level=expected','--same-stage-join=map-order',
+            '--resources=all','--spend-policy=natural',
+            '--story-targets=0.5','--red-targets=0.25,0.5',
+            '--repair-mode=global-only','--lean-repair=true',
+            '--screen-runs=1','--verify-runs=2','--repair-runs=4','--final-runs=8',
+            '--max-repair-rounds=16',
+            '--reuse-story-plan-base64='+plan64,
+          ];
+          const started=Date.now();
+          const p=cp.spawnSync(process.execPath,args,{
+            cwd:process.cwd(),encoding:'utf8',env:process.env,
+            maxBuffer:32*1024*1024,timeout:110*60*1000
+          });
+          const out={
+            ordinal:state.ordinal,index:state.index,allocator:state.allocator,
+            storyGrindBattles:state.storyGrindBattles,
+            teamKeys:state.teamKeys,sources:state.sources,
+            elapsedSeconds:Math.round((Date.now()-started)/1000)
+          };
+          if(p.status!==0){
+            out.error=(p.stderr||p.stdout||'unknown failure').slice(-12000);
+          }else{
+            try{
+              const d=JSON.parse(p.stdout);
+              const s=d.storyFrontier?.[0]||{};
+              out.repairConverged=Boolean(s.repairConverged);
+              out.reusedStoryPlan=Boolean(s.reusedStoryPlan);
+              out.storyWorstBossWinRate=Number(s.storyWorstBossWinRate||0);
+              out.redBaseline=s.redBaseline||null;
+              out.redFrontier=s.redFrontier||[];
+              out.evaluationCacheEntries=Number(d.evaluationCacheEntries||0);
+            }catch(e){out.error='JSON parse: '+e.message;}
+          }
+          const file='results/red-frontier/band-v1-error-recovery/state-'+state.ordinal+'.json';
+          fs.writeFileSync(file,JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            ordinal:out.ordinal,index:out.index,allocator:out.allocator,story:out.storyGrindBattles,
+            elapsedSeconds:out.elapsedSeconds,error:Boolean(out.error),
+            repairConverged:out.repairConverged??false,
+            red:out.redFrontier?.map(x=>({
+              target:x.targetWinRate,total:x.totalGrindBattles,
+              additional:x.additionalRedGrindBattles,achieved:x.achievedWinRate
+            }))||[]
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: red-frontier-band-v1-recovery-${{ matrix.state }}
+          path: hgss_story_sim/results/red-frontier/band-v1-error-recovery/*.json
+          if-no-files-found: error
+
+  summarize:
+    needs: red
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37658313744
+          name: red-frontier-band-v1-summary
+          path: hgss_story_sim/results/red-frontier/original-summary
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: red-frontier-band-v1-recovery-*
+          path: hgss_story_sim/results/red-frontier/recovery-all
+          merge-multiple: true
+      - name: Merge recovered states and rebuild Pareto
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const original=JSON.parse(fs.readFileSync('results/red-frontier/original-summary/band-v1-summary.json','utf8'));
+          const dir='results/red-frontier/recovery-all';
+          const recovered=fs.readdirSync(dir).filter(x=>/^state-\d+\.json$/.test(x))
+            .map(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')));
+          const byOrdinal=new Map((original.rows||[]).map(r=>[Number(r.ordinal),r]));
+          for(const r of recovered) byOrdinal.set(Number(r.ordinal),r);
+          const rows=[...byOrdinal.values()].sort((a,b)=>Number(a.ordinal)-Number(b.ordinal));
+          const ok=rows.filter(r=>!r.error&&r.repairConverged&&Array.isArray(r.redFrontier)&&r.redFrontier.length===2);
+          function coord(r,target){
+            return Number(r.redFrontier.find(x=>Number(x.targetWinRate)===target)?.totalGrindBattles ?? Infinity);
+          }
+          const enriched=ok.map(r=>({
+            ...r,
+            red25TotalGrindBattles:coord(r,0.25),
+            red50TotalGrindBattles:coord(r,0.5),
+          }));
+          const pareto=enriched.filter((r,i)=>!enriched.some((o,j)=>{
+            if(i===j) return false;
+            const noWorse=
+              Number(o.storyGrindBattles)<=Number(r.storyGrindBattles)&&
+              Number(o.red25TotalGrindBattles)<=Number(r.red25TotalGrindBattles)&&
+              Number(o.red50TotalGrindBattles)<=Number(r.red50TotalGrindBattles);
+            const strict=
+              Number(o.storyGrindBattles)<Number(r.storyGrindBattles)||
+              Number(o.red25TotalGrindBattles)<Number(r.red25TotalGrindBattles)||
+              Number(o.red50TotalGrindBattles)<Number(r.red50TotalGrindBattles);
+            return noWorse&&strict;
+          })).sort((a,b)=>
+            Number(a.storyGrindBattles)-Number(b.storyGrindBattles) ||
+            Number(a.red25TotalGrindBattles)-Number(b.red25TotalGrindBattles) ||
+            Number(a.red50TotalGrindBattles)-Number(b.red50TotalGrindBattles)
+          );
+          const summary={
+            ...original,
+            successfulStates:ok.length,
+            errorStates:rows.filter(r=>r.error).length,
+            storyPlanRejectedStates:rows.filter(r=>!r.error&&!r.repairConverged).length,
+            recovery:{sourceRun:37658313744,recoveredStates:recovered.length},
+            pareto,rows:enriched,
+            errors:rows.filter(r=>r.error),
+            rejected:rows.filter(r=>!r.error&&!r.repairConverged),
+          };
+          fs.writeFileSync('results/red-frontier/band-v1-final-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            expectedStates:summary.expectedStates,
+            successfulStates:summary.successfulStates,
+            errorStates:summary.errorStates,
+            storyPlanRejectedStates:summary.storyPlanRejectedStates,
+            recoveredStates:recovered.length,
+            pareto:pareto.map(r=>({
+              ordinal:r.ordinal,index:r.index,allocator:r.allocator,
+              story:r.storyGrindBattles,red25:r.red25TotalGrindBattles,red50:r.red50TotalGrindBattles,
+              teamKeys:r.teamKeys
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-frontier-band-v1-final-summary
+          path: hgss_story_sim/results/red-frontier/band-v1-final-summary.json
+          if-no-files-found: error
