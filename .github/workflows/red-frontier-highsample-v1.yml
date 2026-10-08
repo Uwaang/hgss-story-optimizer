@@ -1,0 +1,294 @@
+name: red-frontier-highsample-v1
+
+on:
+  push:
+    branches:
+      - exp/red-frontier-highsample-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[red-frontier-highsample-v1]')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node --check src/cli.mjs
+          node --check src/hgss-data.mjs
+
+      - name: Download final 305-state summary
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37718412412
+          name: red-frontier-band-v1-final-summary
+          path: hgss_story_sim/results/red-frontier/highsample-source/final
+
+      - name: Download original survivor manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37658313744
+          name: red-frontier-band-v1-manifest
+          path: hgss_story_sim/results/red-frontier/highsample-source/manifest
+
+      - id: matrix
+        name: Build high-sample Pareto manifest
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const final=JSON.parse(fs.readFileSync(
+            'results/red-frontier/highsample-source/final/band-v1-final-summary.json','utf8'));
+          const source=JSON.parse(fs.readFileSync(
+            'results/red-frontier/highsample-source/manifest/survivor-manifest-v1.json','utf8'));
+          const config=JSON.parse(fs.readFileSync('results/red-frontier/highsample-v1-config.json','utf8'));
+          const byOrdinal=new Map(source.states.map(r=>[Number(r.ordinal),r]));
+          const rows=(final.pareto||[]).map((p,slot)=>{
+            const s=byOrdinal.get(Number(p.ordinal));
+            if(!s) throw new Error('missing source state for ordinal '+p.ordinal);
+            return {
+              slot,
+              ordinal:Number(p.ordinal),
+              index:Number(p.index),
+              allocator:p.allocator,
+              teamKeys:p.teamKeys,
+              sources:p.sources||s.sources||[],
+              storyPlan:s.storyPlan,
+              old:{
+                story:Number(p.storyGrindBattles),
+                red25:Number(p.red25TotalGrindBattles),
+                red50:Number(p.red50TotalGrindBattles),
+              }
+            };
+          });
+          if(rows.length!==Number(config.expectedStates)) {
+            throw new Error('expected '+config.expectedStates+' Pareto states, got '+rows.length);
+          }
+          const out={
+            schemaVersion:1,
+            sourceFinalRun:config.sourceFinalRun,
+            validation:config.validation,
+            states:rows
+          };
+          fs.writeFileSync('results/red-frontier/highsample-v1-manifest.json',JSON.stringify(out,null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'matrix='+JSON.stringify(rows.map(r=>r.slot))+'\n');
+          console.log(JSON.stringify(rows.map(r=>({
+            slot:r.slot,ordinal:r.ordinal,index:r.index,allocator:r.allocator,old:r.old
+          })),null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-frontier-highsample-v1-manifest
+          path: hgss_story_sim/results/red-frontier/highsample-v1-manifest.json
+          if-no-files-found: error
+
+  validate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        state: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      HGSS_FETCH_ATTEMPTS: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: red-frontier-highsample-v1-manifest
+          path: hgss_story_sim/results/red-frontier
+      - run: npm install
+      - name: Stagger GitHub data fetches
+        run: sleep $(( (${{ matrix.state }} % 5) * 4 ))
+
+      - name: Revalidate Story50 and reprice Red25/50 at 100 runs
+        run: |
+          mkdir -p results/red-frontier/highsample-v1
+          node - "${{ matrix.state }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const slot=Number(process.argv[2]);
+          const manifest=JSON.parse(fs.readFileSync('results/red-frontier/highsample-v1-manifest.json','utf8'));
+          const state=manifest.states[slot];
+          if(!state) throw new Error('missing highsample state '+slot);
+          const plan64=Buffer.from(JSON.stringify(state.storyPlan),'utf8').toString('base64');
+          const args=[
+            'src/cli.mjs','route-exp-practical-grind',
+            '--version=HEARTGOLD','--starter=Cyndaquil',
+            '--evolution-policy=trade-aware',
+            '--team-keys='+state.teamKeys.join(','),
+            '--exp-profile=normal-route','--exp-allocator='+state.allocator,
+            '--entry-level=expected','--same-stage-join=map-order',
+            '--resources=all','--spend-policy=natural',
+            '--story-targets=0.5','--red-targets=0.25,0.5',
+            '--repair-mode=global-only','--lean-repair=true',
+            '--screen-runs=8','--verify-runs=16','--repair-runs=32','--final-runs=100',
+            '--max-repair-rounds=16',
+            '--reuse-story-plan-base64='+plan64,
+          ];
+          const started=Date.now();
+          const p=cp.spawnSync(process.execPath,args,{
+            cwd:process.cwd(),encoding:'utf8',env:process.env,
+            maxBuffer:64*1024*1024,timeout:350*60*1000
+          });
+          const out={
+            slot,
+            ordinal:state.ordinal,
+            index:state.index,
+            allocator:state.allocator,
+            teamKeys:state.teamKeys,
+            sources:state.sources,
+            old:state.old,
+            storyPlan:state.storyPlan,
+            elapsedSeconds:Math.round((Date.now()-started)/1000)
+          };
+          if(p.status!==0){
+            out.error=(p.stderr||p.stdout||'unknown failure').slice(-16000);
+          }else{
+            try{
+              const d=JSON.parse(p.stdout);
+              const s=d.storyFrontier?.[0]||{};
+              out.repairConverged=Boolean(s.repairConverged);
+              out.reusedStoryPlan=Boolean(s.reusedStoryPlan);
+              out.storyWorstBossWinRate=Number(s.storyWorstBossWinRate||0);
+              out.storyGrindBattles=Number(s.storyGrindBattles||state.old.story);
+              out.redBaseline=s.redBaseline||null;
+              out.redFrontier=s.redFrontier||[];
+              out.evaluationCacheEntries=Number(d.evaluationCacheEntries||0);
+            }catch(e){
+              out.error='JSON parse: '+e.message;
+            }
+          }
+          fs.writeFileSync(
+            'results/red-frontier/highsample-v1/state-'+slot+'.json',
+            JSON.stringify(out,null,2)
+          );
+          console.log(JSON.stringify({
+            slot,index:out.index,allocator:out.allocator,
+            old:out.old,
+            elapsedSeconds:out.elapsedSeconds,
+            repairConverged:out.repairConverged??false,
+            storyWorstBossWinRate:out.storyWorstBossWinRate??null,
+            red:out.redFrontier?.map(x=>({
+              target:x.targetWinRate,
+              total:x.totalGrindBattles,
+              additional:x.additionalRedGrindBattles,
+              achieved:x.achievedWinRate
+            }))||[],
+            error:Boolean(out.error)
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: red-frontier-highsample-v1-state-${{ matrix.state }}
+          path: hgss_story_sim/results/red-frontier/highsample-v1/state-${{ matrix.state }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: validate
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: red-frontier-highsample-v1-state-*
+          path: hgss_story_sim/results/red-frontier/highsample-v1-all
+          merge-multiple: true
+
+      - name: Summarize 100-run validation
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const dir='results/red-frontier/highsample-v1-all';
+          const rows=fs.readdirSync(dir).filter(x=>/^state-\d+\.json$/.test(x))
+            .map(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')))
+            .sort((a,b)=>a.slot-b.slot);
+          function coord(r,target){
+            return Number(r.redFrontier?.find(x=>Number(x.targetWinRate)===target)?.totalGrindBattles ?? Infinity);
+          }
+          const successful=rows.filter(r=>!r.error&&r.repairConverged&&Array.isArray(r.redFrontier)&&r.redFrontier.length===2)
+            .map(r=>({
+              ...r,
+              red25TotalGrindBattles:coord(r,0.25),
+              red50TotalGrindBattles:coord(r,0.5),
+            }));
+          const pareto=successful.filter((r,i)=>!successful.some((o,j)=>{
+            if(i===j) return false;
+            const noWorse=
+              Number(o.storyGrindBattles)<=Number(r.storyGrindBattles)&&
+              Number(o.red25TotalGrindBattles)<=Number(r.red25TotalGrindBattles)&&
+              Number(o.red50TotalGrindBattles)<=Number(r.red50TotalGrindBattles);
+            const strict=
+              Number(o.storyGrindBattles)<Number(r.storyGrindBattles)||
+              Number(o.red25TotalGrindBattles)<Number(r.red25TotalGrindBattles)||
+              Number(o.red50TotalGrindBattles)<Number(r.red50TotalGrindBattles);
+            return noWorse&&strict;
+          })).sort((a,b)=>
+            a.storyGrindBattles-b.storyGrindBattles ||
+            a.red25TotalGrindBattles-b.red25TotalGrindBattles ||
+            a.red50TotalGrindBattles-b.red50TotalGrindBattles
+          );
+          const summary={
+            schemaVersion:1,
+            expectedStates:10,
+            observedStates:rows.length,
+            successfulStates:successful.length,
+            errorStates:rows.filter(r=>r.error).length,
+            storyPlanRejectedStates:rows.filter(r=>!r.error&&!r.repairConverged).length,
+            pareto,
+            rows,
+          };
+          fs.writeFileSync('results/red-frontier/highsample-v1-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            expectedStates:summary.expectedStates,
+            observedStates:summary.observedStates,
+            successfulStates:summary.successfulStates,
+            errorStates:summary.errorStates,
+            storyPlanRejectedStates:summary.storyPlanRejectedStates,
+            pareto:pareto.map(r=>({
+              slot:r.slot,index:r.index,allocator:r.allocator,
+              story:r.storyGrindBattles,
+              red25:r.red25TotalGrindBattles,
+              red50:r.red50TotalGrindBattles,
+              old:r.old,
+              teamKeys:r.teamKeys
+            })),
+            rejected:rows.filter(r=>!r.error&&!r.repairConverged).map(r=>({
+              slot:r.slot,index:r.index,allocator:r.allocator,
+              old:r.old,storyWorstBossWinRate:r.storyWorstBossWinRate
+            }))
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-frontier-highsample-v1-summary
+          path: hgss_story_sim/results/red-frontier/highsample-v1-summary.json
+          if-no-files-found: error
