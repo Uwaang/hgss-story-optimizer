@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "sourceRun": 37658313744,
+  "failedStateCount": 7,
+  "states": [
+    {
+      "ordinal": 1,
+      "index": 41,
+      "allocator": "boss-aware-soft",
+      "storyGrindBattles": 248,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Abra::Abra->Alakazam#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1",
+        "Lapras::Lapras->Lapras#1",
+        "Chinchou::Lanturn->Lanturn#1",
+        "Sneasel::Sneasel->Sneasel#1"
+      ],
+      "sources": [
+        "replace:N03:Horsea::Horsea->Kingdra#1->Sneasel::Sneasel->Sneasel#1",
+        "seed:N04"
+      ],
+      "storyPlan": {
+        "Morty": 1,
+        "Clair": 123,
+        "Lance": 67,
+        "Will 2": 5,
+        "Bruno 2": 46,
+        "Karen 2": 6
+      }
+    },
+    {
+      "ordinal": 37,
+      "index": 103,
+      "allocator": "boss-aware-soft",
+      "storyGrindBattles": 427,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Abra::Abra->Alakazam#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1",
+        "Lapras::Lapras->Lapras#1",
+        "Larvitar::Pupitar->Tyranitar#1",
+        "Sneasel::Sneasel->Sneasel#1"
+      ],
+      "sources": [
+        "replace:N04:Chinchou::Lanturn->Lanturn#1->Larvitar::Pupitar->Tyranitar#1"
+      ],
+      "storyPlan": {
+        "Morty": 1,
+        "Clair": 123,
+        "Lance": 67,
+        "Blue": 228,
+        "Bruno 2": 8
+      }
+    },
+    {
+      "ordinal": 207,
+      "index": 1,
+      "allocator": "boss-aware-saturation",
+      "storyGrindBattles": 772,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Abra::Abra->Alakazam#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1",
+        "Gastly::Gastly->Gengar#1",
+        "Chinchou::Lanturn->Lanturn#1",
+        "Horsea::Horsea->Kingdra#1"
+      ],
+      "sources": [
+        "replace:N03:Lapras::Lapras->Lapras#1->Gastly::Gastly->Gengar#1"
+      ],
+      "storyPlan": {
+        "Clair": 124,
+        "Lance": 331,
+        "Bruno 2": 52,
+        "Lance 2": 265
+      }
+    },
+    {
+      "ordinal": 245,
+      "index": 119,
+      "allocator": "boss-aware-saturation",
+      "storyGrindBattles": 859,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Gastly::Gastly->Gengar#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1",
+        "Lapras::Lapras->Lapras#1",
+        "Chinchou::Lanturn->Lanturn#1",
+        "Horsea::Horsea->Kingdra#1"
+      ],
+      "sources": [
+        "replace:N03:Abra::Abra->Alakazam#1->Gastly::Gastly->Gengar#1"
+      ],
+      "storyPlan": {
+        "Silver (Goldenrod Underground)": 28,
+        "Silver (Victory Road)": 3,
+        "Karen": 205,
+        "Bruno 2": 575,
+        "Clair": 20,
+        "Misty": 28
+      }
+    },
+    {
+      "ordinal": 246,
+      "index": 4,
+      "allocator": "balanced",
+      "storyGrindBattles": 860,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Abra::Abra->Alakazam#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1",
+        "Gastly::Gastly->Gengar#1",
+        "Chinchou::Lanturn->Lanturn#1",
+        "Sneasel::Sneasel->Sneasel#1"
+      ],
+      "sources": [
+        "replace:N04:Lapras::Lapras->Lapras#1->Gastly::Gastly->Gengar#1"
+      ],
+      "storyPlan": {
+        "Falkner": 12,
+        "Clair": 63,
+        "Karen": 47,
+        "Lance": 318,
+        "Sabrina": 52,
+        "Lance 2": 368
+      }
+    },
+    {
+      "ordinal": 282,
+      "index": 53,
+      "allocator": "boss-aware-soft",
+      "storyGrindBattles": 902,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Magnemite::Magnemite->Magneton#1",
+        "Geodude::Geodude->Golem#1",
+        "Abra::Abra->Alakazam#1",
+        "Gastly::Gastly->Gengar#1",
+        "Rhyhorn::Rhyhorn->Rhyperior#1"
+      ],
+      "sources": [
+        "replace:B:Wooper::Quagsire->Quagsire#1->Gastly::Gastly->Gengar#1"
+      ],
+      "storyPlan": {
+        "Clair": 317,
+        "Silver (Goldenrod Underground)": 8,
+        "Will": 9,
+        "Lance": 254,
+        "Misty": 14,
+        "Bruno 2": 63,
+        "Lance 2": 234,
+        "Falkner": 3
+      }
+    },
+    {
+      "ordinal": 295,
+      "index": 65,
+      "allocator": "boss-aware-saturation",
+      "storyGrindBattles": 923,
+      "teamKeys": [
+        "Cyndaquil::Cyndaquil->Typhlosion#1",
+        "Magnemite::Magnemite->Magneton#1",
+        "Geodude::Geodude->Golem#1",
+        "Abra::Abra->Alakazam#1",
+        "Wooper::Quagsire->Quagsire#1",
+        "Horsea::Horsea->Kingdra#1"
+      ],
+      "sources": [
+        "replace:B:Rhyhorn::Rhyhorn->Rhyperior#1->Horsea::Horsea->Kingdra#1"
+      ],
+      "storyPlan": {
+        "Falkner": 3,
+        "Clair": 241,
+        "Will": 7,
+        "Lance": 539,
+        "Lance 2": 61,
+        "Will 2": 72
+      }
+    }
+  ]
+}
