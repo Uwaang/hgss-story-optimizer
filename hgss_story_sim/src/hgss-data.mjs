@@ -28,11 +28,12 @@ export async function fetchText(url) {
       if (response.ok) return response.text();
 
       const isGithubRaw = String(url).startsWith('https://raw.githubusercontent.com/');
+      const isGithubApi = String(url).startsWith('https://api.github.com/');
       const retryable =
         response.status === 408 ||
         response.status === 425 ||
         response.status === 429 ||
-        (response.status === 403 && isGithubRaw) ||
+        (response.status === 403 && (isGithubRaw || isGithubApi)) ||
         response.status >= 500;
       if (!retryable || attempt >= attempts) {
         throw new Error(`HTTP ${response.status} while fetching ${url}`);
