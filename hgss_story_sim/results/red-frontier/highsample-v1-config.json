@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "sourceFinalRun": 37718412412,
+  "sourceFinalArtifact": "red-frontier-band-v1-final-summary",
+  "sourceManifestRun": 37658313744,
+  "sourceManifestArtifact": "red-frontier-band-v1-manifest",
+  "selection": "all final 3-axis Pareto states",
+  "expectedStates": 10,
+  "validation": {
+    "runs": 100,
+    "storyTarget": 0.5,
+    "redTargets": [
+      0.25,
+      0.5
+    ],
+    "reuseExactStoryPlan": true,
+    "repriceRedFrontier": true
+  },
+  "nextStage": "Use validated survivors as seeds for 2-slot neighborhood expansion; then 500-1000 run confirmation for final few."
+}
