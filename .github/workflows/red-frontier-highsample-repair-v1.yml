@@ -1,0 +1,236 @@
+name: red-frontier-highsample-repair-v1
+
+on:
+  push:
+    branches:
+      - exp/red-frontier-highsample-repair-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[red-frontier-highsample-repair-v1]')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node --check src/cli.mjs
+          node --check src/hgss-data.mjs
+
+      - name: Download 10-state Pareto manifest
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37725234839
+          name: red-frontier-highsample-v1-manifest
+          path: hgss_story_sim/results/red-frontier
+
+      - id: matrix
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('results/red-frontier/highsample-v1-manifest.json','utf8'));
+          if(m.states.length!==10) throw new Error('expected 10 Pareto states');
+          console.log('matrix='+JSON.stringify(m.states.map(s=>s.slot)));
+          NODE
+
+  repair:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        state: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_FETCH_ATTEMPTS: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: red-frontier-highsample-v1-manifest
+          path: hgss_story_sim/results/red-frontier
+      - run: npm install
+      - name: Stagger GitHub data fetches
+        run: sleep $(( (${{ matrix.state }} % 5) * 5 ))
+
+      - name: Repair Story50 at 32/100 runs and reprice Red25/50
+        run: |
+          mkdir -p results/red-frontier/highsample-repair-v1
+          node - "${{ matrix.state }}" <<'NODE'
+          const fs=require('fs'),cp=require('child_process');
+          const slot=Number(process.argv[2]);
+          const manifest=JSON.parse(fs.readFileSync('results/red-frontier/highsample-v1-manifest.json','utf8'));
+          const state=manifest.states[slot];
+          if(!state) throw new Error('missing state '+slot);
+          const seed64=Buffer.from(JSON.stringify(state.storyPlan),'utf8').toString('base64');
+          const args=[
+            'src/cli.mjs','route-exp-practical-grind',
+            '--version=HEARTGOLD','--starter=Cyndaquil',
+            '--evolution-policy=trade-aware',
+            '--team-keys='+state.teamKeys.join(','),
+            '--exp-profile=normal-route','--exp-allocator='+state.allocator,
+            '--entry-level=expected','--same-stage-join=map-order',
+            '--resources=all','--spend-policy=natural',
+            '--story-targets=0.5','--red-targets=0.25,0.5',
+            '--repair-mode=global-only','--lean-repair=true',
+            '--screen-runs=8','--verify-runs=16','--repair-runs=32','--final-runs=100',
+            '--max-repair-rounds=24',
+            '--seed-story-plan-base64='+seed64,
+          ];
+          const started=Date.now();
+          const p=cp.spawnSync(process.execPath,args,{
+            cwd:process.cwd(),encoding:'utf8',env:process.env,
+            maxBuffer:96*1024*1024,timeout:350*60*1000
+          });
+          const out={
+            slot,ordinal:state.ordinal,index:state.index,allocator:state.allocator,
+            teamKeys:state.teamKeys,sources:state.sources,old:state.old,
+            seedStoryPlan:state.storyPlan,
+            elapsedSeconds:Math.round((Date.now()-started)/1000),
+          };
+          if(p.status!==0){
+            out.error=(p.stderr||p.stdout||'unknown failure').slice(-20000);
+          }else{
+            try{
+              const d=JSON.parse(p.stdout);
+              const s=d.storyFrontier?.[0]||{};
+              out.repairConverged=Boolean(s.repairConverged);
+              out.storyWorstBossWinRate=Number(s.storyWorstBossWinRate||0);
+              out.storyGrindBattles=Number(s.storyGrindBattles||0);
+              out.storyGrindExp=Number(s.storyGrindExp||0);
+              out.storyPlan=s.storyPlan||null;
+              out.repairRounds=Number(s.repairRounds||0);
+              out.repairHistory=s.repairHistory||[];
+              out.redBaseline=s.redBaseline||null;
+              out.redFrontier=s.redFrontier||[];
+              out.evaluationCacheEntries=Number(d.evaluationCacheEntries||0);
+              out.seededStoryPlan=Boolean(d.assumptions?.seededStoryPlan);
+            }catch(e){out.error='JSON parse: '+e.message;}
+          }
+          fs.writeFileSync(
+            'results/red-frontier/highsample-repair-v1/state-'+slot+'.json',
+            JSON.stringify(out,null,2)
+          );
+          console.log(JSON.stringify({
+            slot,index:out.index,allocator:out.allocator,old:out.old,
+            elapsedSeconds:out.elapsedSeconds,
+            repairConverged:out.repairConverged??false,
+            story:out.storyGrindBattles??null,
+            storyWorstBossWinRate:out.storyWorstBossWinRate??null,
+            repairRounds:out.repairRounds??null,
+            red:out.redFrontier?.map(x=>({
+              target:x.targetWinRate,total:x.totalGrindBattles,
+              additional:x.additionalRedGrindBattles,achieved:x.achievedWinRate
+            }))||[],
+            error:Boolean(out.error)
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: red-frontier-highsample-repair-v1-state-${{ matrix.state }}
+          path: hgss_story_sim/results/red-frontier/highsample-repair-v1/state-${{ matrix.state }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: repair
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: red-frontier-highsample-repair-v1-state-*
+          path: hgss_story_sim/results/red-frontier/highsample-repair-v1-all
+          merge-multiple: true
+
+      - name: Summarize repaired 100-run frontier
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const dir='results/red-frontier/highsample-repair-v1-all';
+          const rows=fs.readdirSync(dir).filter(x=>/^state-\d+\.json$/.test(x))
+            .map(f=>JSON.parse(fs.readFileSync(path.join(dir,f),'utf8')))
+            .sort((a,b)=>a.slot-b.slot);
+          function coord(r,target){
+            return Number(r.redFrontier?.find(x=>Number(x.targetWinRate)===target)?.totalGrindBattles ?? Infinity);
+          }
+          const successful=rows.filter(r=>!r.error&&r.repairConverged&&Array.isArray(r.redFrontier)&&r.redFrontier.length===2)
+            .map(r=>({
+              ...r,
+              red25TotalGrindBattles:coord(r,0.25),
+              red50TotalGrindBattles:coord(r,0.5),
+            }));
+          const pareto=successful.filter((r,i)=>!successful.some((o,j)=>{
+            if(i===j) return false;
+            const noWorse=
+              Number(o.storyGrindBattles)<=Number(r.storyGrindBattles)&&
+              Number(o.red25TotalGrindBattles)<=Number(r.red25TotalGrindBattles)&&
+              Number(o.red50TotalGrindBattles)<=Number(r.red50TotalGrindBattles);
+            const strict=
+              Number(o.storyGrindBattles)<Number(r.storyGrindBattles)||
+              Number(o.red25TotalGrindBattles)<Number(r.red25TotalGrindBattles)||
+              Number(o.red50TotalGrindBattles)<Number(r.red50TotalGrindBattles);
+            return noWorse&&strict;
+          })).sort((a,b)=>
+            a.storyGrindBattles-b.storyGrindBattles ||
+            a.red25TotalGrindBattles-b.red25TotalGrindBattles ||
+            a.red50TotalGrindBattles-b.red50TotalGrindBattles
+          );
+          const summary={
+            schemaVersion:1,expectedStates:10,observedStates:rows.length,
+            successfulStates:successful.length,
+            errorStates:rows.filter(r=>r.error).length,
+            nonconvergedStates:rows.filter(r=>!r.error&&!r.repairConverged).length,
+            pareto,rows
+          };
+          fs.writeFileSync('results/red-frontier/highsample-repair-v1-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            expectedStates:summary.expectedStates,
+            observedStates:summary.observedStates,
+            successfulStates:summary.successfulStates,
+            errorStates:summary.errorStates,
+            nonconvergedStates:summary.nonconvergedStates,
+            pareto:pareto.map(r=>({
+              slot:r.slot,index:r.index,allocator:r.allocator,
+              story:r.storyGrindBattles,red25:r.red25TotalGrindBattles,red50:r.red50TotalGrindBattles,
+              old:r.old,repairRounds:r.repairRounds,teamKeys:r.teamKeys
+            })),
+            nonconverged:rows.filter(r=>!r.error&&!r.repairConverged).map(r=>({
+              slot:r.slot,index:r.index,allocator:r.allocator,old:r.old,
+              story:r.storyGrindBattles,storyWorstBossWinRate:r.storyWorstBossWinRate,
+              repairRounds:r.repairRounds
+            })),
+            errors:rows.filter(r=>r.error).map(r=>({slot:r.slot,index:r.index,error:r.error.slice(-1000)}))
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-frontier-highsample-repair-v1-summary
+          path: hgss_story_sim/results/red-frontier/highsample-repair-v1-summary.json
+          if-no-files-found: error
