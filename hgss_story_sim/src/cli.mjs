@@ -11625,6 +11625,21 @@ async function cmdEvolutionLegalitySmoke() {
     )[0]?.species || null;
   }
 
+  function transition(origin, terminal, method) {
+    const candidate = variant(origin, terminal);
+    const row = (candidate.speciesByStage || []).find(step => step.evolutionMethod === method);
+    if (!row) throw new Error(`Missing ${method} transition for ${origin}->${terminal}`);
+    return row;
+  }
+
+  const crobatFriendship = transition('Zubat', 'Crobat', 'EVO_FRIENDSHIP');
+  const espeonFriendship = transition('Eevee', 'Espeon', 'EVO_FRIENDSHIP_DAY');
+  const umbreonFriendship = transition('Eevee', 'Umbreon', 'EVO_FRIENDSHIP_NIGHT');
+
+  if (Number(crobatFriendship.level) !== 23) {
+    throw new Error(`Crobat must require a second level-up after Golbat Lv22; got Lv${crobatFriendship.level}`);
+  }
+
   const checks = [
     {
       name: 'pure-trade-gengar',
@@ -11660,6 +11675,41 @@ async function cmdEvolutionLegalitySmoke() {
       name: 'leaf-stone-after-source',
       actual: materialized('Bellsprout', 'Victreebel', 'Morty', 57),
       expected: 'Victreebel',
+    },
+    {
+      name: 'friendship-crobat-before-trigger',
+      actual: materialized('Zubat', 'Crobat', 'Red', Number(crobatFriendship.level) - 1),
+      expected: 'Golbat',
+    },
+    {
+      name: 'friendship-crobat-at-trigger',
+      actual: materialized('Zubat', 'Crobat', 'Red', Number(crobatFriendship.level)),
+      expected: 'Crobat',
+    },
+    {
+      name: 'friendship-espeon-before-trigger',
+      actual: materialized('Eevee', 'Espeon', 'Red', Number(espeonFriendship.level) - 1),
+      expected: 'Eevee',
+    },
+    {
+      name: 'friendship-espeon-at-trigger',
+      actual: materialized('Eevee', 'Espeon', 'Red', Number(espeonFriendship.level)),
+      expected: 'Espeon',
+    },
+    {
+      name: 'friendship-umbreon-at-trigger',
+      actual: materialized('Eevee', 'Umbreon', 'Red', Number(umbreonFriendship.level)),
+      expected: 'Umbreon',
+    },
+    {
+      name: 'friendship-then-shiny-stone-togekiss',
+      actual: materialized('Togepi', 'Togekiss', 'Lt. Surge', 57),
+      expected: 'Togekiss',
+    },
+    {
+      name: 'friendship-blissey',
+      actual: materialized('Chansey', 'Blissey', 'Red', 57),
+      expected: 'Blissey',
     },
     {
       name: 'nidoran-f-moon-stone',
@@ -11711,6 +11761,11 @@ async function cmdEvolutionLegalitySmoke() {
     schemaVersion: 1,
     evolutionPolicy: pool.evolutionPolicy,
     checks,
+    friendshipTransitions: {
+      crobat: crobatFriendship,
+      espeon: espeonFriendship,
+      umbreon: umbreonFriendship,
+    },
     focusItemAccess: {
       metalCoat: pool.evolutionAccess?.items?.ITEM_METAL_COAT || null,
       protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
