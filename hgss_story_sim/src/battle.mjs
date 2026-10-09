@@ -357,8 +357,21 @@ export function candidateMovePool(
   if (!species.exists) throw new Error(`Unknown Gen 4 species: ${speciesName}`);
   const lineage = evolutionMoveLineage(species.name, originSpeciesName, level);
   const moves = new Set();
-  for (const entry of lineage) {
-    for (const moveName of levelUpMovePool(entry.species.name, entry.maxLevel)) moves.add(moveName);
+  const moveReminderAvailable =
+    Number.isFinite(Number(moveAccess?.moveReminder?.availableFrom)) &&
+    Number(stage) >= Number(moveAccess.moveReminder.availableFrom);
+  for (let index = 0; index < lineage.length; index += 1) {
+    const entry = lineage[index];
+    const isOriginSpecies = index === 0;
+    for (const move of levelUpMoveEntries(entry.species.name, entry.maxLevel)) {
+      // A level-1 move belonging only to an evolved form cannot be learned by
+      // ordinary leveling after that evolution. In HGSS it becomes available
+      // through the Blackthorn Move Reminder (Heart Scale). Before that
+      // checkpoint, only the origin species may legitimately contribute its
+      // own level-1 moves to the retained-move history.
+      if (move.level === 1 && !isOriginSpecies && !moveReminderAvailable) continue;
+      moves.add(move.name);
+    }
   }
   for (const machine of moveAccess?.reusableMachines || []) {
     if (Number(machine.availableFrom) > stage) continue;
