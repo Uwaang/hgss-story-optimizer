@@ -4,7 +4,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -9619,6 +9619,7 @@ function buildEqualLevelRouteBuildPlan(
   singleUsePlan,
   purchasablePlan,
   levels,
+  routeMovesOverrideByCandidate = null,
 ) {
   const plan = {};
   for (const candidate of candidates) {
@@ -9644,17 +9645,26 @@ function buildEqualLevelRouteBuildPlan(
       ...(singleUsePlan[key] || []),
       ...(purchasablePlan[key] || []),
     ];
-    const routeMoves = optimizePlayerRouteMoves(
-      finalMon,
-      samples.map(sample => sample.foeTeam),
-      {
-        stage: Number(last.boss.stage),
-        moveAccess,
-        extraMachines: assignedMachines,
-        originSpeciesName: candidate.species,
-        shortlistCap: 12,
-      },
-    );
+    const overrideMoves = routeMovesOverrideByCandidate?.[key];
+    const routeMoves = Array.isArray(overrideMoves) && overrideMoves.length
+      ? {
+          moves: [...new Set(overrideMoves)].slice(0, 4),
+          source: 'moveset-v2-override',
+          legalMoveCount: null,
+          evaluatedMovesets: null,
+          proxyScore: null,
+        }
+      : optimizePlayerRouteMoves(
+          finalMon,
+          samples.map(sample => sample.foeTeam),
+          {
+            stage: Number(last.boss.stage),
+            moveAccess,
+            extraMachines: assignedMachines,
+            originSpeciesName: candidate.species,
+            shortlistCap: 12,
+          },
+        );
 
     const refinedSamples = samples.map(sample => {
       let mon = applyPlayerRouteBuild(sample.mon, build);
@@ -9683,7 +9693,7 @@ const EQUAL_LEVEL_PREPARATION_CACHE_PATH = process.env.HGSS_PREPARATION_CACHE_PA
   ? path.resolve(process.cwd(), process.env.HGSS_PREPARATION_CACHE_PATH)
   : null;
 const EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE = String(
-  process.env.HGSS_PREPARATION_CACHE_NAMESPACE || 'equal-level-preparation-v1'
+  process.env.HGSS_PREPARATION_CACHE_NAMESPACE || 'equal-level-preparation-v2-move-legality'
 );
 const equalLevelPreparationCache = new Map();
 let equalLevelPreparationCacheLoaded = false;
@@ -9695,7 +9705,13 @@ const equalLevelPreparationCacheCounters = {
   writes: 0,
 };
 
-function equalLevelPreparationKey(candidates, routeBosses, commonLevel, moveAccess) {
+function equalLevelPreparationKey(
+  candidates,
+  routeBosses,
+  commonLevel,
+  moveAccess,
+  routeMovesOverrideByCandidate = null,
+) {
   const payload = JSON.stringify({
     namespace: EQUAL_LEVEL_PREPARATION_CACHE_NAMESPACE,
     team: candidates.map(candidate => ({
@@ -9710,6 +9726,14 @@ function equalLevelPreparationKey(candidates, routeBosses, commonLevel, moveAcce
     commonLevel: Number(commonLevel),
     resourceProfile: moveAccess?.resourceProfile || null,
     spendPolicy: moveAccess?.spendPolicy || null,
+    moveReminderAvailableFrom: moveAccess?.moveReminder?.availableFrom ?? null,
+    routeMovesOverrideByCandidate: routeMovesOverrideByCandidate
+      ? Object.fromEntries(
+          Object.entries(routeMovesOverrideByCandidate)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, moves]) => [key, [...new Set(moves || [])]])
+        )
+      : null,
   });
   return createHash('sha256').update(payload).digest('hex');
 }
@@ -9801,11 +9825,17 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     ])
   );
   await ensureEqualLevelPreparationCacheLoaded();
+  const routeMovesOverrideByCandidate =
+    options.routeMovesOverrideByCandidate &&
+    typeof options.routeMovesOverrideByCandidate === 'object'
+      ? options.routeMovesOverrideByCandidate
+      : null;
   const basePreparationKey = equalLevelPreparationKey(
     candidates,
     routeBosses,
     commonLevel,
     moveAccess,
+    routeMovesOverrideByCandidate,
   );
   const preparationKey = hasFixedLevels
     ? createHash('sha256').update(
@@ -9846,6 +9876,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       singleUsePlan,
       purchasablePlan,
       levels,
+      routeMovesOverrideByCandidate,
     );
     prepared = {
       levels,
