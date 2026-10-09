@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   probe:
+    if: contains(github.event.head_commit.message, '[research-v2-moveset-calibration]')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
