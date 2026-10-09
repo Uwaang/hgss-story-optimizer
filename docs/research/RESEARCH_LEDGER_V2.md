@@ -359,6 +359,14 @@ Important distinction:
 
 Research v2 must quantify which HGSS-legal terminal forms are currently omitted before the next global search.
 
+Leaf-terminal diagnostic:
+- workflow run `37897480281`
+- current pool: 144 candidates / 100 families
+- **39 leaf terminal candidates** require HGSS legality/timing audit
+- 3 additional leaves are known DPPt-only/unavailable location evolutions (Magnezone, Leafeon, Glaceon)
+- notable audit targets include Crobat, Espeon/Umbreon, Ambipom, Lickilicky, Mamoswine, Tangrowth, Yanmega, Gliscor, Weavile, Tyrogue branches, stone evolutions, and Togekiss
+- current `evolution-access.hgss.json` contains source-backed timing primarily for trade-evolution items; stone/Razor item timing data must be expanded for P0-C
+
 Disposition: **P0-C search completeness**, not a battle-policy fix.
 
 ## 10. Next concrete continuation point
