@@ -855,6 +855,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         breakpointLevelLookahead: expContext?.breakpointLevelLookahead || 12,
         breakpointDiscount: expContext?.breakpointDiscount || 0.72,
         activationTargets: expContext?.activationTargets || [],
+        recipientPolicy: expContext?.recipientPolicy || {},
       });
   const catchUp = estimateCatchUpLevels(candidates, routeBosses);
   const captureSearch = summarizeCaptureSearch(candidates);
@@ -6275,6 +6276,146 @@ async function cmdExpSegmentSmoke() {
     levelsBefore: stage6.levelsBefore,
   }, null, 2));
 }
+
+
+async function cmdExpSchedulerV1Smoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude', 'Zubat', 'Lapras', 'Wooper'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error('Missing scheduler-v1 smoke candidate: ' + name);
+    return candidate;
+  });
+  const target = team.find(candidate => candidate.species === 'Wooper');
+  const targetKey = candidateIdentity(target);
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const blueIndex = route.findIndex(boss => String(boss.label) === 'Blue');
+  const redIndex = route.findIndex(boss => String(boss.label) === 'Red');
+  if (blueIndex < 0 || redIndex < 0 || redIndex <= blueIndex) {
+    throw new Error('Scheduler-v1 smoke could not locate Blue/Red checkpoints');
+  }
+
+  const expContext = await loadExpContext(
+    story,
+    'normal-route',
+    'HEARTGOLD',
+    'none',
+    'midpoint',
+    'map-order',
+    'balanced',
+  );
+  const allKeys = team.map(candidateIdentity);
+  const withoutTarget = allKeys.filter(key => key !== targetKey);
+
+  function benchUntil(index) {
+    return Object.fromEntries(
+      route.slice(0, index).map((_boss, battleIndex) => [
+        String(battleIndex),
+        withoutTarget,
+      ])
+    );
+  }
+
+  const baseline = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocator: 'balanced',
+  });
+  const benchBlue = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocator: 'balanced',
+    recipientPolicy: benchUntil(blueIndex),
+  });
+  const benchRed = buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'none',
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocator: 'balanced',
+    recipientPolicy: benchUntil(redIndex),
+  });
+
+  for (const schedule of [benchBlue, benchRed]) {
+    if (schedule.totalNaturalExp !== baseline.totalNaturalExp) {
+      throw new Error(
+        'Recipient policy changed total natural EXP: ' +
+        schedule.totalNaturalExp + ' != ' + baseline.totalNaturalExp
+      );
+    }
+    if (schedule.totalAllocatedExp !== baseline.totalAllocatedExp) {
+      throw new Error(
+        'Recipient policy failed EXP conservation: ' +
+        schedule.totalAllocatedExp + ' != ' + baseline.totalAllocatedExp
+      );
+    }
+  }
+
+  function assertBenchedBefore(schedule, activationIndex, label) {
+    for (const battle of schedule.battles.slice(0, activationIndex)) {
+      if (battle.activeRecipientKeysBefore.includes(targetKey)) {
+        throw new Error(label + ' target active too early at ' + battle.label);
+      }
+      const allocated = Number(battle.routeAllocatedExpBefore?.[targetKey] || 0);
+      if (allocated !== 0) {
+        throw new Error(
+          label + ' target received route EXP while benched at ' +
+          battle.label + ': ' + allocated
+        );
+      }
+    }
+    const activation = schedule.battles[activationIndex];
+    if (!activation?.activeRecipientKeysBefore.includes(targetKey)) {
+      throw new Error(label + ' target not active at activation checkpoint');
+    }
+  }
+
+  assertBenchedBefore(benchBlue, blueIndex, 'bench-until-Blue');
+  assertBenchedBefore(benchRed, redIndex, 'bench-until-Red');
+
+  function compact(schedule, activationIndex) {
+    const activation = schedule.battles[activationIndex];
+    return {
+      totalNaturalExp: schedule.totalNaturalExp,
+      totalAllocatedExp: schedule.totalAllocatedExp,
+      totalUnallocatedExp: schedule.totalUnallocatedExp,
+      finalLevels: schedule.finalLevels,
+      targetFinalLevel: schedule.finalLevels?.[targetKey] ?? null,
+      activationCheckpoint: activation?.label || null,
+      activationRecipients: activation?.activeRecipientKeysBefore || [],
+      targetRouteExpAtActivation:
+        Number(activation?.routeAllocatedExpBefore?.[targetKey] || 0),
+    };
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 EXP Scheduler v1 recipient-state regression smoke',
+    team: team.map(candidate => candidate.species),
+    target: target.species,
+    targetKey,
+    controls: {
+      baseline: compact(baseline, blueIndex),
+      benchUntilBlue: compact(benchBlue, blueIndex),
+      benchUntilRed: compact(benchRed, redIndex),
+    },
+  }, null, 2));
+}
+
 
 async function cmdExpAllocatorSmoke() {
   const story = await loadStory();
@@ -13702,6 +13843,7 @@ const commands = {
   'route-exp-practical-grind': cmdRouteExpPracticalGrind,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
+  'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'team-order-smoke': cmdTeamOrderSmoke,
   'objective-smoke': cmdObjectiveSmoke,
