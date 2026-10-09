@@ -1,5 +1,5 @@
 name: research-v2-moveset-calibration
-# calibration trigger: per-boss move usage
+# target-generalized calibration; current target: Tyranitar
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
       - name: Moveset Build v2 calibration probe
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=3 --pool-cap=24 --top-calibration=6 \
+          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=3 --pool-cap=24 --top-calibration=6 --target=Tyranitar \
             > results/research-v2/moveset-build-v2-probe.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
