@@ -1,0 +1,58 @@
+name: research-v2-moveset-calibration
+
+on:
+  push:
+    branches:
+      - research/v2-moveset-calibration-v1
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smoke
+        run: |
+          node src/cli.mjs tutor-smoke
+          node src/cli.mjs move-score-smoke
+          node src/cli.mjs evolution-legality-smoke
+      - name: Moveset Build v2 calibration probe
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=1 --pool-cap=24 --top-calibration=6 \
+            > results/research-v2/moveset-build-v2-probe.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/moveset-build-v2-probe.json','utf8'));
+          console.log(JSON.stringify({
+            baselineV1:r.baselineV1,
+            enumeration:r.enumeration,
+            spearman:r.calibration.proxyActualSpearman,
+            sampleCount:r.calibration.sampleCount,
+            bestActualSample:r.calibration.bestActualSample,
+            calibration:r.calibration.rows.map(x=>({
+              proxyRank:x.proxyRank,
+              moves:x.moves,
+              isCurrentV1:x.isCurrentV1,
+              retry:x.actual.expectedRetryFailures,
+              geometric:x.actual.geometricScore,
+              mean:x.actual.meanWinRate,
+              worst:x.actual.worstBossWinRate
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-moveset-build-v2-probe
+          path: hgss_story_sim/results/research-v2/moveset-build-v2-probe.json
+          if-no-files-found: error
