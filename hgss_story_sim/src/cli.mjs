@@ -12384,6 +12384,159 @@ async function cmdMovesetBuildV2ShortlistValidate() {
   }, null, 2));
 }
 
+
+async function cmdMovesetBuildV2PolicyIntrusion() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const target = team[0];
+  const targetKey = candidateIdentity(target);
+
+  const candidates = [
+    {
+      label: 'two-active-control',
+      moves: ['Eruption', 'Flamethrower', 'Ember', 'Lava Plume'],
+      bannedMoves: ['Focus Punch', 'Focus Blast', 'Double-Edge'],
+      testedMove: null,
+    },
+    {
+      label: 'add-focus-punch',
+      moves: ['Eruption', 'Flamethrower', 'Ember', 'Focus Punch'],
+      bannedMoves: ['Focus Blast', 'Double-Edge', 'Lava Plume'],
+      testedMove: 'Focus Punch',
+    },
+    {
+      label: 'add-focus-blast',
+      moves: ['Eruption', 'Flamethrower', 'Ember', 'Focus Blast'],
+      bannedMoves: ['Focus Punch', 'Double-Edge', 'Lava Plume'],
+      testedMove: 'Focus Blast',
+    },
+    {
+      label: 'add-double-edge',
+      moves: ['Eruption', 'Flamethrower', 'Ember', 'Double-Edge'],
+      bannedMoves: ['Focus Punch', 'Focus Blast', 'Lava Plume'],
+      testedMove: 'Double-Edge',
+    },
+    {
+      label: 'add-fire-blast',
+      moves: ['Eruption', 'Flamethrower', 'Ember', 'Fire Blast'],
+      bannedMoves: ['Focus Punch', 'Focus Blast', 'Double-Edge', 'Lava Plume'],
+      testedMove: 'Fire Blast',
+    },
+    {
+      label: 'baseline-v1',
+      moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Double-Edge'],
+      bannedMoves: [],
+      testedMove: 'baseline',
+    },
+  ];
+
+  const rows = [];
+  for (const candidate of candidates) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: {
+            moves: candidate.moves,
+            bannedMoves: candidate.bannedMoves,
+          },
+        },
+      },
+    );
+    rows.push({
+      ...candidate,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        bossRows: (evaluation.rows || []).map(row => ({
+          boss: row.boss,
+          stage: Number(row.stage || 0),
+          wins: Number(row.wins || 0),
+          runs: Number(row.runs || 0),
+          winRate: Number(row.winRate || 0),
+          averageTurns: Number(row.averageTurns || 0),
+          targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
+        })),
+      },
+    });
+  }
+
+  const control = rows.find(row => row.label === 'two-active-control');
+  if (!control) throw new Error('Policy intrusion control missing');
+  const controlBoss = new Map(control.actual.bossRows.map(row => [row.boss, row]));
+  for (const row of rows) {
+    const bossDeltas = row.actual.bossRows.map(boss => {
+      const base = controlBoss.get(boss.boss);
+      return {
+        boss: boss.boss,
+        controlWinRate: Number(base?.winRate || 0),
+        candidateWinRate: Number(boss.winRate || 0),
+        delta: Number(boss.winRate || 0) - Number(base?.winRate || 0),
+        testedMoveUses: row.testedMove && row.testedMove !== 'baseline'
+          ? Number(boss.targetMoveUses?.[row.testedMove] || 0)
+          : null,
+      };
+    });
+    row.vsControl = {
+      retryDelta: Number(row.actual.expectedRetryFailures) - Number(control.actual.expectedRetryFailures),
+      geometricDelta: Number(row.actual.geometricScore) - Number(control.actual.geometricScore),
+      meanDelta: Number(row.actual.meanWinRate) - Number(control.actual.meanWinRate),
+      bossesImproved: bossDeltas.filter(x => x.delta > 1e-12).length,
+      bossesWorsened: bossDeltas.filter(x => x.delta < -1e-12).length,
+      bossDeltas: bossDeltas
+        .filter(x => Math.abs(x.delta) > 1e-12 || Number(x.testedMoveUses || 0) > 0)
+        .sort((a, b) =>
+          Math.abs(Number(b.delta)) - Math.abs(Number(a.delta)) ||
+          a.boss.localeCompare(b.boss)
+        ),
+    };
+  }
+
+  rows.sort(compareMovesetActual);
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D Typhlosion smart-policy option-intrusion ablation',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeedsAcrossMovesets: true,
+      strictRemovedMoveExclusion: true,
+      fixedActiveCore: ['Eruption', 'Flamethrower', 'Ember'],
+      controlFourth: 'Lava Plume',
+      note: 'Tests whether exposing one additional move changes actual smart-policy route outcomes; no move-specific scoring coefficients are introduced.',
+    },
+    controlLabel: 'two-active-control',
+    rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -12880,6 +13033,7 @@ const commands = {
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
   'moveset-build-v2-shortlist-validate': cmdMovesetBuildV2ShortlistValidate,
+  'moveset-build-v2-policy-intrusion': cmdMovesetBuildV2PolicyIntrusion,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
