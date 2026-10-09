@@ -1,0 +1,98 @@
+name: research-v2-mechanics-parity
+
+on:
+  push:
+    branches:
+      - research/v2-rebase
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-mechanics-parity]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax and mechanics smoke
+        run: |
+          node --check src/battle.mjs
+          node --check src/cli.mjs
+          npm run move-score-smoke
+          npm run switch-smoke
+          npm run route-smoke
+
+  idx30_reprice:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      HGSS_FETCH_ATTEMPTS: 10
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Reprice idx30 saturation at 100 runs
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs route-exp-practical-grind \
+            --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware \
+            --team-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1,Larvitar::Pupitar->Tyranitar#1" \
+            --exp-profile=normal-route --exp-allocator=boss-aware-saturation \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --story-targets=0.5 --red-targets=0.25,0.5 \
+            --repair-mode=global-only --lean-repair=true \
+            --screen-runs=8 --verify-runs=16 --repair-runs=32 --final-runs=100 \
+            --max-repair-rounds=24 \
+            > results/research-v2/idx30-saturation-mechanics-v2.json
+
+      - name: Summarize A/B
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const d=JSON.parse(fs.readFileSync('results/research-v2/idx30-saturation-mechanics-v2.json','utf8'));
+          const s=d.storyFrontier?.[0]||{};
+          const r25=s.redFrontier?.find(x=>Number(x.targetWinRate)===0.25)||{};
+          const r50=s.redFrontier?.find(x=>Number(x.targetWinRate)===0.5)||{};
+          const out={
+            baseline:{story:322,red25:1040,red50:1349},
+            mechanicsV2:{
+              story:Number(s.storyGrindBattles),
+              red25:Number(r25.totalGrindBattles),
+              red50:Number(r50.totalGrindBattles),
+              storyWorstBossWinRate:Number(s.storyWorstBossWinRate),
+              repairConverged:Boolean(s.repairConverged),
+              repairRounds:Number(s.repairRounds||0),
+            },
+            delta:{
+              story:Number(s.storyGrindBattles)-322,
+              red25:Number(r25.totalGrindBattles)-1040,
+              red50:Number(r50.totalGrindBattles)-1349,
+            }
+          };
+          fs.writeFileSync('results/research-v2/idx30-saturation-mechanics-v2-summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-idx30-mechanics-ab
+          path: |
+            hgss_story_sim/results/research-v2/idx30-saturation-mechanics-v2.json
+            hgss_story_sim/results/research-v2/idx30-saturation-mechanics-v2-summary.json
+          if-no-files-found: error
