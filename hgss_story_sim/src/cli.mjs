@@ -12303,6 +12303,10 @@ async function cmdMovesetBuildV2ShortlistValidate() {
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
+  const selectedLabels = String(arg('labels', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
   const traceMoves = String(arg('trace', 'false')).toLowerCase() === 'true';
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
@@ -12319,7 +12323,7 @@ async function cmdMovesetBuildV2ShortlistValidate() {
   ];
   const target = team[0];
   const targetKey = candidateIdentity(target);
-  const shortlist = [
+  const allShortlist = [
     {
       label: 'baseline-v1',
       moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Double-Edge'],
@@ -12361,6 +12365,15 @@ async function cmdMovesetBuildV2ShortlistValidate() {
       bannedMoves: ['Eruption'],
     },
   ];
+  const requestedLabelSet = selectedLabels.length ? new Set(selectedLabels) : null;
+  const shortlist = requestedLabelSet
+    ? allShortlist.filter(candidate => requestedLabelSet.has(candidate.label))
+    : allShortlist;
+  if (requestedLabelSet && shortlist.length !== requestedLabelSet.size) {
+    const known = new Set(allShortlist.map(candidate => candidate.label));
+    const missing = selectedLabels.filter(label => !known.has(label));
+    throw new Error(`Unknown shortlist labels: ${missing.join(', ')}`);
+  }
 
   const rows = [];
   for (const candidate of shortlist) {
@@ -12408,6 +12421,7 @@ async function cmdMovesetBuildV2ShortlistValidate() {
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
       strictRemovedMoveExclusion: true,
+      selectedLabels: selectedLabels.length ? selectedLabels : 'all',
       bossLabels: bossLabels.length ? bossLabels : 'all',
       traceMoves,
       target: 'Typhlosion',
