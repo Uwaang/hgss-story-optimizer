@@ -11864,6 +11864,158 @@ async function cmdMovesetBuildV2Probe() {
   }, null, 2));
 }
 
+
+async function cmdMovesetBuildV2FourthSlotScreen() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '3'))));
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const levels = Object.fromEntries(team.map(candidate => [candidateIdentity(candidate), commonLevel]));
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(team, routeBosses, moveAccess, { levelsByBattle });
+  const purchasable = planPurchasableMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const purchasablePlan = purchasable.assignments;
+  const baselinePlan = buildEqualLevelRouteBuildPlan(
+    team,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan,
+    levels,
+  );
+  const target = team[0];
+  const targetKey = candidateIdentity(target);
+  const lastBoss = routeBosses[routeBosses.length - 1];
+  let targetMon = materializeCandidateTeam(
+    [target],
+    lastBoss.stage,
+    commonLevel,
+    {
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      levelsByCandidate: levels,
+      boss: lastBoss,
+    },
+  )[0];
+  if (!targetMon) throw new Error('Typhlosion target did not materialize');
+  targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
+  const assignedMachines = [
+    ...(singleUsePlan[targetKey] || []),
+    ...(purchasablePlan[targetKey] || []),
+  ];
+  const foeTeams = routeBosses.map(boss => hgssTrainerToShowdownTeam(boss.trainer, boss));
+  const enumeration = enumeratePlayerRouteMovesetsV2(
+    targetMon,
+    foeTeams,
+    {
+      stage: Number(lastBoss.stage),
+      moveAccess,
+      extraMachines: assignedMachines,
+      originSpeciesName: target.species,
+      poolCap: 64,
+      requiredMoves: baselinePlan[targetKey]?.routeMoves || [],
+    },
+  );
+  const proxyRankByKey = new Map(
+    enumeration.rows.map((row, index) => [movesetKey(row.moves), index + 1])
+  );
+  const core = ['Eruption', 'Focus Punch', 'Focus Blast'];
+  for (const move of core) {
+    if (!enumeration.legalPool.includes(move)) {
+      throw new Error('Expected core move missing from legal pool: ' + move);
+    }
+  }
+  const variants = enumeration.legalPool
+    .filter(move => !core.includes(move))
+    .map(fourth => ({
+      fourth,
+      moves: [...core, fourth],
+    }))
+    .sort((a, b) => a.fourth.localeCompare(b.fourth));
+
+  const rows = [];
+  for (const variant of variants) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: variant.moves,
+        },
+      },
+    );
+    rows.push({
+      fourth: variant.fourth,
+      moves: variant.moves,
+      proxyRank: proxyRankByKey.get(movesetKey(variant.moves)) ?? null,
+      isCurrentV1: movesetKey(variant.moves) === movesetKey(baselinePlan[targetKey]?.routeMoves || []),
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+      },
+    });
+  }
+  rows.sort((a, b) =>
+    Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
+    Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    a.fourth.localeCompare(b.fourth)
+  );
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D Typhlosion fourth-slot actual-battle local screen',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeedsAcrossMovesets: true,
+      core,
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      note: 'Local diagnostic around the current v1 three-move core; not a global moveset winner claim.',
+    },
+    baselineV1: {
+      routeMoves: baselinePlan[targetKey]?.routeMoves || [],
+      build: baselinePlan[targetKey] || null,
+    },
+    legalMoveCount: enumeration.legalMoveCount,
+    variantCount: rows.length,
+    rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -12357,6 +12509,7 @@ const commands = {
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
+  'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
