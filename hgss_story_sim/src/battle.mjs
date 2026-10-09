@@ -19,7 +19,7 @@ const NATURES_BY_ID = [
 const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
   ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
   : null;
-const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2');
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v3-parity');
 const SMART_DYNAMIC_HP_POWER = String(process.env.HGSS_SMART_DYNAMIC_HP_POWER || '1') !== '0';
 const SMART_REQUEST_AWARE_SWITCH = String(process.env.HGSS_SMART_REQUEST_AWARE_SWITCH || '1') !== '0';
 let battleCacheLoaded = false;
@@ -43,6 +43,10 @@ function canonicalizeCacheValue(value) {
 function battleCacheKey(p1Team, p2Team, seed, options) {
   const payload = canonicalizeCacheValue({
     namespace: BATTLE_CACHE_NAMESPACE,
+    smartSemantics: {
+      dynamicHpPower: SMART_DYNAMIC_HP_POWER,
+      requestAwareSwitch: SMART_REQUEST_AWARE_SWITCH,
+    },
     p1Team,
     p2Team,
     seed: Number(seed),
@@ -73,6 +77,10 @@ export function battleCacheStats() {
     enabled: Boolean(BATTLE_CACHE_PATH),
     path: BATTLE_CACHE_PATH,
     namespace: BATTLE_CACHE_NAMESPACE,
+    smartSemantics: {
+      dynamicHpPower: SMART_DYNAMIC_HP_POWER,
+      requestAwareSwitch: SMART_REQUEST_AWARE_SWITCH,
+    },
     entries: battleCache.size,
     ...battleCacheCounters,
     dirty: battleCacheDirty,
@@ -85,7 +93,7 @@ export async function flushBattleCache() {
   await fs.mkdir(path.dirname(BATTLE_CACHE_PATH), { recursive: true });
   const tmp = BATTLE_CACHE_PATH + '.tmp-' + process.pid;
   await fs.writeFile(tmp, JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     namespace: BATTLE_CACHE_NAMESPACE,
     entries: Object.fromEntries(battleCache),
   }));
