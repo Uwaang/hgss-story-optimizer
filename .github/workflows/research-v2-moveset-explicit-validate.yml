@@ -36,7 +36,7 @@ jobs:
             > results/research-v2/tyranitar-explicit-red1000.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-explicit-red100.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-explicit-red1000.json','utf8'));
           console.log(JSON.stringify(r.rows.map(x=>({
             label:x.label,
             moves:x.moves,
@@ -51,5 +51,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: research-v2-tyranitar-explicit-red1000
-          path: hgss_story_sim/results/research-v2/tyranitar-explicit-red100.json
+          path: hgss_story_sim/results/research-v2/tyranitar-explicit-red1000.json
           if-no-files-found: error
