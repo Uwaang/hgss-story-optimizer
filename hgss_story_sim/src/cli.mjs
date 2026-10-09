@@ -4828,6 +4828,9 @@ async function cmdRouteExpStoryEvaluate() {
   }
   const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamPreset = String(arg('team-preset', '')).trim().toLowerCase();
+  const recipientTargetName = String(arg('recipient-target', '')).trim();
+  const recipientActivateBoss = String(arg('recipient-activate', '')).trim();
   const allowPartialTeam = arg('allow-partial-team', 'false') === 'true';
 
   if (expProfile === 'ace') {
@@ -5131,8 +5134,10 @@ async function cmdRouteExpPracticalGrind() {
   if (expProfile === 'ace') {
     throw new Error('route-exp-practical-grind requires a route EXP profile');
   }
-  if (teamKeys.length !== 6) {
-    throw new Error('route-exp-practical-grind requires six exact --team-keys');
+  if (teamKeys.length !== 6 && teamPreset !== 'd-quagsire') {
+    throw new Error(
+      'route-exp-practical-grind requires six exact --team-keys or --team-preset=d-quagsire'
+    );
   }
 
   const story = await loadPracticalRedPrepStory();
@@ -5150,11 +5155,20 @@ async function cmdRouteExpPracticalGrind() {
     ),
   ]);
   const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
-  const team = teamKeys.map(key => {
-    const candidate = byKey.get(key);
-    if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
-    return candidate;
-  });
+  const team = teamPreset === 'd-quagsire'
+    ? [
+        canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+        canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+        canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+        canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+        canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+        canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+      ]
+    : teamKeys.map(key => {
+        const candidate = byKey.get(key);
+        if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
+        return candidate;
+      });
   if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
     throw new Error('Requested practical-grind team violates family/exclusive-group constraints');
   }
@@ -5165,6 +5179,41 @@ async function cmdRouteExpPracticalGrind() {
   if (!starter) throw new Error('Requested team must contain the selected starter');
 
   const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  let recipientPolicy = {};
+  let recipientTarget = null;
+  let recipientActivationIndex = null;
+  if (recipientTargetName) {
+    recipientTarget = team.find(candidate =>
+      String(candidate.species).toLowerCase() === recipientTargetName.toLowerCase() ||
+      String(candidate.terminalSpecies || candidate.species).toLowerCase() ===
+        recipientTargetName.toLowerCase()
+    );
+    if (!recipientTarget) {
+      throw new Error('Recipient target not found in practical-grind team: ' + recipientTargetName);
+    }
+    if (recipientActivateBoss && recipientActivateBoss.toLowerCase() !== 'always-active') {
+      recipientActivationIndex = routeBosses.findIndex(
+        boss => String(boss.label) === recipientActivateBoss ||
+          String(boss.key) === recipientActivateBoss
+      );
+      if (recipientActivationIndex < 0) {
+        throw new Error(
+          'Recipient activation checkpoint not found: ' + recipientActivateBoss
+        );
+      }
+      const targetKey = candidateIdentity(recipientTarget);
+      const activeWithoutTarget = team
+        .map(candidateIdentity)
+        .filter(key => key !== targetKey);
+      recipientPolicy = Object.fromEntries(
+        routeBosses.slice(0, recipientActivationIndex).map((_boss, index) => [
+          String(index),
+          activeWithoutTarget,
+        ])
+      );
+    }
+  }
+
   const storyBossLabels = routeBosses
     .filter(boss =>
       String(boss.label) !== 'Red' &&
@@ -5184,6 +5233,7 @@ async function cmdRouteExpPracticalGrind() {
       grindPolicy: 'planned',
       grindBudget: 0,
       grindPlanBattles: { ...(plan || {}) },
+      recipientPolicy,
     };
   }
 
@@ -5783,6 +5833,14 @@ async function cmdRouteExpPracticalGrind() {
       globalRepair: true,
       redSeparatedFromStoryConstraint: true,
       rematchEliteFourRewardsIncludedBeforeRed: true,
+      teamPreset: teamPreset || null,
+      recipientTarget: recipientTarget
+        ? (recipientTarget.terminalSpecies || recipientTarget.species)
+        : null,
+      recipientTargetKey: recipientTarget ? candidateIdentity(recipientTarget) : null,
+      recipientActivateBoss: recipientActivateBoss || 'always-active',
+      recipientActivationIndex,
+      recipientPolicyEnabled: Object.keys(recipientPolicy).length > 0,
     },
     storyFrontier,
     evaluationCacheEntries: evaluationCache.size,
