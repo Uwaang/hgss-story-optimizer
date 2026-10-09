@@ -423,7 +423,38 @@ function conditionalLevelEvolutionCondition(method) {
   return conditions[method] || null;
 }
 
-function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlockStage, itemAccess, order) {
+const FRIENDSHIP_EVOLUTION_METHODS = new Set([
+  'EVO_FRIENDSHIP',
+  'EVO_FRIENDSHIP_DAY',
+  'EVO_FRIENDSHIP_NIGHT',
+]);
+
+function nextLevelEvolutionTrigger(entryLevelMax, transitions) {
+  const entry = Number(entryLevelMax);
+  if (!Number.isFinite(entry)) return null;
+  let priorLevel = Math.max(1, Math.floor(entry));
+  for (const transition of transitions || []) {
+    if (
+      transition?.derived === 'level-evolution' &&
+      Number.isFinite(Number(transition.level))
+    ) {
+      priorLevel = Math.max(priorLevel, Number(transition.level));
+    }
+  }
+  if (priorLevel >= 100) return null;
+  return priorLevel + 1;
+}
+
+function evolutionTransitionFor(
+  evo,
+  fromConst,
+  availableFrom,
+  bosses,
+  tradeUnlockStage,
+  itemAccess,
+  order,
+  options = {},
+) {
   const fromSpecies = constantToName(fromConst, 'SPECIES_');
   const targetSpecies = constantToName(evo.target, 'SPECIES_');
   if (
@@ -446,6 +477,30 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
       reason: condition
         ? `level ${evo.param} + ${condition}`
         : `level ${evo.param}`,
+    };
+  }
+  if (FRIENDSHIP_EVOLUTION_METHODS.has(evo.method)) {
+    const triggerLevel = nextLevelEvolutionTrigger(
+      options.entryLevelMax,
+      options.priorTransitions,
+    );
+    if (!Number.isFinite(Number(triggerLevel))) return null;
+    const condition = evo.method === 'EVO_FRIENDSHIP_DAY'
+      ? 'friendship-day'
+      : evo.method === 'EVO_FRIENDSHIP_NIGHT'
+        ? 'friendship-night'
+        : 'friendship';
+    return {
+      order,
+      stage: Number(availableFrom || 0),
+      level: Number(triggerLevel),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'level-evolution',
+      evolutionMethod: evo.method,
+      evolutionCondition: condition,
+      requiresLevelUp: true,
+      reason: `${condition} + level-up (minimum level ${triggerLevel})`,
     };
   }
   if (evo.method === 'EVO_TRADE') {
@@ -524,6 +579,7 @@ function buildTradeAwareEvolutionPaths(
   evoByBase,
   evolutionAccess,
   itemAccess,
+  entryLevelMax,
 ) {
   const tradeUnlockStage = Number(evolutionAccess?.tradeUnlockStage || 0);
 
@@ -545,7 +601,8 @@ function buildTradeAwareEvolutionPaths(
         evo.method === 'EVO_TRADE_ITEM' ||
         evo.method === 'EVO_STONE' ||
         evo.method === 'EVO_STONE_MALE' ||
-        evo.method === 'EVO_STONE_FEMALE'
+        evo.method === 'EVO_STONE_FEMALE' ||
+        FRIENDSHIP_EVOLUTION_METHODS.has(evo.method)
       ) {
         edges.push(evo);
       }
@@ -562,6 +619,10 @@ function buildTradeAwareEvolutionPaths(
           tradeUnlockStage,
           itemAccess,
           transitions.length,
+          {
+            entryLevelMax,
+            priorTransitions: transitions,
+          },
         ),
       }))
       .filter(row => row.transition);
@@ -602,6 +663,7 @@ function expandTradeAwareCandidate(
     evoByBase,
     evolutionAccess,
     itemAccess,
+    candidate.entryLevelMax,
   );
   return paths.map((path, index) => {
     const terminalSpecies = path.length ? path[path.length - 1].species : candidate.species;
