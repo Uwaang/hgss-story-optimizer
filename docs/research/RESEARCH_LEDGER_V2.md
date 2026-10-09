@@ -46,11 +46,11 @@ Current diagnostic line intentionally *not* adopted wholesale:
 
 Disposition: **diagnostic-only until Moveset/Build v2 is settled**.
 
-## 3. Trusted current performance baseline
+## 3. Calibrated baseline and P0-B evaluator correction
 
-100-run rebuild/reprice run: `37755171480`
+Historical 100-run rebuild/reprice run: `37755171480`
 
-Current 100-run Pareto among the tested frontier states:
+Pre-parity 100-run Pareto among the tested frontier states:
 
 | State | Team | Story50 | Red25 total | Red50 total |
 |---|---|---:|---:|---:|
@@ -58,10 +58,35 @@ Current 100-run Pareto among the tested frontier states:
 | idx30 saturation | same | 322 | 1040 | 1349 |
 | idx200 soft | Typhlosion / Golem / Tyranitar / Forretress / Ampharos / Rhyperior | 895 | 1039 | 1775 |
 
+These numbers remain useful as **historical high-sample comparators**, but the idx30 saturation value `322 / 1040 / 1349` is no longer the current evaluator anchor after P0-B.
+
+P0-B attribution run: `37898662064`
+
+| Smart-AI semantics | Story50 | Red25 total | Red50 total |
+|---|---:|---:|---:|
+| legacy | 322 | 1040 | 1349 |
+| Choice-lock-aware switching only | 322 | 1040 | 1349 |
+| HP-aware Eruption/Water Spout only | **400** | **1082** | **1438** |
+| both corrected semantics | **400** | **1082** | **1438** |
+
+Attribution conclusion:
+- the legacy condition exactly reproduces the old baseline, so there is no baseline drift;
+- Choice-lock-aware switching is neutral on this control;
+- the full `+78 / +42 / +89` delta is caused by HP-aware Eruption/Water Spout decision power;
+- there is no observed interaction between the two fixes on idx30 saturation;
+- both fixes remain adopted because they correct battle-state semantics rather than optimize the score.
+
+Therefore the first corrected-evaluator fixed-team anchor is:
+
+- idx30 boss-aware-saturation: **400 / 1082 / 1438**
+
+Do not compare future corrected-evaluator search results directly against the old 322/1040/1349 as if evaluator semantics were unchanged.
+
 Important:
 - low-sample 8-run frontier coordinates are screening results only;
 - all 10 reused Story50 plans from that frontier failed direct 100-run feasibility;
-- future calibrated frontier claims start at ~100-run repair/reprice.
+- future calibrated frontier claims start at ~100-run repair/reprice;
+- a new full Pareto across multiple teams/allocators must be rebuilt after Moveset/Build v2 and scheduler changes rather than mechanically repricing every historical point now.
 
 ## 4. Branch disposition
 
@@ -371,16 +396,31 @@ Disposition: **P0-C search completeness**, not a battle-policy fix.
 
 ## 10. Next concrete continuation point
 
-Proceed in SCRUM-414:
+P0-B battle mechanics parity is complete.
 
-1. diff `680aab600e`, `53d7c1b803`, related tests against `research/v2-rebase`;
-2. classify each behavior as:
-   - already equivalent,
-   - missing correctness behavior,
-   - old experimental heuristic;
-3. port only missing correctness behavior in isolated commits;
-4. run focused smoke tests;
-5. re-run idx30 fixed-plan/baseline A/B before touching global search.
+Immediate Research v2 order:
+
+1. **P0-D / SCRUM-416 — Moveset/Build v2**
+   - corrected evaluator is now the baseline;
+   - fix Move Relearner / relearn-only `4L1` legality before calibrating movesets;
+   - prototype legal 4-move + build search on fixed species/teams;
+   - keep old Red-specific optimizer only as diagnostic/reference code.
+
+2. **P1 / SCRUM-417 — EXP Scheduler v1**
+   - progression-state allocation;
+   - bench/recipient participation;
+   - grind placement;
+   - pending evolution trigger state.
+
+3. **Finish P0-C residual trigger evolutions inside progression state**
+   - Mamoswine;
+   - Gliscor;
+   - Weavile.
+
+4. **P1 / SCRUM-418 — Completion-aware Global Search v2**
+   - only after evaluator, moveset/build, candidate-space completeness, and scheduler state are trustworthy.
+
+Do not resume broad 2-slot/local Pareto search before these foundations are integrated.
 
 ## 11. P0-C evolution coverage implementation milestone
 
@@ -470,3 +510,33 @@ HGSS-native unresolved evolution leaves are therefore reduced from **7 to 3**:
 - Weavile — Razor Claw + night, then post-item level-up
 
 These three require progression-history-aware trigger state and are assigned to the EXP Scheduler / legality integration rather than approximated with static stage-only evolution.
+
+## 12. P0-B battle mechanics parity — final attribution
+
+Jira: **SCRUM-414**
+
+Recovered correctness behaviors:
+
+- Choice-lock-aware voluntary switching
+- HP-aware Eruption / Water Spout power in smart player decision estimation
+
+Not adopted:
+
+- old Focus Punch `×0.18 / ×0.08` penalties, because they are hand-tuned policy approximations rather than direct mechanics
+
+Matched 100-run attribution run `37898662064`:
+
+- legacy: **322 / 1040 / 1349**
+- choice-only: **322 / 1040 / 1349**
+- dynamic-HP-only: **400 / 1082 / 1438**
+- both: **400 / 1082 / 1438**
+
+Decision:
+
+- both correctness fixes remain default-on;
+- the old high-sample result is retained only as a legacy comparator;
+- corrected evaluator anchor is 400 / 1082 / 1438 for idx30 saturation;
+- attribution toggles remain for exact regression reproduction;
+- battle cache semantics are fingerprinted and default namespace is bumped to `hgss-battle-cache-v3-parity` so legacy/corrected runs cannot cross-hit cached battles.
+
+P0-B parity extraction from the historical Red/Lance branches is complete. The branches may still be retained as research references for Moveset/Build v2, but their PRs no longer need to remain open as merge candidates.
