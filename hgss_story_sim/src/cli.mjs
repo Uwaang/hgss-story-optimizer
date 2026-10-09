@@ -196,6 +196,12 @@ function routeRiskRetryBounds(evaluation, z = 1.96) {
   return { optimistic, pessimistic };
 }
 
+function routeRiskBattleProgressScore(evaluation) {
+  const rows = routeRiskActiveRows(evaluation);
+  if (!rows.length) return 0;
+  return rows.reduce((sum, row) => sum + Number(row?.battleProgressScore || 0), 0) / rows.length;
+}
+
 function routeRiskMeanWinRate(evaluation) {
   const rows = routeRiskActiveRows(evaluation);
   const totals = rows.reduce(
@@ -11680,7 +11686,8 @@ function spearmanFromRankedRows(rows, proxyField = 'proxy') {
   const actualCompare = (a, b) =>
     Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
-    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate);
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    Number(b.actual.battleProgressScore || 0) - Number(a.actual.battleProgressScore || 0);
   const proxyTieKey = row => [
     Number(proxyOf(row).routeGeometric),
     Number(proxyOf(row).meanBoss),
@@ -11690,6 +11697,7 @@ function spearmanFromRankedRows(rows, proxyField = 'proxy') {
     Number(row.actual.expectedRetryFailures),
     Number(row.actual.geometricScore),
     Number(row.actual.meanWinRate),
+    Number(row.actual.battleProgressScore || 0),
   ].join('|');
   const proxyRanks = averageRankMap(rows, proxyCompare, proxyTieKey);
   const actualRanks = averageRankMap(rows, actualCompare, actualTieKey);
@@ -11945,6 +11953,7 @@ async function cmdMovesetBuildV2Probe() {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
         geometricScore: routeRiskGeometricScore(evaluation),
         meanWinRate: routeRiskMeanWinRate(evaluation),
+        battleProgressScore: routeRiskBattleProgressScore(evaluation),
         worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
         bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
         targetUsage: evaluation.memberUsage?.[targetKey] || null,
@@ -11957,6 +11966,7 @@ async function cmdMovesetBuildV2Probe() {
     Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
     Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    Number(b.actual.battleProgressScore || 0) - Number(a.actual.battleProgressScore || 0) ||
     movesetKey(a.moves).localeCompare(movesetKey(b.moves))
   );
   const bestActual = actualSorted[0] || null;
@@ -11964,7 +11974,8 @@ async function cmdMovesetBuildV2Probe() {
     ? actualSorted.filter(row =>
         Number(row.actual.expectedRetryFailures) === Number(bestActual.actual.expectedRetryFailures) &&
         Number(row.actual.geometricScore) === Number(bestActual.actual.geometricScore) &&
-        Number(row.actual.meanWinRate) === Number(bestActual.actual.meanWinRate)
+        Number(row.actual.meanWinRate) === Number(bestActual.actual.meanWinRate) &&
+        Number(row.actual.battleProgressScore || 0) === Number(bestActual.actual.battleProgressScore || 0)
       )
     : [];
   await flushBattleCache();
@@ -12015,6 +12026,7 @@ async function cmdMovesetBuildV2Probe() {
         Number(row.actual.expectedRetryFailures),
         Number(row.actual.geometricScore),
         Number(row.actual.meanWinRate),
+        Number(row.actual.battleProgressScore || 0),
       ].join('|'))).size,
     },
     battleCache: battleCacheStats(),
@@ -12194,6 +12206,7 @@ function compareMovesetActual(a, b) {
   return Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
     Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    Number(b.actual.battleProgressScore || 0) - Number(a.actual.battleProgressScore || 0) ||
     movesetKey(a.moves).localeCompare(movesetKey(b.moves));
 }
 
@@ -12344,6 +12357,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
         geometricScore: routeRiskGeometricScore(evaluation),
         meanWinRate: routeRiskMeanWinRate(evaluation),
+        battleProgressScore: routeRiskBattleProgressScore(evaluation),
         worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
         bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
         targetUsage: evaluation.memberUsage?.[targetKey] || null,
