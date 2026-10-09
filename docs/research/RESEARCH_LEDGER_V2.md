@@ -381,3 +381,62 @@ Proceed in SCRUM-414:
 3. port only missing correctness behavior in isolated commits;
 4. run focused smoke tests;
 5. re-run idx30 fixed-plan/baseline A/B before touching global search.
+
+## 11. P0-C evolution coverage implementation milestone
+
+Jira: **SCRUM-415**
+
+Research v2 now has validated source-backed support for three additional evolution classes on top of level/trade/trade-item:
+
+1. **Stone evolutions**
+   - `EVO_STONE`, `EVO_STONE_MALE`, `EVO_STONE_FEMALE`
+   - source-backed stone availability from `evolution-access.hgss.json`
+   - route checkpoint gating preserved; same-stage timing is not reduced to a bare numeric stage
+   - representative smoke: Bellsprout -> Weepinbell -> Victreebel is blocked at Whitney and legal by Morty
+   - Nidoran-F/M -> Nidoqueen/Nidoking special-name paths are explicitly covered
+
+2. **Conditional level branches**
+   - Tyrogue stat branches
+   - gender branches
+   - PID branches
+   - Nincada/Ninjask/Shedinja-style conditional level methods represented as explicit variants
+   - representative smoke: Tyrogue remains Tyrogue below Lv20 and materializes the selected Hitmon branch at Lv20
+
+3. **Friendship level-up evolutions**
+   - `EVO_FRIENDSHIP`, `EVO_FRIENDSHIP_DAY`, `EVO_FRIENDSHIP_NIGHT`
+   - friendship-building inconvenience remains outside the current EXP-only objective
+   - the required level-up is not skipped
+   - trigger level is conservatively at least one level above both the candidate's maximum entry level and any prior level evolution
+   - therefore Zubat -> Golbat Lv22 -> Crobat requires Lv23 rather than allowing two evolutions from the same Lv22 trigger
+   - friendship -> stone chains such as Togepi -> Togetic -> Togekiss are supported
+
+Coverage progression:
+
+| State | Candidates | Families | HGSS-native unsupported leaf terminals |
+|---|---:|---:|---:|
+| pre-P0-C | 144 | 100 | 39 |
+| + stone | 149 | 100 | 20 |
+| + conditional level | 153 | 100 | 12 |
+| + friendship | **155** | **100** | **7** |
+
+The remaining seven HGSS-native leaf terminals are now precisely isolated:
+
+- `EVO_HAS_MOVE`: Ambipom, Lickilicky, Mamoswine, Tangrowth, Yanmega
+- `EVO_ITEM_NIGHT`: Gliscor, Weavile
+
+These are deliberately **not** modeled as immediate evolutions. They require a level-up after a move/item condition becomes legal, so their correctness depends on progression-state EXP timing. They should be implemented with the scheduler-aware trigger model rather than by another optimistic stage-only shortcut.
+
+Still excluded as HGSS-native impossible:
+
+- Magnezone (`EVO_CORONET`)
+- Leafeon (`EVO_ETERNA`)
+- Glaceon (`EVO_ROUTE217`)
+
+Validation runs:
+
+- stone smoke: `37899947101` — success
+- stone coverage audit: `37900032178` — success
+- conditional-level audit: `37900471093` — success after special-name audit normalization
+- friendship audit: `37900847377` — success
+
+Disposition: **stone / conditional-level / friendship changes are validated P0-C code; remaining has-move/item-night methods stay unresolved pending scheduler-aware trigger semantics.**

@@ -11625,6 +11625,21 @@ async function cmdEvolutionLegalitySmoke() {
     )[0]?.species || null;
   }
 
+  function transition(origin, terminal, method) {
+    const candidate = variant(origin, terminal);
+    const row = (candidate.speciesByStage || []).find(step => step.evolutionMethod === method);
+    if (!row) throw new Error(`Missing ${method} transition for ${origin}->${terminal}`);
+    return row;
+  }
+
+  const crobatFriendship = transition('Zubat', 'Crobat', 'EVO_FRIENDSHIP');
+  const espeonFriendship = transition('Eevee', 'Espeon', 'EVO_FRIENDSHIP_DAY');
+  const umbreonFriendship = transition('Eevee', 'Umbreon', 'EVO_FRIENDSHIP_NIGHT');
+
+  if (Number(crobatFriendship.level) !== 23) {
+    throw new Error(`Crobat must require a second level-up after Golbat Lv22; got Lv${crobatFriendship.level}`);
+  }
+
   const checks = [
     {
       name: 'pure-trade-gengar',
@@ -11652,6 +11667,81 @@ async function cmdEvolutionLegalitySmoke() {
       expected: 'Steelix',
     },
     {
+      name: 'leaf-stone-before-source',
+      actual: materialized('Bellsprout', 'Victreebel', 'Whitney', 57),
+      expected: 'Weepinbell',
+    },
+    {
+      name: 'leaf-stone-after-source',
+      actual: materialized('Bellsprout', 'Victreebel', 'Morty', 57),
+      expected: 'Victreebel',
+    },
+    {
+      name: 'friendship-crobat-before-trigger',
+      actual: materialized('Zubat', 'Crobat', 'Red', Number(crobatFriendship.level) - 1),
+      expected: 'Golbat',
+    },
+    {
+      name: 'friendship-crobat-at-trigger',
+      actual: materialized('Zubat', 'Crobat', 'Red', Number(crobatFriendship.level)),
+      expected: 'Crobat',
+    },
+    {
+      name: 'friendship-espeon-before-trigger',
+      actual: materialized('Eevee', 'Espeon', 'Red', Number(espeonFriendship.level) - 1),
+      expected: 'Eevee',
+    },
+    {
+      name: 'friendship-espeon-at-trigger',
+      actual: materialized('Eevee', 'Espeon', 'Red', Number(espeonFriendship.level)),
+      expected: 'Espeon',
+    },
+    {
+      name: 'friendship-umbreon-at-trigger',
+      actual: materialized('Eevee', 'Umbreon', 'Red', Number(umbreonFriendship.level)),
+      expected: 'Umbreon',
+    },
+    {
+      name: 'friendship-then-shiny-stone-togekiss',
+      actual: materialized('Togepi', 'Togekiss', 'Lt. Surge', 57),
+      expected: 'Togekiss',
+    },
+    {
+      name: 'friendship-blissey',
+      actual: materialized('Chansey', 'Blissey', 'Red', 57),
+      expected: 'Blissey',
+    },
+    {
+      name: 'nidoran-f-moon-stone',
+      actual: materialized('Nidoran-F', 'Nidoqueen', 'Morty', 57),
+      expected: 'Nidoqueen',
+    },
+    {
+      name: 'nidoran-m-moon-stone',
+      actual: materialized('Nidoran-M', 'Nidoking', 'Morty', 57),
+      expected: 'Nidoking',
+    },
+    {
+      name: 'tyrogue-hitmontop-before-level',
+      actual: materialized('Tyrogue', 'Hitmontop', 'Red', 19),
+      expected: 'Tyrogue',
+    },
+    {
+      name: 'tyrogue-hitmontop-at-level',
+      actual: materialized('Tyrogue', 'Hitmontop', 'Red', 20),
+      expected: 'Hitmontop',
+    },
+    {
+      name: 'tyrogue-hitmonlee-at-level',
+      actual: materialized('Tyrogue', 'Hitmonlee', 'Red', 20),
+      expected: 'Hitmonlee',
+    },
+    {
+      name: 'tyrogue-hitmonchan-at-level',
+      actual: materialized('Tyrogue', 'Hitmonchan', 'Red', 20),
+      expected: 'Hitmonchan',
+    },
+    {
       name: 'protector-before-blue-clear',
       actual: materialized('Rhyhorn', 'Rhyperior', 'Blue', 65),
       expected: 'Rhydon',
@@ -11671,11 +11761,20 @@ async function cmdEvolutionLegalitySmoke() {
     schemaVersion: 1,
     evolutionPolicy: pool.evolutionPolicy,
     checks,
+    friendshipTransitions: {
+      crobat: crobatFriendship,
+      espeon: espeonFriendship,
+      umbreon: umbreonFriendship,
+    },
     focusItemAccess: {
       metalCoat: pool.evolutionAccess?.items?.ITEM_METAL_COAT || null,
       protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
       kingsRock: pool.evolutionAccess?.items?.ITEM_KINGS_ROCK || null,
       dragonScale: pool.evolutionAccess?.items?.ITEM_DRAGON_SCALE || null,
+      leafStone: pool.evolutionAccess?.items?.ITEM_LEAF_STONE || null,
+      shinyStone: pool.evolutionAccess?.items?.ITEM_SHINY_STONE || null,
+      duskStone: pool.evolutionAccess?.items?.ITEM_DUSK_STONE || null,
+      dawnStone: pool.evolutionAccess?.items?.ITEM_DAWN_STONE || null,
     },
   }, null, 2));
 }
@@ -11713,6 +11812,10 @@ async function cmdEvolutionCheckpointSmoke() {
     { check: 'Gastly->Gengar', actual: speciesAt('Gastly', 'Gengar', 'Morty', 57), expected: 'Gengar' },
     { check: 'Abra->Alakazam', actual: speciesAt('Abra', 'Alakazam', 'Whitney', 57), expected: 'Alakazam' },
     { check: 'Geodude->Golem', actual: speciesAt('Geodude', 'Golem', 'Morty', 57), expected: 'Golem' },
+    { check: 'Victreebel blocked before Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Whitney', 57), expected: 'Weepinbell' },
+    { check: 'Victreebel legal after Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Morty', 57), expected: 'Victreebel' },
+    { check: 'Tyrogue below conditional level', actual: speciesAt('Tyrogue', 'Hitmontop', 'Red', 19), expected: 'Tyrogue' },
+    { check: 'Tyrogue conditional branch', actual: speciesAt('Tyrogue', 'Hitmontop', 'Red', 20), expected: 'Hitmontop' },
     { check: 'Rhyperior blocked for Blue', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Blue', 65), expected: 'Rhydon' },
     { check: 'Rhyperior legal for Will 2', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Will 2', 65), expected: 'Rhyperior' },
   ];

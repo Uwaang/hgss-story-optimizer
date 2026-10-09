@@ -396,13 +396,75 @@ function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows, bosses
   return result;
 }
 
-function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlockStage, itemAccess, order) {
+const CONDITIONAL_LEVEL_EVOLUTION_METHODS = new Set([
+  'EVO_LEVEL_ATK_EQ_DEF',
+  'EVO_LEVEL_ATK_GT_DEF',
+  'EVO_LEVEL_ATK_LT_DEF',
+  'EVO_LEVEL_FEMALE',
+  'EVO_LEVEL_MALE',
+  'EVO_LEVEL_NINJASK',
+  'EVO_LEVEL_PID_HI',
+  'EVO_LEVEL_PID_LO',
+  'EVO_LEVEL_SHEDINJA',
+]);
+
+function conditionalLevelEvolutionCondition(method) {
+  const conditions = {
+    EVO_LEVEL_ATK_EQ_DEF: 'atk=def',
+    EVO_LEVEL_ATK_GT_DEF: 'atk>def',
+    EVO_LEVEL_ATK_LT_DEF: 'atk<def',
+    EVO_LEVEL_FEMALE: 'female',
+    EVO_LEVEL_MALE: 'male',
+    EVO_LEVEL_NINJASK: 'ninjask-branch',
+    EVO_LEVEL_PID_HI: 'pid-high',
+    EVO_LEVEL_PID_LO: 'pid-low',
+    EVO_LEVEL_SHEDINJA: 'shedinja-branch',
+  };
+  return conditions[method] || null;
+}
+
+const FRIENDSHIP_EVOLUTION_METHODS = new Set([
+  'EVO_FRIENDSHIP',
+  'EVO_FRIENDSHIP_DAY',
+  'EVO_FRIENDSHIP_NIGHT',
+]);
+
+function nextLevelEvolutionTrigger(entryLevelMax, transitions) {
+  const entry = Number(entryLevelMax);
+  if (!Number.isFinite(entry)) return null;
+  let priorLevel = Math.max(1, Math.floor(entry));
+  for (const transition of transitions || []) {
+    if (
+      transition?.derived === 'level-evolution' &&
+      Number.isFinite(Number(transition.level))
+    ) {
+      priorLevel = Math.max(priorLevel, Number(transition.level));
+    }
+  }
+  if (priorLevel >= 100) return null;
+  return priorLevel + 1;
+}
+
+function evolutionTransitionFor(
+  evo,
+  fromConst,
+  availableFrom,
+  bosses,
+  tradeUnlockStage,
+  itemAccess,
+  order,
+  options = {},
+) {
   const fromSpecies = constantToName(fromConst, 'SPECIES_');
   const targetSpecies = constantToName(evo.target, 'SPECIES_');
-  if (evo.method === 'EVO_LEVEL' && Number.isFinite(Number(evo.param))) {
+  if (
+    (evo.method === 'EVO_LEVEL' || CONDITIONAL_LEVEL_EVOLUTION_METHODS.has(evo.method)) &&
+    Number.isFinite(Number(evo.param))
+  ) {
     const nextBattle = bosses.find(
       boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(evo.param)
     );
+    const condition = conditionalLevelEvolutionCondition(evo.method);
     return {
       order,
       stage: Number(nextBattle?.stage ?? availableFrom),
@@ -411,7 +473,34 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
       species: targetSpecies,
       derived: 'level-evolution',
       evolutionMethod: evo.method,
-      reason: `level ${evo.param}`,
+      evolutionCondition: condition,
+      reason: condition
+        ? `level ${evo.param} + ${condition}`
+        : `level ${evo.param}`,
+    };
+  }
+  if (FRIENDSHIP_EVOLUTION_METHODS.has(evo.method)) {
+    const triggerLevel = nextLevelEvolutionTrigger(
+      options.entryLevelMax,
+      options.priorTransitions,
+    );
+    if (!Number.isFinite(Number(triggerLevel))) return null;
+    const condition = evo.method === 'EVO_FRIENDSHIP_DAY'
+      ? 'friendship-day'
+      : evo.method === 'EVO_FRIENDSHIP_NIGHT'
+        ? 'friendship-night'
+        : 'friendship';
+    return {
+      order,
+      stage: Number(availableFrom || 0),
+      level: Number(triggerLevel),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'level-evolution',
+      evolutionMethod: evo.method,
+      evolutionCondition: condition,
+      requiresLevelUp: true,
+      reason: `${condition} + level-up (minimum level ${triggerLevel})`,
     };
   }
   if (evo.method === 'EVO_TRADE') {
@@ -450,6 +539,36 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
       reason: `trade holding ${evo.param}`,
     };
   }
+  if (new Set(['EVO_STONE', 'EVO_STONE_MALE', 'EVO_STONE_FEMALE']).has(evo.method)) {
+    const access = itemAccess.get(String(evo.param));
+    if (!access || !Number.isFinite(Number(access.availableFrom))) return null;
+    const acquisitionCheckpoint = evolutionCheckpointIndex(bosses, { availableFrom });
+    const checkpointIndex = Math.max(
+      Number(acquisitionCheckpoint),
+      Number(access.checkpointIndex),
+    );
+    const condition = evo.method === 'EVO_STONE_MALE'
+      ? 'male'
+      : evo.method === 'EVO_STONE_FEMALE'
+        ? 'female'
+        : null;
+    return {
+      order,
+      stage: Math.max(Number(availableFrom || 0), Number(access.availableFrom)),
+      checkpointIndex,
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'stone-evolution',
+      evolutionMethod: evo.method,
+      evolutionCondition: condition,
+      requiredItem: String(evo.param),
+      itemRepeatable: Boolean(access.repeatable),
+      itemSource: access.source || null,
+      reason: condition
+        ? `${condition} + use ${evo.param}`
+        : `use ${evo.param}`,
+    };
+  }
   return null;
 }
 
@@ -460,6 +579,7 @@ function buildTradeAwareEvolutionPaths(
   evoByBase,
   evolutionAccess,
   itemAccess,
+  entryLevelMax,
 ) {
   const tradeUnlockStage = Number(evolutionAccess?.tradeUnlockStage || 0);
 
@@ -471,10 +591,21 @@ function buildTradeAwareEvolutionPaths(
     );
     const edges = [];
     // Preserve prior conservative behavior: only an unambiguous plain level
-    // evolution is auto-followed.
+    // evolution is auto-followed. Conditional level branches are explicit
+    // alternatives and remain distinct search variants.
     if (levelEvos.length === 1) edges.push(levelEvos[0]);
     for (const evo of all) {
-      if (evo.method === 'EVO_TRADE' || evo.method === 'EVO_TRADE_ITEM') edges.push(evo);
+      if (
+        CONDITIONAL_LEVEL_EVOLUTION_METHODS.has(evo.method) ||
+        evo.method === 'EVO_TRADE' ||
+        evo.method === 'EVO_TRADE_ITEM' ||
+        evo.method === 'EVO_STONE' ||
+        evo.method === 'EVO_STONE_MALE' ||
+        evo.method === 'EVO_STONE_FEMALE' ||
+        FRIENDSHIP_EVOLUTION_METHODS.has(evo.method)
+      ) {
+        edges.push(evo);
+      }
     }
 
     const usable = edges
@@ -488,6 +619,10 @@ function buildTradeAwareEvolutionPaths(
           tradeUnlockStage,
           itemAccess,
           transitions.length,
+          {
+            entryLevelMax,
+            priorTransitions: transitions,
+          },
         ),
       }))
       .filter(row => row.transition);
@@ -528,6 +663,7 @@ function expandTradeAwareCandidate(
     evoByBase,
     evolutionAccess,
     itemAccess,
+    candidate.entryLevelMax,
   );
   return paths.map((path, index) => {
     const terminalSpecies = path.length ? path[path.length - 1].species : candidate.species;
