@@ -12413,6 +12413,117 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
 }
 
 
+async function cmdMovesetBuildV2ExplicitValidate() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  const targetSpecies = String(arg('target', '')).trim();
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const rawSets = String(arg('sets', '')).trim();
+  if (!targetSpecies) throw new Error('moveset-build-v2-explicit-validate requires --target');
+  if (!rawSets) throw new Error('moveset-build-v2-explicit-validate requires --sets');
+
+  const sets = rawSets.split(';').map(entry => {
+    const pos = entry.indexOf('=');
+    if (pos <= 0) throw new Error(`Invalid explicit moveset entry: ${entry}`);
+    const label = entry.slice(0, pos).trim();
+    const moves = entry.slice(pos + 1).split('/').map(value => value.trim()).filter(Boolean);
+    if (!label || moves.length !== 4 || new Set(moves).size !== 4) {
+      throw new Error(`Explicit moveset must have label and four unique moves: ${entry}`);
+    }
+    return { label, moves };
+  });
+  if (new Set(sets.map(row => row.label)).size !== sets.length) {
+    throw new Error('Explicit moveset labels must be unique');
+  }
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const target = team.find(candidate =>
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetSpecies.toLowerCase()
+  );
+  if (!target) throw new Error(`Unknown explicit moveset target: ${targetSpecies}`);
+  const targetKey = candidateIdentity(target);
+
+  const rows = [];
+  for (const candidate of sets) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: { moves: candidate.moves },
+        },
+      },
+    );
+    const bossRows = (evaluation.rows || []).map(row => ({
+      boss: row.boss,
+      stage: Number(row.stage || 0),
+      wins: Number(row.wins || 0),
+      runs: Number(row.runs || 0),
+      winRate: Number(row.winRate || 0),
+      battleProgressScore: Number(row.battleProgressScore || 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints || 0),
+      averageTurns: Number(row.averageTurns || 0),
+      materializedSpecies: row.playerBuilds?.[targetKey]?.species || null,
+      materializedMoves: row.playerBuilds?.[targetKey]?.moves || [],
+      targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
+    }));
+    rows.push({
+      ...candidate,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        retryBounds95: routeRiskRetryBounds(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        battleProgressScore: routeRiskBattleProgressScore(evaluation),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+        bossRows,
+      },
+    });
+  }
+
+  rows.sort(compareMovesetActual);
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D explicit target moveset high-sample validator',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      target: targetSpecies,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
+      sameSeedsAcrossMovesets: true,
+      note: 'Win-based route metrics remain primary; battleProgressScore is only a continuous tie-break/surrogate when wins are too sparse.',
+    },
+    rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdMovesetBuildV2ShortlistValidate() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
@@ -13269,6 +13380,7 @@ const commands = {
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
+  'moveset-build-v2-explicit-validate': cmdMovesetBuildV2ExplicitValidate,
   'moveset-build-v2-shortlist-validate': cmdMovesetBuildV2ShortlistValidate,
   'moveset-build-v2-policy-intrusion': cmdMovesetBuildV2PolicyIntrusion,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
