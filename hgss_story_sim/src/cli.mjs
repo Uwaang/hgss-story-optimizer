@@ -12111,6 +12111,7 @@ function compareMovesetActual(a, b) {
 async function cmdMovesetBuildV2NeighborhoodScreen() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '1'))));
+  const targetSpecies = String(arg('target', 'Typhlosion')).trim();
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
@@ -12146,11 +12147,18 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
     levels,
   );
 
-  const target = team[0];
+  const targetIndex = team.findIndex(candidate =>
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetSpecies.toLowerCase()
+  );
+  if (targetIndex < 0) {
+    throw new Error(`Unknown moveset neighborhood target: ${targetSpecies}`);
+  }
+  const target = team[targetIndex];
+  const targetName = String(target.terminalSpecies || target.species);
   const targetKey = candidateIdentity(target);
   const baselineMoves = [...(baselinePlan[targetKey]?.routeMoves || [])];
   if (baselineMoves.length !== 4) {
-    throw new Error('Neighborhood screen requires a four-move Typhlosion baseline');
+    throw new Error(`Neighborhood screen requires a four-move baseline for ${targetName}`);
   }
 
   const lastBoss = routeBosses[routeBosses.length - 1];
@@ -12166,7 +12174,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
       boss: lastBoss,
     },
   )[0];
-  if (!targetMon) throw new Error('Typhlosion target did not materialize');
+  if (!targetMon) throw new Error(`${targetName} target did not materialize`);
   targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
 
   const assignedMachines = [
@@ -12279,7 +12287,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
       commonLevel,
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
-      target: 'Typhlosion',
+      target: targetName,
       team: team.map(candidate => candidate.terminalSpecies || candidate.species),
       search: 'replace exactly one baseline move with every legal alternative',
       note: 'Low-run actual battle screening only; finalists require higher-run validation.',
