@@ -943,6 +943,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             singleUsePlan,
             purchasablePlan,
             build.routeMoves,
+            build.routeMoveOptimization?.bannedMoves || [],
           );
         }
         return built;
@@ -9967,6 +9968,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
           singleUsePlan,
           purchasablePlan,
           build.routeMoves,
+          build.routeMoveOptimization?.bannedMoves || [],
         );
       }
       return built;
