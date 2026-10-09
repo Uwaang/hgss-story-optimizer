@@ -1,5 +1,5 @@
 name: research-v2-moveset-shortlist-validate
-# trigger: shortlist validation
+# trigger: corrected evaluator 20-run shortlist screening
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
       - name: Actual-battle shortlist validation
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-shortlist-validate --level=50 --runs=5 \
+          node src/cli.mjs moveset-build-v2-shortlist-validate --level=50 --runs=20 \
             > results/research-v2/moveset-build-v2-shortlist-validate.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
