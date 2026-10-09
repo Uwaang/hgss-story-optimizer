@@ -33,7 +33,7 @@ jobs:
       - name: Actual-battle one-slot neighborhood screen
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-neighborhood-screen --level=57 --runs=20 --target=Tyranitar --bosses="Red" \
+          node src/cli.mjs moveset-build-v2-neighborhood-screen --level=57 --runs=20 --target=Alakazam --bosses="Red" \
             > results/research-v2/moveset-build-v2-neighborhood-screen.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
