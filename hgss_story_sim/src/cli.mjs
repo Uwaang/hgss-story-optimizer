@@ -11662,6 +11662,26 @@ async function cmdEvolutionLegalitySmoke() {
       expected: 'Victreebel',
     },
     {
+      name: 'tyrogue-hitmontop-before-level',
+      actual: materialized('Tyrogue', 'Hitmontop', 'Red', 19),
+      expected: 'Tyrogue',
+    },
+    {
+      name: 'tyrogue-hitmontop-at-level',
+      actual: materialized('Tyrogue', 'Hitmontop', 'Red', 20),
+      expected: 'Hitmontop',
+    },
+    {
+      name: 'tyrogue-hitmonlee-at-level',
+      actual: materialized('Tyrogue', 'Hitmonlee', 'Red', 20),
+      expected: 'Hitmonlee',
+    },
+    {
+      name: 'tyrogue-hitmonchan-at-level',
+      actual: materialized('Tyrogue', 'Hitmonchan', 'Red', 20),
+      expected: 'Hitmonchan',
+    },
+    {
       name: 'protector-before-blue-clear',
       actual: materialized('Rhyhorn', 'Rhyperior', 'Blue', 65),
       expected: 'Rhydon',
@@ -11729,6 +11749,8 @@ async function cmdEvolutionCheckpointSmoke() {
     { check: 'Geodude->Golem', actual: speciesAt('Geodude', 'Golem', 'Morty', 57), expected: 'Golem' },
     { check: 'Victreebel blocked before Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Whitney', 57), expected: 'Weepinbell' },
     { check: 'Victreebel legal after Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Morty', 57), expected: 'Victreebel' },
+    { check: 'Tyrogue below conditional level', actual: speciesAt('Tyrogue', 'Hitmontop', 'Red', 19), expected: 'Tyrogue' },
+    { check: 'Tyrogue conditional branch', actual: speciesAt('Tyrogue', 'Hitmontop', 'Red', 20), expected: 'Hitmontop' },
     { check: 'Rhyperior blocked for Blue', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Blue', 65), expected: 'Rhydon' },
     { check: 'Rhyperior legal for Will 2', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Will 2', 65), expected: 'Rhyperior' },
   ];
