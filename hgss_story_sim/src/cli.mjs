@@ -5127,6 +5127,9 @@ async function cmdRouteExpPracticalGrind() {
     ? new Set(storyCheckpointLabels)
     : null;
   const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamPreset = String(arg('team-preset', '')).trim().toLowerCase();
+  const recipientTargetName = String(arg('recipient-target', '')).trim();
+  const recipientActivateBoss = String(arg('recipient-activate', '')).trim();
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
     throw new Error('route-exp-practical-grind pilot currently supports HEARTGOLD + Cyndaquil only');
