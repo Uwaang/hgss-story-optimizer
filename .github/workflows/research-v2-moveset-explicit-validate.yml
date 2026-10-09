@@ -27,13 +27,13 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Tyranitar Red 100-run explicit finalists
+      - name: Tyranitar Red 1000-run explicit finalists
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=57 --runs=100 --target=Tyranitar --bosses="Red" \
-            --sets="baseline=Earthquake/Stone Edge/Fire Fang/Thunder Fang;crunch-surf=Crunch/Earthquake/Stone Edge/Surf;crunch-ice=Crunch/Earthquake/Stone Edge/Ice Fang;crunch-fire=Crunch/Earthquake/Stone Edge/Fire Fang;crunch-thunder=Crunch/Earthquake/Stone Edge/Thunder Fang;bite-crunch=Bite/Crunch/Earthquake/Stone Edge" \
-            > results/research-v2/tyranitar-explicit-red100.json
+            --level=57 --runs=1000 --target=Tyranitar --bosses="Red" \
+            --sets="baseline=Earthquake/Stone Edge/Fire Fang/Thunder Fang;crunch-surf=Crunch/Earthquake/Stone Edge/Surf;crunch-thunder=Crunch/Earthquake/Stone Edge/Thunder Fang;bite-crunch=Bite/Crunch/Earthquake/Stone Edge" \
+            > results/research-v2/tyranitar-explicit-red1000.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-explicit-red100.json','utf8'));
@@ -50,6 +50,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-tyranitar-explicit-red100
+          name: research-v2-tyranitar-explicit-red1000
           path: hgss_story_sim/results/research-v2/tyranitar-explicit-red100.json
           if-no-files-found: error
