@@ -1535,6 +1535,17 @@ function scoreMove(active, target, requestedMove) {
 }
 
 
+export function battleMovePowerForState(moveName, hp, maxhp) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return 0;
+  if (move.id === 'eruption' || move.id === 'waterspout') {
+    const currentHp = Math.max(0, Number(hp || 0));
+    const maximumHp = Math.max(1, Number(maxhp || 1));
+    return Math.max(1, Math.floor(150 * currentHp / maximumHp));
+  }
+  return Math.max(1, effectiveMovePower(move));
+}
+
 function estimateBattleDamage(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove?.move);
   if (!active || !target || !move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
@@ -1551,7 +1562,7 @@ function estimateBattleDamage(active, target, requestedMove) {
   const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
   const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
   const level = Math.max(1, Number(active.level || 1));
-  const power = Math.max(1, effectiveMovePower(move));
+  const power = battleMovePowerForState(move.id, active.hp, active.maxhp);
   const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
   let damage = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
   damage *= stab * effectiveness * 0.925 * accuracy * priority * strategic;
@@ -1564,6 +1575,18 @@ function bestExpectedDamage(mon, target) {
   let best = 0;
   for (const slot of mon.moveSlots || []) {
     const requested = { move: slot.id || slot.move, disabled: slot.disabled || false };
+    best = Math.max(best, estimateBattleDamage(mon, target, requested));
+  }
+  return best;
+}
+
+function bestExpectedDamageFromRequest(mon, target, activeRequest) {
+  if (!mon || !target) return 0;
+  const moves = Array.isArray(activeRequest?.moves) ? activeRequest.moves : [];
+  if (!moves.length) return bestExpectedDamage(mon, target);
+  let best = 0;
+  for (const requested of moves) {
+    if (requested?.disabled) continue;
     best = Math.max(best, estimateBattleDamage(mon, target, requested));
   }
   return best;
@@ -1651,6 +1674,23 @@ function smartMatchupUtility(mon, foeMon) {
   return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
 }
 
+function smartMatchupUtilityFromRequest(mon, foeMon, activeRequest) {
+  if (!mon || !foeMon || mon.fainted) return -Infinity;
+  const outgoing = bestExpectedDamageFromRequest(mon, foeMon, activeRequest);
+  const incoming = bestExpectedDamage(foeMon, mon);
+  const foeHp = Math.max(1, Number(foeMon.hp || foeMon.maxhp || 1));
+  const ownHp = Math.max(1, Number(mon.hp || mon.maxhp || 1));
+  const ownMaxHp = Math.max(1, Number(mon.maxhp || ownHp));
+  const hpRatio = ownHp / ownMaxHp;
+  const offenseFraction = outgoing / foeHp;
+  const dangerFraction = incoming / ownHp;
+  const ownSpeed = Math.max(1, Number(mon.getStat?.('spe') || mon.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(foeMon.getStat?.('spe') || foeMon.storedStats?.spe || 1));
+  const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
+  const survivalFactor = dangerFraction >= 1 ? 0.35 : 1 / Math.max(0.35, dangerFraction);
+  return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
+}
+
 function bestSmartForcedSwitch(request, side, foeActive) {
   if (!request?.side?.pokemon || !side || !foeActive) return null;
   let best = null;
@@ -1667,12 +1707,14 @@ function bestSmartForcedSwitch(request, side, foeActive) {
 function bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest) {
   if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
   if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
-  const currentDamage = bestExpectedDamage(active, foeActive);
+  // activeRequest reflects Choice lock and other disabled-move state.
+  // The full moveSlots list does not.
+  const currentDamage = bestExpectedDamageFromRequest(active, foeActive, activeRequest);
   const currentIncoming = bestExpectedDamage(foeActive, active);
   const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
   const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
   if (currentDamage >= Number(foeActive.hp || 1) && currentSpeed >= foeSpeed) return null;
-  const currentUtility = smartMatchupUtility(active, foeActive);
+  const currentUtility = smartMatchupUtilityFromRequest(active, foeActive, activeRequest);
   let best = null;
   for (let idx = 0; idx < side.pokemon.length; idx += 1) {
     const mon = side.pokemon[idx];
