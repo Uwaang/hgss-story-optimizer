@@ -12448,6 +12448,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
     );
     rows.push({
       ...candidate,
+      bannedMoves,
       actual: {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
         geometricScore: routeRiskGeometricScore(evaluation),
@@ -12552,9 +12553,34 @@ async function cmdMovesetBuildV2ExplicitValidate() {
   );
   if (!target) throw new Error(`Unknown explicit moveset target: ${targetSpecies}`);
   const targetKey = candidateIdentity(target);
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const levels = Object.fromEntries(team.map(candidate => [candidateIdentity(candidate), commonLevel]));
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(team, routeBosses, moveAccess, { levelsByBattle });
+  const purchasable = planPurchasableMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const baselinePlan = buildEqualLevelRouteBuildPlan(
+    team,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasable.assignments,
+    levels,
+  );
+  const baselineMoves = [...(baselinePlan[targetKey]?.routeMoves || [])];
+  if (baselineMoves.length !== 4) {
+    throw new Error(`Explicit validation requires a four-move baseline for ${targetSpecies}`);
+  }
 
   const rows = [];
   for (const candidate of sets) {
+    const bannedMoves = baselineMoves.filter(move => !candidate.moves.includes(move));
     const evaluation = await evaluateEqualLevelStoryTeam(
       team,
       story,
@@ -12565,7 +12591,10 @@ async function cmdMovesetBuildV2ExplicitValidate() {
         seedOffset: 0,
         bossLabels: bossLabels.length ? bossLabels : null,
         routeMovesOverrideByCandidate: {
-          [targetKey]: { moves: candidate.moves },
+          [targetKey]: {
+            moves: candidate.moves,
+            bannedMoves,
+          },
         },
       },
     );
@@ -12610,6 +12639,8 @@ async function cmdMovesetBuildV2ExplicitValidate() {
       target: targetSpecies,
       bossLabels: bossLabels.length ? bossLabels : 'all',
       sameSeedsAcrossMovesets: true,
+      strictRemovedMoveExclusion: true,
+      baselineMoves,
       note: 'Win-based route metrics remain primary; battleProgressScore is only a continuous tie-break/surrogate when wins are too sparse.',
     },
     rows,
