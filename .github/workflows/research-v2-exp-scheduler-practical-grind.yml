@@ -1,0 +1,78 @@
+name: research-v2-exp-scheduler-practical-grind
+# SCRUM-417 recipient-state practical grind comparison
+
+on:
+  push:
+    branches:
+      - research/v2-exp-scheduler-v1
+
+permissions:
+  contents: read
+
+jobs:
+  practical-grind:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-practical]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - state: always-active
+            activate: always-active
+          - state: lance
+            activate: Lance
+          - state: blue
+            activate: Blue
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Recipient-state regression smoke
+        run: node src/cli.mjs exp-scheduler-v1-smoke
+      - name: Practical grind frontier
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs route-exp-practical-grind \
+            --team-preset=d-quagsire \
+            --recipient-target=Quagsire \
+            --recipient-activate="${{ matrix.activate }}" \
+            --story-targets=0.5 \
+            --skip-red=true \
+            --screen-runs=2 \
+            --verify-runs=8 \
+            --repair-runs=16 \
+            --final-runs=32 \
+            --max-repair-rounds=8 \
+            --repair-mode=global-only \
+            --lean-repair=true \
+            > results/research-v2/practical-${{ matrix.state }}.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const file='results/research-v2/practical-${{ matrix.state }}.json';
+          const r=JSON.parse(fs.readFileSync(file,'utf8'));
+          console.log(JSON.stringify({
+            assumptions:r.assumptions,
+            state:'${{ matrix.state }}',
+            storyFrontier:r.storyFrontier.map(x=>({
+              storyTargetWinRate:x.storyTargetWinRate,
+              storyGrindBattles:x.storyGrindBattles,
+              storyGrindExp:x.storyGrindExp,
+              storyWorstBossWinRate:x.storyWorstBossWinRate,
+              repairConverged:x.repairConverged,
+              repairRounds:x.repairRounds,
+              finalLevels:x.checkpoints?.at(-1)?.playerLevels ?? null,
+              storyPlan:x.storyPlan
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-exp-scheduler-practical-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/practical-${{ matrix.state }}.json
+          if-no-files-found: error
