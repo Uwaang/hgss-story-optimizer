@@ -1,0 +1,145 @@
+name: research-v2-evolution-coverage-audit
+
+on:
+  push:
+    branches:
+      - research/v2-rebase
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-evolution-coverage-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+
+      - name: Dump current trade-aware canonical pool
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs pool \
+            --version=HEARTGOLD \
+            --evolution-policy=trade-aware \
+            --full=true \
+            > results/research-v2/evolution-pool.json
+
+      - name: Compare canonical terminals with evolution graph
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { fetchText } from './src/hgss-data.mjs';
+
+          const pool=JSON.parse(fs.readFileSync('results/research-v2/evolution-pool.json','utf8'));
+          const commit=pool.sourceCommit;
+          const url=`https://raw.githubusercontent.com/pret/pokeheartgold/${commit}/files/poketool/personal/evo.json`;
+          const evo=JSON.parse(await fetchText(url));
+          const rows=evo.evoTable||[];
+          const byBase=new Map(rows.map(r=>[r.baseSpecies,r.evos||[]]));
+
+          const nameToConst=name=>'SPECIES_'+String(name).toUpperCase().replace(/[^A-Z0-9]+/g,'_');
+          const constToSimple=x=>String(x||'').replace(/^SPECIES_/,'').toLowerCase();
+
+          const currentByFamily=new Map();
+          for(const c of pool.candidates||[]){
+            const fam=String(c.familyId||c.species);
+            if(!currentByFamily.has(fam)) currentByFamily.set(fam,{origins:new Set(),terminals:new Set(),keys:[]});
+            const b=currentByFamily.get(fam);
+            b.origins.add(nameToConst(c.species));
+            b.terminals.add(String(c.terminalSpecies||c.species).toLowerCase());
+            b.keys.push(c.searchKey||c.species);
+          }
+
+          const supported=new Set(['EVO_LEVEL','EVO_TRADE','EVO_TRADE_ITEM']);
+          const dppOnly=new Set(['EVO_CORONET','EVO_ETERNA','EVO_ROUTE217','EVO_BEAUTY']);
+          const missing=[];
+          const seen=new Set();
+
+          function walk(origin,current,path,depth=0){
+            if(depth>7) return;
+            for(const edge of byBase.get(current)||[]){
+              if(!edge?.target || edge.target==='SPECIES_NONE') continue;
+              const key=[origin,current,edge.target,edge.method,edge.param??''].join('|');
+              if(seen.has(key)) continue;
+              seen.add(key);
+              const nextPath=[...path,{from:current,to:edge.target,method:String(edge.method||''),param:edge.param??null}];
+
+              const originName=constToSimple(origin);
+              const candidate=(pool.candidates||[]).find(c=>String(c.species).toLowerCase()===originName);
+              const family=String(candidate?.familyId||originName);
+              const terminals=currentByFamily.get(family)?.terminals||new Set();
+              const targetName=constToSimple(edge.target);
+              if(!terminals.has(targetName)){
+                missing.push({
+                  family,
+                  origin,
+                  target:edge.target,
+                  terminalName:targetName,
+                  finalMethod:String(edge.method||''),
+                  finalParam:edge.param??null,
+                  path:nextPath,
+                  methodClass:
+                    dppOnly.has(String(edge.method||'')) ? 'known-dppt-only-or-unavailable' :
+                    supported.has(String(edge.method||'')) ? 'supported-method-but-missing-terminal' :
+                    'unsupported-needs-hgss-legality-audit'
+                });
+              }
+              walk(origin,edge.target,nextPath,depth+1);
+            }
+          }
+
+          for(const c of pool.candidates||[]){
+            walk(nameToConst(c.species),nameToConst(c.species),[]);
+          }
+
+          const uniq=new Map();
+          for(const m of missing){
+            const k=[m.family,m.terminalName,m.finalMethod,m.finalParam??''].join('|');
+            if(!uniq.has(k) || m.path.length<uniq.get(k).path.length) uniq.set(k,m);
+          }
+          const rowsOut=[...uniq.values()].sort((a,b)=>
+            a.methodClass.localeCompare(b.methodClass) ||
+            a.finalMethod.localeCompare(b.finalMethod) ||
+            a.family.localeCompare(b.family) ||
+            a.terminalName.localeCompare(b.terminalName)
+          );
+          const methodCounts={};
+          const classCounts={};
+          for(const m of rowsOut){
+            methodCounts[m.finalMethod]=(methodCounts[m.finalMethod]||0)+1;
+            classCounts[m.methodClass]=(classCounts[m.methodClass]||0)+1;
+          }
+          const out={
+            schemaVersion:1,
+            sourceCommit:commit,
+            currentCandidateCount:(pool.candidates||[]).length,
+            currentFamilyCount:new Set((pool.candidates||[]).map(c=>c.familyId||c.species)).size,
+            supportedByCurrentPolicy:[...supported],
+            methodCounts,
+            classCounts,
+            missingTerminalCandidates:rowsOut
+          };
+          fs.writeFileSync('results/research-v2/evolution-coverage-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            sourceCommit:out.sourceCommit,
+            currentCandidateCount:out.currentCandidateCount,
+            currentFamilyCount:out.currentFamilyCount,
+            methodCounts,
+            classCounts,
+            examples:rowsOut.slice(0,80)
+          },null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-evolution-coverage-audit
+          path: hgss_story_sim/results/research-v2/evolution-coverage-audit.json
+          if-no-files-found: error
