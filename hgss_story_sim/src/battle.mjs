@@ -19,7 +19,7 @@ const NATURES_BY_ID = [
 const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
   ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
   : null;
-const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v3-parity');
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v4-move-usage');
 const SMART_DYNAMIC_HP_POWER = String(process.env.HGSS_SMART_DYNAMIC_HP_POWER || '1') !== '0';
 const SMART_REQUEST_AWARE_SWITCH = String(process.env.HGSS_SMART_REQUEST_AWARE_SWITCH || '1') !== '0';
 let battleCacheLoaded = false;
@@ -2092,6 +2092,7 @@ function emptyBattleUsage() {
     appearances: 0,
     leadStarts: 0,
     moveUses: 0,
+    moveUsesByMove: {},
     activeTurns: 0,
     faints: 0,
   };
@@ -2168,6 +2169,11 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
           const key = p1UsageKey(actor, p1KeyByDisplayName);
           if (key && p1Usage[key]) {
             p1Usage[key].moveUses += 1;
+            const moveName = String(parts[3] || '').trim();
+            if (moveName) {
+              p1Usage[key].moveUsesByMove[moveName] =
+                Number(p1Usage[key].moveUsesByMove[moveName] || 0) + 1;
+            }
             p1ActiveKey = key;
           }
         }
@@ -2259,9 +2265,11 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
         appearances: 0,
         leadStarts: 0,
         moveUses: 0,
+        moveUsesByMove: {},
         activeTurns: 0,
         faints: 0,
         winningMoveUses: 0,
+        winningMoveUsesByMove: {},
         winningActiveTurns: 0,
       };
       const used = Number(usage.appearances || 0) > 0 ||
@@ -2273,10 +2281,18 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
       aggregate.appearances += Number(usage.appearances || 0);
       aggregate.leadStarts += Number(usage.leadStarts || 0);
       aggregate.moveUses += Number(usage.moveUses || 0);
+      for (const [moveName, count] of Object.entries(usage.moveUsesByMove || {})) {
+        aggregate.moveUsesByMove[moveName] =
+          Number(aggregate.moveUsesByMove[moveName] || 0) + Number(count || 0);
+      }
       aggregate.activeTurns += Number(usage.activeTurns || 0);
       aggregate.faints += Number(usage.faints || 0);
       if (result.winner === 'Player') {
         aggregate.winningMoveUses += Number(usage.moveUses || 0);
+        for (const [moveName, count] of Object.entries(usage.moveUsesByMove || {})) {
+          aggregate.winningMoveUsesByMove[moveName] =
+            Number(aggregate.winningMoveUsesByMove[moveName] || 0) + Number(count || 0);
+        }
         aggregate.winningActiveTurns += Number(usage.activeTurns || 0);
       }
       p1Usage[key] = aggregate;
