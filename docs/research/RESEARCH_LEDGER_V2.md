@@ -340,7 +340,28 @@ After P0-B:
 - archive/remove branches only after their unique semantics/results are represented in this ledger or linked Jira;
 - keep Red/Lance historical branches until all parity candidates are explicitly marked ported/rejected.
 
-## 9. Next concrete continuation point
+## 9. Additional P0 search-completeness audit
+
+Jira: **SCRUM-415**
+
+The canonical `trade-aware` evolution policy currently auto-applies only:
+- unambiguous `EVO_LEVEL`
+- `EVO_TRADE`
+- `EVO_TRADE_ITEM`
+
+Friendship, stone/item, move-known, time-conditioned, and other special evolution methods are intentionally kept conservative rather than auto-applied.
+
+This is legally safe but may remove valid terminal forms from the global candidate space and reduce recall.
+
+Important distinction:
+- the old Lance branch's disjoint encounter-level-range fix does **not** need direct porting;
+- current code already preserves actual encounter-slot level probabilities in `levelDistribution`, which supersedes that representation.
+
+Research v2 must quantify which HGSS-legal terminal forms are currently omitted before the next global search.
+
+Disposition: **P0-C search completeness**, not a battle-policy fix.
+
+## 10. Next concrete continuation point
 
 Proceed in SCRUM-414:
 
