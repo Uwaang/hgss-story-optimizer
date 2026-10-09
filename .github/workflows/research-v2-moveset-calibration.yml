@@ -29,7 +29,7 @@ jobs:
       - name: Moveset Build v2 calibration probe
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=1 --pool-cap=24 --top-calibration=6 \
+          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=3 --pool-cap=24 --top-calibration=6 \
             > results/research-v2/moveset-build-v2-probe.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -40,6 +40,8 @@ jobs:
             spearman:r.calibration.proxyActualSpearman,
             sampleCount:r.calibration.sampleCount,
             bestActualSample:r.calibration.bestActualSample,
+            bestActualTies:r.calibration.bestActualTies,
+            actualDistinctOutcomeCount:r.calibration.actualDistinctOutcomeCount,
             calibration:r.calibration.rows.map(x=>({
               proxyRank:x.proxyRank,
               moves:x.moves,
