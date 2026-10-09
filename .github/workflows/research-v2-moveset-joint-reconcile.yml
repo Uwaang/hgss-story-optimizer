@@ -1,5 +1,5 @@
 name: research-v2-moveset-joint-reconcile
-# P0-D joint reconciliation: baseline vs all local recommendations + leave-one-out
+# P0-D high-sample joint reconciliation shortlist
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
   reconcile:
     if: contains(github.event.head_commit.message, '[research-v2-joint-reconcile]')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -28,15 +28,16 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Lv50 full-route joint reconciliation
+      - name: Lv50 full-route high-sample joint shortlist
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-joint-validate \
-            --level=50 --runs=100 \
-            > results/research-v2/joint-full100.json
+            --level=50 --runs=500 \
+            --labels="leaveout-Rhyperior,leaveout-Lanturn,leaveout-Typhlosion,joint-v2" \
+            > results/research-v2/joint-full500.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/joint-full100.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/joint-full500.json','utf8'));
           console.log(JSON.stringify({
             assumptions:r.assumptions,
             rows:r.rows.map(x=>({
@@ -54,6 +55,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-joint-full100
-          path: hgss_story_sim/results/research-v2/joint-full100.json
+          name: research-v2-joint-full500
+          path: hgss_story_sim/results/research-v2/joint-full500.json
           if-no-files-found: error
