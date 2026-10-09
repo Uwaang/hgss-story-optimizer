@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-practical-grind
-# SCRUM-417 recipient-state practical grind comparison
+# SCRUM-417 Red pricing for recipient-state shortlist
 
 on:
   push:
@@ -10,18 +10,18 @@ permissions:
   contents: read
 
 jobs:
-  practical-grind:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-practical]')
+  red-pricing:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-red]')
     strategy:
       fail-fast: false
       matrix:
         include:
           - state: always-active
             activate: always-active
+            story_plan_b64: eyJNb3J0eSI6Mjk2LCJXaWxsIjoxNDksIkxhbmNlIjoyNDcsIkxhbmNlIDIiOjE3MywiQnJ1bm8gMiI6M30=
           - state: lance
             activate: Lance
-          - state: blue
-            activate: Blue
+            story_plan_b64: eyJDbGFpciI6MjM4LCJMYW5jZSI6MjQ0LCJMYW5jZSAyIjoyNjAsIlNhYnJpbmEiOjQyLCJCcnVubyAyIjo0NX0=
     runs-on: ubuntu-latest
     timeout-minutes: 120
     defaults:
@@ -35,7 +35,7 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Practical grind frontier
+      - name: Price Red 25 and 50 from converged Story50 plan
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
@@ -43,18 +43,19 @@ jobs:
             --recipient-target=Quagsire \
             --recipient-activate="${{ matrix.activate }}" \
             --story-targets=0.5 \
-            --skip-red=true \
+            --red-targets=0.25,0.5 \
+            --reuse-story-plan-base64="${{ matrix.story_plan_b64 }}" \
             --screen-runs=2 \
             --verify-runs=8 \
             --repair-runs=16 \
-            --final-runs=32 \
+            --final-runs=64 \
             --max-repair-rounds=8 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/practical-${{ matrix.state }}.json
+            > results/research-v2/red-pricing-${{ matrix.state }}.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/practical-${{ matrix.state }}.json';
+          const file='results/research-v2/red-pricing-${{ matrix.state }}.json';
           const r=JSON.parse(fs.readFileSync(file,'utf8'));
           console.log(JSON.stringify({
             assumptions:r.assumptions,
@@ -63,16 +64,24 @@ jobs:
               storyTargetWinRate:x.storyTargetWinRate,
               storyGrindBattles:x.storyGrindBattles,
               storyGrindExp:x.storyGrindExp,
-              storyWorstBossWinRate:x.storyWorstBossWinRate,
               repairConverged:x.repairConverged,
-              repairRounds:x.repairRounds,
-              finalLevels:x.checkpoints?.at(-1)?.playerLevels ?? null,
-              storyPlan:x.storyPlan
+              redBaseline:x.redBaseline,
+              redFrontier:x.redFrontier.map(y=>({
+                targetWinRate:y.targetWinRate,
+                additionalRedGrindBattles:y.additionalRedGrindBattles,
+                totalGrindBattles:y.totalGrindBattles,
+                totalGrindExp:y.totalGrindExp,
+                achievedWinRate:y.achievedWinRate,
+                averageOpponentFaints:y.averageOpponentFaints,
+                redGrindExp:y.redGrindExp,
+                finalLevels:y.finalLevels,
+                plan:y.plan
+              }))
             }))
           },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-practical-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/practical-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-red-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/red-pricing-${{ matrix.state }}.json
           if-no-files-found: error
