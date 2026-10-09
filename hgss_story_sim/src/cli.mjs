@@ -9957,7 +9957,16 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     playerTeam = playerTeam.map(mon => {
       const key = mon._candidateKey || mon.species;
       const candidate = candidatesByKey.get(key);
-      const build = routeBuildPlan[key];
+      const routeBuild = routeBuildPlan[key];
+      const fixedBuild = options.playerBuildOverrideByCandidate?.[key] || null;
+      const build = fixedBuild
+        ? {
+            ...routeBuild,
+            ...fixedBuild,
+            routeMoves: routeBuild?.routeMoves,
+            routeMoveOptimization: routeBuild?.routeMoveOptimization,
+          }
+        : routeBuild;
       let built = applyPlayerRouteBuild(mon, build);
       if (candidate && build?.routeMoves) {
         built = equalLevelRouteMovesAtStage(
@@ -9973,7 +9982,19 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       }
       return built;
     });
-    const heldItems = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
+    const heldItemOverride = options.heldItemsByBoss?.[String(boss.label)] || null;
+    const heldItems = heldItemOverride
+      ? {
+          team: playerTeam.map(mon => ({
+            ...mon,
+            item: heldItemOverride[mon._candidateKey || mon.species] || '',
+          })),
+          policy: {
+            note: 'fixed diagnostic held-item assignment',
+            selected: { ...heldItemOverride },
+          },
+        }
+      : optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
     playerTeam = heldItems.team;
 
     if (!playerTeam.length) {
