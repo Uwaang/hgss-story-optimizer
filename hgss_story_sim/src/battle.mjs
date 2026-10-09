@@ -1916,6 +1916,15 @@ function smartStatusMoveScore(active, target, requestedMove) {
   return 8;
 }
 
+export function smartMoveActsBeforeNeutralPriority(moveName, activeSpeed, targetSpeed) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return false;
+  const priority = Number(move.priority || 0);
+  if (priority > 0) return true;
+  if (priority < 0) return false;
+  return Math.max(1, Number(activeSpeed || 1)) >= Math.max(1, Number(targetSpeed || 1));
+}
+
 function smartMoveScore(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove?.move);
   if (!move.exists || requestedMove?.disabled) return -Infinity;
@@ -1926,7 +1935,7 @@ function smartMoveScore(active, target, requestedMove) {
   const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
   const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
   const priority = Number(move.priority || 0);
-  const actsFirst = priority > 0 || activeSpeed >= targetSpeed;
+  const actsFirst = smartMoveActsBeforeNeutralPriority(move.id, activeSpeed, targetSpeed);
   const ko = damage >= targetHp;
   let score = 100 * damage / targetMaxHp;
   if (ko) score += actsFirst ? 420 : 220;
@@ -2194,6 +2203,31 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
         .filter(entry => !entry.move.disabled);
       if (!legal.length) return 'move 1';
       legal.sort((a, b) => b.score - a.score || a.idx - b.idx);
+      if (stats && playerMode === 'smart' && aiOptions?.traceMoves) {
+        const trace = stats.smartMoveDecisionTrace || (stats.smartMoveDecisionTrace = []);
+        trace.push({
+          turn: Number(battle?.turn || 0),
+          active: String(active?.species?.name || active?.name || ''),
+          target: String(foeActive?.species?.name || foeActive?.name || ''),
+          activeHp: Number(active?.hp || 0),
+          activeMaxHp: Number(active?.maxhp || 0),
+          targetHp: Number(foeActive?.hp || 0),
+          targetMaxHp: Number(foeActive?.maxhp || 0),
+          selected: String(legal[0]?.move?.move || ''),
+          choices: legal.map(entry => {
+            const move = dex.moves.get(entry.move?.move);
+            return {
+              move: String(entry.move?.move || ''),
+              score: Number(entry.score),
+              estimatedDamage: active && foeActive
+                ? Number(estimateBattleDamage(active, foeActive, entry.move))
+                : 0,
+              priority: Number(move?.priority || 0),
+              accuracy: typeof move?.accuracy === 'number' ? Number(move.accuracy) : true,
+            };
+          }),
+        });
+      }
       return `move ${legal[0].idx + 1}`;
     });
     if (choices.includes('__trainer_item__')) return '__trainer_item__';
@@ -2284,6 +2318,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     moveDecisions: 0,
     lastVoluntarySwitchTurn: -999,
     aiRngState: (Number(seed) ^ 0x13579bdf) >>> 0,
+    smartMoveDecisionTrace: [],
   };
   const p2Stats = {
     voluntarySwitches: 0,
@@ -2295,7 +2330,13 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     trainerItemCount: options.p2TrainerItems === false ? 0 : Number(p2Profile?.items?.length || 0),
     trainerItemsUsed: [],
   };
-  const p1Task = runGreedyAi(streams.p1, battleStream, 'p1', p1Stats, { mode: p1Mode }).catch(() => undefined);
+  const p1Task = runGreedyAi(
+    streams.p1,
+    battleStream,
+    'p1',
+    p1Stats,
+    { mode: p1Mode, traceMoves: Boolean(options.p1SmartTrace) },
+  ).catch(() => undefined);
   const p2Task = runGreedyAi(
     streams.p2,
     battleStream,
@@ -2373,6 +2414,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       : Math.min(1, p2Faints / Math.max(1, p2Team.length)),
     p1Usage,
     p1AiMode: p1Mode,
+    p1SmartDecisionTrace: options.p1SmartTrace ? [...p1Stats.smartMoveDecisionTrace] : [],
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
     p1ForcedSwitches: p1Stats.forcedSwitches,
     p2VoluntarySwitches: p2Stats.voluntarySwitches,
@@ -2401,6 +2443,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalBattleProgress = 0;
   const p1Usage = {};
   let p1AiMode = options.p1AiMode || 'greedy';
+  const p1SmartDecisionTrace = [];
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
   let p2AiFlags = 0;
   let p2AiFlagNames = [];
@@ -2416,6 +2459,11 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP1Faints += Number(result.p1Faints || 0);
     totalP2Faints += Number(result.p2Faints || 0);
     totalBattleProgress += Number(result.battleProgressScore || 0);
+    if (options.p1SmartTrace && Array.isArray(result.p1SmartDecisionTrace)) {
+      for (const decision of result.p1SmartDecisionTrace) {
+        p1SmartDecisionTrace.push({ run: i, ...decision });
+      }
+    }
     for (const [key, usage] of Object.entries(result.p1Usage || {})) {
       const aggregate = p1Usage[key] || {
         runsAvailable: 0,
@@ -2482,6 +2530,7 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     battleProgressScore: totalBattleProgress / runs,
     p1Usage,
     p1AiMode,
+    p1SmartDecisionTrace,
     p2AiMode,
     p2AiFlags,
     p2AiFlagNames,
