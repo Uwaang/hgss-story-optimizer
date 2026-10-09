@@ -1,0 +1,79 @@
+name: research-v2-evolution-trigger-audit
+
+on:
+  push:
+    branches:
+      - research/v2-evolution-trigger-audit-v1
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-evolution-trigger-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Dump current pool
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/research-v2/evolution-trigger-pool.json
+      - name: Audit move and item trigger sources
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import Showdown from 'pokemon-showdown';
+          const { Dex } = Showdown;
+          const dex= Dex.mod('gen4');
+          const pool=JSON.parse(fs.readFileSync('results/research-v2/evolution-trigger-pool.json','utf8'));
+          const pairs=[
+            ['Aipom','Double Hit','Ambipom'],
+            ['Lickitung','Rollout','Lickilicky'],
+            ['Piloswine','Ancient Power','Mamoswine'],
+            ['Tangela','Ancient Power','Tangrowth'],
+            ['Yanma','Ancient Power','Yanmega'],
+          ];
+          const moveRows=pairs.map(([speciesName,moveName,target])=>{
+            const species=dex.species.get(speciesName);
+            const move=dex.moves.get(moveName);
+            const learnset=dex.species.getLearnsetData(species.id).learnset||{};
+            const sources=[...(learnset[move.id]||[])];
+            const levelSources=sources.filter(s=>/^4L\d+$/.test(s)).map(s=>Number(s.slice(2))).sort((a,b)=>a-b);
+            const tutorSources=sources.filter(s=>/^4T/.test(s));
+            const machineSources=sources.filter(s=>/^4M/.test(s));
+            const familyCandidates=(pool.candidates||[]).filter(c=>
+              String(c.species).toLowerCase()===speciesName.toLowerCase() ||
+              String(c.familyId||'').toLowerCase()===speciesName.toLowerCase() ||
+              String(c.terminalSpecies||'').toLowerCase()===target.toLowerCase()
+            ).map(c=>({
+              searchKey:c.searchKey,
+              species:c.species,
+              terminalSpecies:c.terminalSpecies,
+              familyId:c.familyId,
+              availableFrom:c.availableFrom,
+              entryLevelMin:c.entryLevelMin,
+              entryLevelMax:c.entryLevelMax,
+              speciesByStage:c.speciesByStage,
+            }));
+            return {species:speciesName,target,requiredMove:moveName,sources,levelSources,tutorSources,machineSources,familyCandidates};
+          });
+          const itemRows=['ITEM_RAZOR_CLAW','ITEM_RAZOR_FANG'].map(item=>({
+            item,access:pool.evolutionAccess?.items?.[item]||null
+          }));
+          const out={schemaVersion:1,sourceCommit:pool.sourceCommit,moveRows,itemRows};
+          fs.writeFileSync('results/research-v2/evolution-trigger-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-evolution-trigger-audit
+          path: hgss_story_sim/results/research-v2/evolution-trigger-audit.json
+          if-no-files-found: error
