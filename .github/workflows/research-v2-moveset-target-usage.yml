@@ -27,24 +27,27 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Tyranitar target usage
+      - name: Tyranitar materialization check
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-target-usage --level=50 --runs=20 --target=Tyranitar \
-            > results/research-v2/tyranitar-target-usage.json
+          node src/cli.mjs moveset-build-v2-target-usage --level=50 --runs=3 --target=Tyranitar \
+            > results/research-v2/tyranitar-target-usage-lv50.json
+          node src/cli.mjs moveset-build-v2-target-usage --level=57 --runs=3 --target=Tyranitar \
+            > results/research-v2/tyranitar-target-usage-lv57.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-target-usage.json','utf8'));
-          console.log(JSON.stringify({
-            target:r.assumptions.target,
-            targetBuild:r.targetBuild,
-            targetUsage:r.targetUsage,
-            routeRisk:r.routeRisk,
-            activeBossRows:r.activeBossRows
-          },null,2));
+          for (const level of [50,57]) {
+            const r=JSON.parse(fs.readFileSync(`results/research-v2/tyranitar-target-usage-lv${level}.json`,'utf8'));
+            console.log(JSON.stringify({
+              level,
+              target:r.assumptions.target,
+              targetBuild:r.targetBuild,
+              activeBossRows:r.activeBossRows
+            },null,2));
+          }
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-tyranitar-target-usage
-          path: hgss_story_sim/results/research-v2/tyranitar-target-usage.json
+          name: research-v2-tyranitar-materialization
+          path: hgss_story_sim/results/research-v2/tyranitar-target-usage-lv*.json
           if-no-files-found: error
