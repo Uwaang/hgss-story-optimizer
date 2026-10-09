@@ -12199,6 +12199,10 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '1'))));
   const targetSpecies = String(arg('target', 'Typhlosion')).trim();
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
@@ -12321,6 +12325,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
       moveAccess,
       {
         seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
         routeMovesOverrideByCandidate: {
           [targetKey]: candidate.isBaseline
             ? candidate.moves
@@ -12375,6 +12380,7 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
       target: targetName,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
       team: team.map(candidate => candidate.terminalSpecies || candidate.species),
       search: 'replace exactly one baseline move with every legal alternative',
       note: 'Low-run actual battle screening only; finalists require higher-run validation.',
