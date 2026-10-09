@@ -5045,6 +5045,8 @@ function practicalGrindCheckpoints(evaluation) {
       stage: Number(ledger.stage || 0),
       winRate: row ? Number(row.winRate || 0) : null,
       playerLevels: row?.playerLevels || ledger.levelsBefore || {},
+      playerBuilds: row?.playerBuilds || {},
+      heldItemPolicy: row?.heldItemPolicy || null,
       grindBattlesBefore: Number(ledger.expectedGrindBattles || 0),
       grindExpBefore: Number(ledger.grindExpBefore || 0),
       bestWildExpPerBattle: Number(ledger.bestWildGrind?.expectedExpPerBattle || 0),
