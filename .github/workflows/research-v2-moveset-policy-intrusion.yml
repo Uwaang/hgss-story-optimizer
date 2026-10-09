@@ -27,6 +27,14 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { smartMoveActsBeforeNeutralPriority } from './src/battle.mjs';
+          assert.equal(smartMoveActsBeforeNeutralPriority('Focus Punch', 999, 1), false);
+          assert.equal(smartMoveActsBeforeNeutralPriority('Quick Attack', 1, 999), true);
+          assert.equal(smartMoveActsBeforeNeutralPriority('Flamethrower', 200, 100), true);
+          assert.equal(smartMoveActsBeforeNeutralPriority('Flamethrower', 100, 200), false);
+          NODE
       - name: Policy option intrusion ablation
         run: |
           mkdir -p results/research-v2
