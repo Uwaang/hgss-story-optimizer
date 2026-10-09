@@ -8,7 +8,8 @@
     "Rare wild held-item sources are derived automatically from pinned pret personal+encounter data and treated as repeatable; drop-rate friction is ignored.",
     "Curated fixed/shop sources below are conservative story stages. Weekday inconvenience is ignored, but National Dex / Rock Climb gates are respected.",
     "Same-stage post-boss item gates use route-order checkpoints, so post-Blue items are unavailable for Blue but legal for the rematch Elite Four.",
-    "Post-16-badge evolution items are checkpointed after Blue and before the rematch Elite Four because Blue and the rematch share numeric stage 20."
+    "Post-16-badge evolution items are checkpointed after Blue and before the rematch Elite Four because Blue and the rematch share numeric stage 20.",
+    "General evolution stones are source-backed from Pokeathlon/contest stock; Razor Claw/Fang are source-backed from the post-Elite-Four Battle Frontier. Their inconvenience/BP cost is not part of the current EXP-only objective."
   ],
   "tradeUnlockStage": 0,
   "items": {
@@ -124,6 +125,116 @@
       "afterBoss": "Blue",
       "beforeBoss": "Will 2",
       "note": "Mt. Silver source; modeled after all 16 badges/Blue and before the rematch Elite Four."
+    },
+    "ITEM_MOON_STONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; weekday pre-National-Dex stock"
+      },
+      "note": "Source-backed Pokeathlon pre-National-Dex stock. Weekday inconvenience is ignored by the current legality model."
+    },
+    "ITEM_FIRE_STONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; weekday pre-National-Dex stock"
+      },
+      "note": "Source-backed Pokeathlon pre-National-Dex stock. Weekday inconvenience is ignored."
+    },
+    "ITEM_THUNDERSTONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; weekday pre-National-Dex stock"
+      },
+      "note": "Source-backed Pokeathlon pre-National-Dex stock. Weekday inconvenience is ignored."
+    },
+    "ITEM_WATER_STONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; weekday pre-National-Dex stock"
+      },
+      "note": "Source-backed Pokeathlon pre-National-Dex stock. Weekday inconvenience is ignored."
+    },
+    "ITEM_LEAF_STONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "post-Whitney; weekday pre-National-Dex stock"
+      },
+      "note": "Source-backed Pokeathlon pre-National-Dex stock. Weekday inconvenience is ignored."
+    },
+    "ITEM_SUN_STONE": {
+      "availableFrom": 3,
+      "repeatable": true,
+      "source": {
+        "type": "bug-catching-contest",
+        "location": "National Park",
+        "condition": "contest prize; accessible in the post-Whitney route window"
+      },
+      "note": "Conservative route checkpoint. Contest inconvenience/RNG is not priced by the current combat objective."
+    },
+    "ITEM_SHINY_STONE": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "National Dex weekday stock"
+      },
+      "note": "National Dex Pokeathlon stock; weekday inconvenience ignored."
+    },
+    "ITEM_DUSK_STONE": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "National Dex weekday stock"
+      },
+      "note": "National Dex Pokeathlon stock; weekday inconvenience ignored."
+    },
+    "ITEM_DAWN_STONE": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "athlete-shop",
+        "location": "Pokeathlon Dome",
+        "condition": "National Dex weekday stock"
+      },
+      "note": "National Dex Pokeathlon stock; weekday inconvenience ignored."
+    },
+    "ITEM_RAZOR_CLAW": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "battle-frontier",
+        "location": "Battle Frontier",
+        "condition": "48 BP; post-Elite-Four access"
+      },
+      "note": "BP acquisition effort is not included in the current EXP-only objective."
+    },
+    "ITEM_RAZOR_FANG": {
+      "availableFrom": 13,
+      "repeatable": true,
+      "source": {
+        "type": "battle-frontier",
+        "location": "Battle Frontier",
+        "condition": "48 BP; post-Elite-Four access"
+      },
+      "note": "BP acquisition effort is not included in the current EXP-only objective."
     }
   }
 }
