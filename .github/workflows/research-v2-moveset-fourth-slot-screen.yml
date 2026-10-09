@@ -30,7 +30,7 @@ jobs:
       - name: Fourth-slot local actual-battle screen
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-fourth-slot-screen --level=50 --runs=3 \
+          node src/cli.mjs moveset-build-v2-fourth-slot-screen --level=50 --runs=5 --target=Rhyperior --core="Earthquake,Stone Edge,Hammer Arm" \
             > results/research-v2/moveset-build-v2-fourth-slot-screen.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -46,6 +46,7 @@ jobs:
               retry:x.actual.expectedRetryFailures,
               geometric:x.actual.geometricScore,
               mean:x.actual.meanWinRate,
+              progress:x.actual.battleProgressScore,
               moveUses:x.actual.targetUsage?.moveUsesByMove||{}
             }))
           },null,2));
