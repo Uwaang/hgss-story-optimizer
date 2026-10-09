@@ -1,5 +1,6 @@
 name: research-v2-moveset-neighborhood-screen
 # strict counterfactual fallback exclusion enabled
+# structured override cache normalization enabled
 
 on:
   push:
