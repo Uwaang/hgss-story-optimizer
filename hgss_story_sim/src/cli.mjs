@@ -11559,6 +11559,232 @@ async function cmdEqualLevelStorySearch() {
   }, null, 2));
 }
 
+
+function movesetKey(moves) {
+  return [...new Set(moves || [])].sort().join('|');
+}
+
+function spearmanFromRankedRows(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return null;
+  const proxyOrder = [...rows].sort((a, b) =>
+    Number(a.proxyRank) - Number(b.proxyRank) ||
+    movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+  );
+  const actualOrder = [...rows].sort((a, b) =>
+    Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
+    Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+  );
+  const proxyRank = new Map(proxyOrder.map((row, index) => [movesetKey(row.moves), index + 1]));
+  const actualRank = new Map(actualOrder.map((row, index) => [movesetKey(row.moves), index + 1]));
+  const n = rows.length;
+  const sumD2 = rows.reduce((sum, row) => {
+    const key = movesetKey(row.moves);
+    const d = Number(proxyRank.get(key)) - Number(actualRank.get(key));
+    return sum + d * d;
+  }, 0);
+  return 1 - (6 * sumD2) / (n * (n * n - 1));
+}
+
+function canonicalEvolutionVariant(pool, originSpecies, terminalSpecies) {
+  const rows = (pool?.candidates || [])
+    .filter(candidate =>
+      String(candidate.species) === String(originSpecies) &&
+      String(candidate.terminalSpecies || candidate.species) === String(terminalSpecies)
+    )
+    .sort((a, b) => candidateIdentity(a).localeCompare(candidateIdentity(b)));
+  if (!rows.length) {
+    throw new Error(`Missing canonical evolution variant: ${originSpecies}->${terminalSpecies}`);
+  }
+  return rows[0];
+}
+
+async function cmdMovesetBuildV2Probe() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const poolCap = Math.max(4, Math.floor(Number(arg('pool-cap', '32'))));
+  const topCalibration = Math.max(1, Math.floor(Number(arg('top-calibration', '6'))));
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('idx30 calibration team violates canonical team constraints');
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const levels = Object.fromEntries(
+    team.map(candidate => [candidateIdentity(candidate), commonLevel])
+  );
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    { levelsByBattle },
+  );
+  const purchasable = planPurchasableMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const purchasablePlan = purchasable.assignments;
+  const baselinePlan = buildEqualLevelRouteBuildPlan(
+    team,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan,
+    levels,
+  );
+
+  const target = team[0];
+  const targetKey = candidateIdentity(target);
+  const lastBoss = routeBosses[routeBosses.length - 1];
+  let targetMon = materializeCandidateTeam(
+    [target],
+    lastBoss.stage,
+    commonLevel,
+    {
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      levelsByCandidate: levels,
+      boss: lastBoss,
+    },
+  )[0];
+  if (!targetMon) throw new Error('Typhlosion target did not materialize for final route checkpoint');
+  targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
+
+  const assignedMachines = [
+    ...(singleUsePlan[targetKey] || []),
+    ...(purchasablePlan[targetKey] || []),
+  ];
+  const foeTeams = routeBosses.map(boss => hgssTrainerToShowdownTeam(boss.trainer, boss));
+  const currentRouteMoves = baselinePlan[targetKey]?.routeMoves || [];
+  const enumeration = enumeratePlayerRouteMovesetsV2(
+    targetMon,
+    foeTeams,
+    {
+      stage: Number(lastBoss.stage),
+      moveAccess,
+      extraMachines: assignedMachines,
+      originSpeciesName: target.species,
+      poolCap,
+      requiredMoves: currentRouteMoves,
+    },
+  );
+  if (!enumeration.rows.length) throw new Error('No Typhlosion movesets enumerated');
+
+  const selected = new Set();
+  for (let index = 0; index < Math.min(topCalibration, enumeration.rows.length); index += 1) {
+    selected.add(index);
+  }
+  for (const fraction of [0.25, 0.5, 0.75, 1]) {
+    selected.add(Math.round((enumeration.rows.length - 1) * fraction));
+  }
+  const currentKey = movesetKey(currentRouteMoves);
+  const currentIndex = enumeration.rows.findIndex(row => movesetKey(row.moves) === currentKey);
+  if (currentIndex >= 0) selected.add(currentIndex);
+
+  const calibration = [];
+  for (const index of [...selected].sort((a, b) => a - b)) {
+    const row = enumeration.rows[index];
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: row.moves,
+        },
+      },
+    );
+    calibration.push({
+      proxyRank: index + 1,
+      moves: row.moves,
+      proxy: row.proxy,
+      isCurrentV1: movesetKey(row.moves) === currentKey,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+      },
+    });
+  }
+
+  const actualSorted = [...calibration].sort((a, b) =>
+    Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
+    Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+  );
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D Moveset/Build v2 proxy-to-battle calibration probe',
+    assumptions: {
+      version: 'HEARTGOLD',
+      evolutionPolicy: 'trade-aware',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeedsAcrossMovesets: true,
+      resourceProfile: 'all',
+      spendPolicy: 'unbounded',
+      target: 'Typhlosion',
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      note: 'This is a calibration probe, not a global moveset winner claim.',
+    },
+    baselineV1: {
+      targetKey,
+      routeMoves: currentRouteMoves,
+      build: baselinePlan[targetKey] || null,
+    },
+    enumeration: {
+      legalMoveCount: enumeration.legalMoveCount,
+      poolCap: enumeration.poolCap,
+      truncated: enumeration.truncated,
+      candidateMoves: enumeration.candidateMoves,
+      evaluatedMovesets: enumeration.evaluatedMovesets,
+      top10: enumeration.rows.slice(0, 10).map((row, index) => ({
+        proxyRank: index + 1,
+        moves: row.moves,
+        proxy: row.proxy,
+      })),
+    },
+    calibration: {
+      sampleCount: calibration.length,
+      proxyActualSpearman: spearmanFromRankedRows(calibration),
+      rows: calibration,
+      bestActualSample: actualSorted[0] || null,
+    },
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -12051,6 +12277,7 @@ const commands = {
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
