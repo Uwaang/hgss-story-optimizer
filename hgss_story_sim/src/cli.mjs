@@ -12112,6 +12112,18 @@ async function cmdMovesetBuildV2Probe() {
 async function cmdMovesetBuildV2FourthSlotScreen() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '3'))));
+  const targetSpecies = String(arg('target', 'Typhlosion')).trim();
+  const requestedCore = String(arg('core', 'Eruption,Focus Punch,Focus Blast'))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (requestedCore.length !== 3 || new Set(requestedCore).size !== 3) {
+    throw new Error('moveset-build-v2-fourth-slot-screen requires exactly three unique --core moves');
+  }
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
@@ -12146,7 +12158,11 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
     purchasablePlan,
     levels,
   );
-  const target = team[0];
+  const target = team.find(candidate =>
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetSpecies.toLowerCase()
+  );
+  if (!target) throw new Error(`Unknown fourth-slot target: ${targetSpecies}`);
+  const targetName = String(target.terminalSpecies || target.species);
   const targetKey = candidateIdentity(target);
   const lastBoss = routeBosses[routeBosses.length - 1];
   let targetMon = materializeCandidateTeam(
@@ -12161,7 +12177,7 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
       boss: lastBoss,
     },
   )[0];
-  if (!targetMon) throw new Error('Typhlosion target did not materialize');
+  if (!targetMon) throw new Error(`${targetName} target did not materialize`);
   targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
   const assignedMachines = [
     ...(singleUsePlan[targetKey] || []),
@@ -12177,7 +12193,7 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
       extraMachines: assignedMachines,
       originSpeciesName: target.species,
       poolCap: 64,
-      requiredMoves: baselinePlan[targetKey]?.routeMoves || [],
+      requiredMoves: requestedCore,
     },
   );
   const proxyRankByKey = new Map(
@@ -12196,7 +12212,7 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
   const proxyByKey = new Map(
     enumeration.rows.map(row => [movesetKey(row.moves), row.proxy])
   );
-  const core = ['Eruption', 'Focus Punch', 'Focus Blast'];
+  const core = requestedCore;
   for (const move of core) {
     if (!enumeration.legalPool.includes(move)) {
       throw new Error('Expected core move missing from legal pool: ' + move);
@@ -12220,6 +12236,7 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
       moveAccess,
       {
         seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
         routeMovesOverrideByCandidate: {
           [targetKey]: variant.moves,
         },
@@ -12236,6 +12253,7 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
         geometricScore: routeRiskGeometricScore(evaluation),
         meanWinRate: routeRiskMeanWinRate(evaluation),
+        battleProgressScore: routeRiskBattleProgressScore(evaluation),
         worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
         bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
         targetUsage: evaluation.memberUsage?.[targetKey] || null,
@@ -12247,18 +12265,21 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
     Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
     Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    Number(b.actual.battleProgressScore || 0) - Number(a.actual.battleProgressScore || 0) ||
     a.fourth.localeCompare(b.fourth)
   );
   await flushBattleCache();
   await flushEqualLevelPreparationCache();
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'P0-D Typhlosion fourth-slot actual-battle local screen',
+    purpose: 'P0-D target-generalized fourth-slot actual-battle local screen',
     assumptions: {
       version: 'HEARTGOLD',
       commonLevel,
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
+      target: targetName,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
       core,
       team: team.map(candidate => candidate.terminalSpecies || candidate.species),
       note: 'Local diagnostic around the current v1 three-move core; not a global moveset winner claim.',
