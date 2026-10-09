@@ -1,4 +1,5 @@
 name: research-v2-moveset-neighborhood-screen
+# strict counterfactual fallback exclusion enabled
 
 on:
   push:
