@@ -11752,6 +11752,8 @@ async function cmdMovesetBuildV2TargetUsage() {
       boss: row.boss,
       stage: Number(row.stage || 0),
       winRate: Number(row.winRate || 0),
+      materializedSpecies: row.playerBuilds?.[targetKey]?.species || null,
+      playerLevel: Number(row.playerBuilds?.[targetKey]?.level || commonLevel),
       appearances: Number(usage.appearances || 0),
       leadStarts: Number(usage.leadStarts || 0),
       moveUses: Number(usage.moveUses || 0),
