@@ -1,5 +1,5 @@
 name: research-v2-moveset-explicit-validate
-# Lanturn + Lapras full-route 100-run finalist validation
+# Lapras Bruno 2 1000-run decision-boundary validation
 
 on:
   push:
@@ -12,14 +12,6 @@ permissions:
 jobs:
   validate:
     if: contains(github.event.head_commit.message, '[research-v2-explicit-validate]')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: Lanturn
-            sets: "baseline=Hydro Pump/Thunderbolt/Signal Beam/Thunder Wave;watergun-for-hydro=Water Gun/Thunderbolt/Signal Beam/Thunder Wave;confuse-for-tbolt=Hydro Pump/Confuse Ray/Signal Beam/Thunder Wave"
-          - target: Lapras
-            sets: "baseline=Hydro Pump/Ice Beam/Dragon Pulse/Body Slam;surf-for-dragon=Hydro Pump/Ice Beam/Surf/Body Slam;brine-for-hydro=Brine/Ice Beam/Dragon Pulse/Body Slam"
     runs-on: ubuntu-latest
     timeout-minutes: 90
     defaults:
@@ -36,16 +28,16 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Full-route 100-run finalist validation
+      - name: Lapras Bruno 2 1000-run decision boundary
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=50 --runs=100 --target="${{ matrix.target }}" \
-            --sets="${{ matrix.sets }}" \
-            > results/research-v2/explicit-full100.json
+            --level=50 --runs=1000 --target=Lapras --bosses="Bruno 2" \
+            --sets="baseline=Hydro Pump/Ice Beam/Dragon Pulse/Body Slam;brine-for-hydro=Brine/Ice Beam/Dragon Pulse/Body Slam;surf-for-dragon=Hydro Pump/Ice Beam/Surf/Body Slam" \
+            > results/research-v2/lapras-bruno2-1000.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/explicit-full100.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/lapras-bruno2-1000.json','utf8'));
           console.log(JSON.stringify({
             assumptions:r.assumptions,
             rows:r.rows.map(x=>({
@@ -64,6 +56,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-${{ matrix.target }}-explicit-full100
-          path: hgss_story_sim/results/research-v2/explicit-full100.json
+          name: research-v2-Lapras-Bruno2-1000
+          path: hgss_story_sim/results/research-v2/lapras-bruno2-1000.json
           if-no-files-found: error
