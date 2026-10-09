@@ -1,5 +1,5 @@
 name: research-v2-moveset-shortlist-validate
-# trigger: corrected evaluator 100-run finalist validation
+# trigger: corrected evaluator 100-run finalist diagnostics
 
 on:
   push:
@@ -32,7 +32,7 @@ jobs:
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-shortlist-validate --level=50 --runs=100 \
-            --labels="no-eruption-control,eruption-fire-core,focus-punch-to-flamethrower,baseline-v1" \
+            --labels="no-eruption-control,eruption-fire-core" \
             > results/research-v2/moveset-build-v2-shortlist-validate.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -44,7 +44,10 @@ jobs:
             retry:x.actual.expectedRetryFailures,
             geometric:x.actual.geometricScore,
             mean:x.actual.meanWinRate,
-            moveUses:x.actual.targetUsage?.moveUsesByMove || {}
+            retryBounds95:x.actual.retryBounds95,
+            targetBuild:x.actual.targetBuild,
+            moveUses:x.actual.targetUsage?.moveUsesByMove || {},
+            bossRows:x.actual.bossRows
           })),null,2));
           NODE
       - uses: actions/upload-artifact@v4
