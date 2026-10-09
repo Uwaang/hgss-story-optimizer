@@ -1,5 +1,5 @@
 name: research-v2-moveset-explicit-validate
-# Alakazam + Lanturn + Lapras full-route 20-run shortlist validation
+# Lanturn + Lapras full-route 100-run finalist validation
 
 on:
   push:
@@ -16,14 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: Alakazam
-            sets: "baseline=Psychic/Focus Blast/Shadow Ball/Calm Mind;reflect-slot0=Reflect/Focus Blast/Shadow Ball/Calm Mind;psybeam-slot0=Psybeam/Focus Blast/Shadow Ball/Calm Mind;future-sight-slot0=Future Sight/Focus Blast/Shadow Ball/Calm Mind;recover-outlier=Disable/Recover/Psycho Cut/Hyper Beam"
           - target: Lanturn
-            sets: "baseline=Hydro Pump/Thunderbolt/Signal Beam/Thunder Wave;confuse-for-tbolt=Hydro Pump/Confuse Ray/Signal Beam/Thunder Wave;watergun-for-hydro=Water Gun/Thunderbolt/Signal Beam/Thunder Wave;waterfall-for-twave=Hydro Pump/Thunderbolt/Signal Beam/Waterfall;surf-for-tbolt=Hydro Pump/Surf/Signal Beam/Thunder Wave;calibration-best=Confuse Ray/Signal Beam/Hydro Pump/Whirlpool"
+            sets: "baseline=Hydro Pump/Thunderbolt/Signal Beam/Thunder Wave;watergun-for-hydro=Water Gun/Thunderbolt/Signal Beam/Thunder Wave;confuse-for-tbolt=Hydro Pump/Confuse Ray/Signal Beam/Thunder Wave"
           - target: Lapras
-            sets: "baseline=Hydro Pump/Ice Beam/Dragon Pulse/Body Slam;blizzard-for-hydro=Blizzard/Ice Beam/Dragon Pulse/Body Slam;brine-for-hydro=Brine/Ice Beam/Dragon Pulse/Body Slam;ice-shard-for-hydro=Ice Shard/Ice Beam/Dragon Pulse/Body Slam;surf-for-dragon=Hydro Pump/Ice Beam/Surf/Body Slam"
+            sets: "baseline=Hydro Pump/Ice Beam/Dragon Pulse/Body Slam;surf-for-dragon=Hydro Pump/Ice Beam/Surf/Body Slam;brine-for-hydro=Brine/Ice Beam/Dragon Pulse/Body Slam"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -38,16 +36,16 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Full-route 20-run explicit shortlist
+      - name: Full-route 100-run finalist validation
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=50 --runs=20 --target="${{ matrix.target }}" \
+            --level=50 --runs=100 --target="${{ matrix.target }}" \
             --sets="${{ matrix.sets }}" \
-            > results/research-v2/explicit-full20.json
+            > results/research-v2/explicit-full100.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/explicit-full20.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/explicit-full100.json','utf8'));
           console.log(JSON.stringify({
             assumptions:r.assumptions,
             rows:r.rows.map(x=>({
@@ -66,6 +64,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-${{ matrix.target }}-explicit-full20
-          path: hgss_story_sim/results/research-v2/explicit-full20.json
+          name: research-v2-${{ matrix.target }}-explicit-full100
+          path: hgss_story_sim/results/research-v2/explicit-full100.json
           if-no-files-found: error
