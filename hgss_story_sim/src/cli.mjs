@@ -11619,20 +11619,21 @@ function pearsonCorrelation(xs, ys) {
   return numerator / Math.sqrt(denomX * denomY);
 }
 
-function spearmanFromRankedRows(rows) {
+function spearmanFromRankedRows(rows, proxyField = 'proxy') {
   if (!Array.isArray(rows) || rows.length < 2) return null;
+  const proxyOf = row => row?.[proxyField] || {};
   const proxyCompare = (a, b) =>
-    Number(b.proxy.routeGeometric) - Number(a.proxy.routeGeometric) ||
-    Number(b.proxy.meanBoss) - Number(a.proxy.meanBoss) ||
-    Number(b.proxy.worstBoss) - Number(a.proxy.worstBoss);
+    Number(proxyOf(b).routeGeometric) - Number(proxyOf(a).routeGeometric) ||
+    Number(proxyOf(b).meanBoss) - Number(proxyOf(a).meanBoss) ||
+    Number(proxyOf(b).worstBoss) - Number(proxyOf(a).worstBoss);
   const actualCompare = (a, b) =>
     Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
     Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate);
   const proxyTieKey = row => [
-    Number(row.proxy.routeGeometric),
-    Number(row.proxy.meanBoss),
-    Number(row.proxy.worstBoss),
+    Number(proxyOf(row).routeGeometric),
+    Number(proxyOf(row).meanBoss),
+    Number(proxyOf(row).worstBoss),
   ].join('|');
   const actualTieKey = row => [
     Number(row.actual.expectedRetryFailures),
@@ -11753,6 +11754,16 @@ async function cmdMovesetBuildV2Probe() {
     },
   );
   if (!enumeration.rows.length) throw new Error('No Typhlosion movesets enumerated');
+  const staticRankByKey = new Map(
+    [...enumeration.rows]
+      .sort((a, b) =>
+        Number(b.staticProxy.routeGeometric) - Number(a.staticProxy.routeGeometric) ||
+        Number(b.staticProxy.meanBoss) - Number(a.staticProxy.meanBoss) ||
+        Number(b.staticProxy.worstBoss) - Number(a.staticProxy.worstBoss) ||
+        movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+      )
+      .map((row, index) => [movesetKey(row.moves), index + 1])
+  );
 
   const selected = new Set();
   for (let index = 0; index < Math.min(topCalibration, enumeration.rows.length); index += 1) {
@@ -11783,8 +11794,10 @@ async function cmdMovesetBuildV2Probe() {
     );
     calibration.push({
       proxyRank: index + 1,
+      staticProxyRank: staticRankByKey.get(movesetKey(row.moves)) ?? null,
       moves: row.moves,
       proxy: row.proxy,
+      staticProxy: row.staticProxy,
       isCurrentV1: movesetKey(row.moves) === currentKey,
       actual: {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
@@ -11843,13 +11856,16 @@ async function cmdMovesetBuildV2Probe() {
       evaluatedMovesets: enumeration.evaluatedMovesets,
       top10: enumeration.rows.slice(0, 10).map((row, index) => ({
         proxyRank: index + 1,
+        staticProxyRank: staticRankByKey.get(movesetKey(row.moves)) ?? null,
         moves: row.moves,
         proxy: row.proxy,
+        staticProxy: row.staticProxy,
       })),
     },
     calibration: {
       sampleCount: calibration.length,
-      proxyActualSpearman: spearmanFromRankedRows(calibration),
+      proxyActualSpearman: spearmanFromRankedRows(calibration, 'proxy'),
+      staticProxyActualSpearman: spearmanFromRankedRows(calibration, 'staticProxy'),
       rows: calibration,
       bestActualSample: bestActual,
       bestActualTies,
@@ -11939,6 +11955,19 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
   const proxyRankByKey = new Map(
     enumeration.rows.map((row, index) => [movesetKey(row.moves), index + 1])
   );
+  const staticProxyRankByKey = new Map(
+    [...enumeration.rows]
+      .sort((a, b) =>
+        Number(b.staticProxy.routeGeometric) - Number(a.staticProxy.routeGeometric) ||
+        Number(b.staticProxy.meanBoss) - Number(a.staticProxy.meanBoss) ||
+        Number(b.staticProxy.worstBoss) - Number(a.staticProxy.worstBoss) ||
+        movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+      )
+      .map((row, index) => [movesetKey(row.moves), index + 1])
+  );
+  const proxyByKey = new Map(
+    enumeration.rows.map(row => [movesetKey(row.moves), row.proxy])
+  );
   const core = ['Eruption', 'Focus Punch', 'Focus Blast'];
   for (const move of core) {
     if (!enumeration.legalPool.includes(move)) {
@@ -11972,6 +12001,8 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
       fourth: variant.fourth,
       moves: variant.moves,
       proxyRank: proxyRankByKey.get(movesetKey(variant.moves)) ?? null,
+      staticProxyRank: staticProxyRankByKey.get(movesetKey(variant.moves)) ?? null,
+      proxy: proxyByKey.get(movesetKey(variant.moves)) || null,
       isCurrentV1: movesetKey(variant.moves) === movesetKey(baselinePlan[targetKey]?.routeMoves || []),
       actual: {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
