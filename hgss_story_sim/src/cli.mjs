@@ -9415,6 +9415,106 @@ function equalLevelRouteMovesAtStage(
   return { ...mon, moves: selected };
 }
 
+function optimizeJointRouteBuildAndMoves(
+  samples,
+  candidate,
+  moveAccess,
+  singleUsePlan,
+  purchasablePlan,
+  { maxIterations = 4 } = {},
+) {
+  if (!samples.length) return null;
+  const key = candidateIdentity(candidate);
+  const assignedMachines = [
+    ...(singleUsePlan[key] || []),
+    ...(purchasablePlan[key] || []),
+  ];
+  const foeTeams = samples.map(sample => sample.foeTeam);
+  const last = samples[samples.length - 1];
+
+  let build = optimizePlayerRouteBuild(samples, { iv: 16 });
+  if (!build) return null;
+
+  let best = null;
+  let previousSignature = null;
+  const history = [];
+  const iterationCap = Math.max(1, Math.floor(Number(maxIterations || 1)));
+
+  for (let iteration = 1; iteration <= iterationCap; iteration += 1) {
+    const finalMon = applyPlayerRouteBuild(last.mon, build);
+    const routeMoves = optimizePlayerRouteMoves(
+      finalMon,
+      foeTeams,
+      {
+        stage: Number(last.boss.stage),
+        moveAccess,
+        extraMachines: assignedMachines,
+        originSpeciesName: candidate.species,
+        shortlistCap: 12,
+      },
+    );
+
+    const refinedSamples = samples.map(sample => {
+      let mon = applyPlayerRouteBuild(sample.mon, build);
+      mon = equalLevelRouteMovesAtStage(
+        mon,
+        candidate,
+        sample.boss,
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        routeMoves.moves,
+      );
+      return { mon, foeTeam: sample.foeTeam };
+    });
+
+    const refinedBuild = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
+    const signature = [
+      (routeMoves.moves || []).join('/'),
+      refinedBuild.evSpread || '',
+      refinedBuild.nature || '',
+      Number(refinedBuild.abilitySlot || 0),
+    ].join('|');
+    const jointProxyScore = Number(refinedBuild.proxyScore || 0);
+
+    history.push({
+      iteration,
+      moves: [...(routeMoves.moves || [])],
+      evSpread: refinedBuild.evSpread || null,
+      nature: refinedBuild.nature || null,
+      abilitySlot: Number(refinedBuild.abilitySlot || 0),
+      jointProxyScore,
+      routeMoveProxyScore: Number(routeMoves.proxyScore || 0),
+      converged: signature === previousSignature,
+    });
+
+    const candidateResult = {
+      build: refinedBuild,
+      routeMoves,
+      jointProxyScore,
+      signature,
+    };
+    if (
+      !best ||
+      jointProxyScore > best.jointProxyScore + 1e-12 ||
+      (Math.abs(jointProxyScore - best.jointProxyScore) <= 1e-12 &&
+        signature.localeCompare(best.signature) < 0)
+    ) {
+      best = candidateResult;
+    }
+
+    build = refinedBuild;
+    if (signature === previousSignature) break;
+    previousSignature = signature;
+  }
+
+  return {
+    ...(best || {}),
+    iterations: history,
+    converged: Boolean(history.at(-1)?.converged),
+  };
+}
+
 function buildRouteExpRouteBuildPlan(
   candidates,
   routeBosses,
@@ -9447,43 +9547,26 @@ function buildRouteExpRouteBuildPlan(
     }
     if (!samples.length) continue;
 
-    let build = optimizePlayerRouteBuild(samples, { iv: 16 });
-    const last = samples[samples.length - 1];
-    let finalMon = applyPlayerRouteBuild(last.mon, build);
-    const assignedMachines = [
-      ...(singleUsePlan[key] || []),
-      ...(purchasablePlan[key] || []),
-    ];
-    const routeMoves = optimizePlayerRouteMoves(
-      finalMon,
-      samples.map(sample => sample.foeTeam),
-      {
-        stage: Number(last.boss.stage),
-        moveAccess,
-        extraMachines: assignedMachines,
-        originSpeciesName: candidate.species,
-        shortlistCap: 12,
-      },
+    const joint = optimizeJointRouteBuildAndMoves(
+      samples,
+      candidate,
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      { maxIterations: 4 },
     );
+    if (!joint?.build || !joint?.routeMoves) continue;
 
-    const refinedSamples = samples.map(sample => {
-      let mon = applyPlayerRouteBuild(sample.mon, build);
-      mon = equalLevelRouteMovesAtStage(
-        mon,
-        candidate,
-        sample.boss,
-        moveAccess,
-        singleUsePlan,
-        purchasablePlan,
-        routeMoves.moves,
-      );
-      return { mon, foeTeam: sample.foeTeam };
-    });
-    build = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
     plan[key] = {
-      ...build,
-      routeMoves: routeMoves.moves,
-      routeMoveOptimization: routeMoves,
+      ...joint.build,
+      routeMoves: joint.routeMoves.moves,
+      routeMoveOptimization: joint.routeMoves,
+      jointOptimization: {
+        mode: 'alternating-route-build-moves-v1',
+        maxIterations: 4,
+        converged: joint.converged,
+        iterations: joint.iterations,
+      },
     };
   }
   return plan;
@@ -9515,43 +9598,26 @@ function buildEqualLevelRouteBuildPlan(
     }
     if (!samples.length) continue;
 
-    let build = optimizePlayerRouteBuild(samples, { iv: 16 });
-    const last = samples[samples.length - 1];
-    let finalMon = applyPlayerRouteBuild(last.mon, build);
-    const assignedMachines = [
-      ...(singleUsePlan[key] || []),
-      ...(purchasablePlan[key] || []),
-    ];
-    const routeMoves = optimizePlayerRouteMoves(
-      finalMon,
-      samples.map(sample => sample.foeTeam),
-      {
-        stage: Number(last.boss.stage),
-        moveAccess,
-        extraMachines: assignedMachines,
-        originSpeciesName: candidate.species,
-        shortlistCap: 12,
-      },
+    const joint = optimizeJointRouteBuildAndMoves(
+      samples,
+      candidate,
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      { maxIterations: 4 },
     );
+    if (!joint?.build || !joint?.routeMoves) continue;
 
-    const refinedSamples = samples.map(sample => {
-      let mon = applyPlayerRouteBuild(sample.mon, build);
-      mon = equalLevelRouteMovesAtStage(
-        mon,
-        candidate,
-        sample.boss,
-        moveAccess,
-        singleUsePlan,
-        purchasablePlan,
-        routeMoves.moves,
-      );
-      return { mon, foeTeam: sample.foeTeam };
-    });
-    build = optimizePlayerRouteBuild(refinedSamples, { iv: 16 }) || build;
     plan[key] = {
-      ...build,
-      routeMoves: routeMoves.moves,
-      routeMoveOptimization: routeMoves,
+      ...joint.build,
+      routeMoves: joint.routeMoves.moves,
+      routeMoveOptimization: joint.routeMoves,
+      jointOptimization: {
+        mode: 'alternating-route-build-moves-v1',
+        maxIterations: 4,
+        converged: joint.converged,
+        iterations: joint.iterations,
+      },
     };
   }
   return plan;
