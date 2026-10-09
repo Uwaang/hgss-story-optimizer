@@ -10002,7 +10002,11 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
       runs,
       7100001 + Number(commonLevel) * 100000 + Number(boss.stage) * 1000 +
         stableBattleIndex + Number(options.seedOffset || 0),
-      { p2Trainer: boss, p1AiMode: 'smart' },
+      {
+        p2Trainer: boss,
+        p1AiMode: 'smart',
+        p1SmartTrace: Boolean(options.p1SmartTrace),
+      },
     );
     weightedWins += Number(result.wins || 0);
     weightedRuns += Number(result.runs || runs);
@@ -12462,6 +12466,8 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
       moveAccess,
       {
         seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
+        p1SmartTrace: traceMoves,
         routeMovesOverrideByCandidate: {
           [targetKey]: {
             moves: candidate.moves,
@@ -12540,6 +12546,8 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
       strictRemovedMoveExclusion: true,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
+      traceMoves,
       fixedActiveCore: ['Eruption', 'Flamethrower', 'Ember'],
       controlFourth: 'Lava Plume',
       note: 'Tests whether exposing one additional move changes actual smart-policy route outcomes; no move-specific scoring coefficients are introduced.',
