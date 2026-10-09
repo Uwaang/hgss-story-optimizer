@@ -6425,6 +6425,13 @@ async function cmdExpSchedulerV1ActivationScan() {
     0.01,
     Math.min(1, Number(arg('route-grind-proxy-target', '0.5'))),
   );
+  const activationLabels = String(arg('activation-labels', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const requestedActivationLabels = activationLabels.length
+    ? new Set(activationLabels)
+    : null;
 
   const story = await loadStory();
   const [pool, moveAccess, baseExpContext] = await Promise.all([
@@ -6522,13 +6529,24 @@ async function cmdExpSchedulerV1ActivationScan() {
   }
 
   const rows = [];
-  rows.push(await evaluate('always-active', null, {}));
+  if (!requestedActivationLabels || requestedActivationLabels.has('always-active')) {
+    rows.push(await evaluate('always-active', null, {}));
+  }
   for (let activationIndex = firstEligibleIndex; activationIndex < routeBosses.length; activationIndex += 1) {
+    const label = 'activate-' + routeBosses[activationIndex].label;
+    if (requestedActivationLabels && !requestedActivationLabels.has(label)) continue;
     rows.push(await evaluate(
-      'activate-' + routeBosses[activationIndex].label,
+      label,
       activationIndex,
       recipientPolicyUntil(activationIndex),
     ));
+  }
+  if (requestedActivationLabels) {
+    const found = new Set(rows.map(row => row.label));
+    const missing = activationLabels.filter(label => !found.has(label));
+    if (missing.length) {
+      throw new Error('Unknown activation label(s): ' + missing.join(', '));
+    }
   }
 
   function finiteGrind(row) {
@@ -6582,6 +6600,7 @@ async function cmdExpSchedulerV1ActivationScan() {
       entryLevelPolicy: baseExpContext.entryLevelPolicy,
       sameStageJoinPolicy: baseExpContext.sameStageJoinPolicy,
       routeGrindProxyTarget,
+      activationLabels: activationLabels.length ? activationLabels : 'all',
       searchState: 'single target activation checkpoint; acquired target may remain benched from EXP receipt until activation',
     },
     firstEligibleIndex,
