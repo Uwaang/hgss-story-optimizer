@@ -1,0 +1,60 @@
+name: research-v2-moveset-policy-trace
+
+on:
+  push:
+    branches:
+      - research/v2-moveset-calibration-v1
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    if: contains(github.event.head_commit.message, '[research-v2-policy-trace]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Priority correctness smoke
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { smartMoveActsBeforeNeutralPriority } from './src/battle.mjs';
+          assert.equal(smartMoveActsBeforeNeutralPriority('Focus Punch', 999, 1), false);
+          assert.equal(smartMoveActsBeforeNeutralPriority('Quick Attack', 1, 999), true);
+          NODE
+      - name: Targeted policy decision trace
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs moveset-build-v2-policy-intrusion \
+            --level=50 --runs=10 --trace=true \
+            --bosses="Misty,Karen 2,Will 2,Lance" \
+            > results/research-v2/moveset-build-v2-policy-trace.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/moveset-build-v2-policy-trace.json','utf8'));
+          console.log(JSON.stringify(r.rows.map(x=>({
+            label:x.label,
+            retry:x.actual.expectedRetryFailures,
+            geometric:x.actual.geometricScore,
+            mean:x.actual.meanWinRate,
+            bosses:x.actual.bossRows.map(b=>({
+              boss:b.boss,
+              winRate:b.winRate,
+              moveUses:b.targetMoveUses,
+              trace:b.targetDecisionTrace
+            }))
+          })),null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-moveset-policy-trace
+          path: hgss_story_sim/results/research-v2/moveset-build-v2-policy-trace.json
+          if-no-files-found: error
