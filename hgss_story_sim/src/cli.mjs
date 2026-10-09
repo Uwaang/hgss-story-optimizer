@@ -11651,8 +11651,12 @@ async function cmdEvolutionLegalitySmoke() {
       throw new Error(`${name} move-known evolution level expected ${expectedLevel}, got ${row.level}`);
     }
   }
-  if (pool.candidates.some(candidate => candidate.terminalSpecies === 'Mamoswine')) {
-    throw new Error('Mamoswine must remain unresolved until relearner + post-condition level-up timing is modeled');
+  const unexpectedMamoswine = pool.candidates.filter(candidate => candidate.terminalSpecies === 'Mamoswine');
+  if (unexpectedMamoswine.length) {
+    throw new Error(
+      'Mamoswine must remain unresolved until relearner + post-condition level-up timing is modeled: ' +
+      JSON.stringify(unexpectedMamoswine)
+    );
   }
 
   if (Number(crobatFriendship.level) !== 23) {
