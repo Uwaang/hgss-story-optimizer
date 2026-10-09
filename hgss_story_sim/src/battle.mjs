@@ -2005,18 +2005,19 @@ export function smartMoveKoProbability(active, target, requestedMove) {
   return damageOnHit >= targetHp ? hitProbability : 0;
 }
 
-function smartMoveScore(active, target, requestedMove) {
+function smartMoveScore(active, target, requestedMove, context = {}) {
   const move = dex.moves.get(requestedMove?.move);
   if (!move.exists || requestedMove?.disabled) return -Infinity;
   if (move.category === 'Status') return smartStatusMoveScore(active, target, requestedMove);
-  const damage = estimateBattleDamage(active, target, requestedMove);
+  const executionProbability = conditionalMoveExecutionProbability(active, target, move.id, context);
+  const damage = estimateBattleDamage(active, target, requestedMove) * executionProbability;
   const targetHp = Math.max(1, Number(target?.hp || target?.maxhp || 1));
   const targetMaxHp = Math.max(1, Number(target?.maxhp || targetHp));
   const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
   const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
   const priority = Number(move.priority || 0);
   const actsFirst = smartMoveActsBeforeNeutralPriority(move.id, activeSpeed, targetSpeed);
-  const koProbability = smartMoveKoProbability(active, target, requestedMove);
+  const koProbability = smartMoveKoProbability(active, target, requestedMove) * executionProbability;
   let score = 100 * damage / targetMaxHp;
   if (koProbability > 0) score += (actsFirst ? 420 : 220) * koProbability;
   if (priority > 0 && targetHp <= damage * 1.2) score += 45;
@@ -2277,7 +2278,12 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
           idx,
           move,
           score: active && foeActive
-            ? (playerMode === 'smart' ? smartMoveScore(active, foeActive, move) : scoreMove(active, foeActive, move))
+            ? (playerMode === 'smart'
+                ? smartMoveScore(active, foeActive, move, {
+                    battle,
+                    opponentProfile: aiOptions?.opponentProfile || null,
+                  })
+                : scoreMove(active, foeActive, move))
             : 1,
         }))
         .filter(entry => !entry.move.disabled);
@@ -2305,6 +2311,12 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
               koProbability: active && foeActive
                 ? Number(smartMoveKoProbability(active, foeActive, entry.move))
                 : 0,
+              executionProbability: active && foeActive
+                ? Number(conditionalMoveExecutionProbability(active, foeActive, move?.id || '', {
+                    battle,
+                    opponentProfile: aiOptions?.opponentProfile || null,
+                  }))
+                : 1,
               priority: Number(move?.priority || 0),
               accuracy: typeof move?.accuracy === 'number' ? Number(move.accuracy) : true,
             };
@@ -2418,7 +2430,11 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     battleStream,
     'p1',
     p1Stats,
-    { mode: p1Mode, traceMoves: Boolean(options.p1SmartTrace) },
+    {
+      mode: p1Mode,
+      traceMoves: Boolean(options.p1SmartTrace),
+      opponentProfile: p2Profile,
+    },
   ).catch(() => undefined);
   const p2Task = runGreedyAi(
     streams.p2,
