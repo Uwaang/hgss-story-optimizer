@@ -12625,6 +12625,20 @@ async function cmdMovesetBuildV2JointValidate() {
       label: 'leaveout-' + species,
       appliedSpecies: changedSpecies.filter(value => value !== species),
     })),
+    ...(includeTyranitar
+      ? [
+          {
+            label: 'final-no-rhyperior',
+            appliedSpecies: changedSpecies.filter(species => species !== 'Rhyperior'),
+          },
+          {
+            label: 'final-no-rhyperior-no-tyranitar',
+            appliedSpecies: changedSpecies.filter(
+              species => species !== 'Rhyperior' && species !== 'Tyranitar'
+            ),
+          },
+        ]
+      : []),
   ];
   const requested = selectedLabels.length ? new Set(selectedLabels) : null;
   const scenarios = requested
