@@ -5559,6 +5559,8 @@ async function cmdRouteExpPracticalGrind() {
           redGrindExp: Number(redLedger?.grindExpBefore || 0),
           redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
           finalLevels: finalEvaluation.finalLevels,
+          playerBuilds: red?.playerBuilds || {},
+          routeBuildPlan: finalEvaluation.routeBuildPlan || {},
           plan: redPlan,
         });
       }
@@ -5584,6 +5586,7 @@ async function cmdRouteExpPracticalGrind() {
       } : null,
       decisions: [],
       checkpoints: practicalGrindCheckpoints(storyEvaluation),
+      routeBuildPlan: storyEvaluation.routeBuildPlan || {},
       redFrontier,
       reusedStoryPlan: true,
     });
@@ -5676,6 +5679,8 @@ async function cmdRouteExpPracticalGrind() {
           redGrindExp: Number(redLedger?.grindExpBefore || 0),
           redBestWildExpPerBattle: Number(redLedger?.bestWildGrind?.expectedExpPerBattle || 0),
           finalLevels: finalEvaluation.finalLevels,
+          playerBuilds: red?.playerBuilds || {},
+          routeBuildPlan: finalEvaluation.routeBuildPlan || {},
           plan: redPlan,
         });
       }
@@ -5708,6 +5713,7 @@ async function cmdRouteExpPracticalGrind() {
       } : null,
       decisions,
       checkpoints: practicalGrindCheckpoints(storyEvaluation),
+      routeBuildPlan: storyEvaluation.routeBuildPlan || {},
       redFrontier,
     });
   }
