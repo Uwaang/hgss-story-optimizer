@@ -1,6 +1,7 @@
 name: research-v2-moveset-neighborhood-screen
 # strict counterfactual fallback exclusion enabled
 # structured override cache normalization enabled
+# strict ban propagated through actual battle materialization
 
 on:
   push:
