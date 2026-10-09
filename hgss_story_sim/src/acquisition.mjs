@@ -450,6 +450,36 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
       reason: `trade holding ${evo.param}`,
     };
   }
+  if (new Set(['EVO_STONE', 'EVO_STONE_MALE', 'EVO_STONE_FEMALE']).has(evo.method)) {
+    const access = itemAccess.get(String(evo.param));
+    if (!access || !Number.isFinite(Number(access.availableFrom))) return null;
+    const acquisitionCheckpoint = evolutionCheckpointIndex(bosses, { availableFrom });
+    const checkpointIndex = Math.max(
+      Number(acquisitionCheckpoint),
+      Number(access.checkpointIndex),
+    );
+    const condition = evo.method === 'EVO_STONE_MALE'
+      ? 'male'
+      : evo.method === 'EVO_STONE_FEMALE'
+        ? 'female'
+        : null;
+    return {
+      order,
+      stage: Math.max(Number(availableFrom || 0), Number(access.availableFrom)),
+      checkpointIndex,
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'stone-evolution',
+      evolutionMethod: evo.method,
+      evolutionCondition: condition,
+      requiredItem: String(evo.param),
+      itemRepeatable: Boolean(access.repeatable),
+      itemSource: access.source || null,
+      reason: condition
+        ? `${condition} + use ${evo.param}`
+        : `use ${evo.param}`,
+    };
+  }
   return null;
 }
 
@@ -474,7 +504,15 @@ function buildTradeAwareEvolutionPaths(
     // evolution is auto-followed.
     if (levelEvos.length === 1) edges.push(levelEvos[0]);
     for (const evo of all) {
-      if (evo.method === 'EVO_TRADE' || evo.method === 'EVO_TRADE_ITEM') edges.push(evo);
+      if (
+        evo.method === 'EVO_TRADE' ||
+        evo.method === 'EVO_TRADE_ITEM' ||
+        evo.method === 'EVO_STONE' ||
+        evo.method === 'EVO_STONE_MALE' ||
+        evo.method === 'EVO_STONE_FEMALE'
+      ) {
+        edges.push(evo);
+      }
     }
 
     const usable = edges
