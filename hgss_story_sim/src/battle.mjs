@@ -20,6 +20,8 @@ const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
   ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
   : null;
 const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v2');
+const SMART_DYNAMIC_HP_POWER = String(process.env.HGSS_SMART_DYNAMIC_HP_POWER || '1') !== '0';
+const SMART_REQUEST_AWARE_SWITCH = String(process.env.HGSS_SMART_REQUEST_AWARE_SWITCH || '1') !== '0';
 let battleCacheLoaded = false;
 let battleCacheDirty = 0;
 let battleCache = new Map();
@@ -1538,7 +1540,7 @@ function scoreMove(active, target, requestedMove) {
 export function battleMovePowerForState(moveName, hp, maxhp) {
   const move = dex.moves.get(moveName);
   if (!move.exists) return 0;
-  if (move.id === 'eruption' || move.id === 'waterspout') {
+  if (SMART_DYNAMIC_HP_POWER && (move.id === 'eruption' || move.id === 'waterspout')) {
     const currentHp = Math.max(0, Number(hp || 0));
     const maximumHp = Math.max(1, Number(maxhp || 1));
     return Math.max(1, Math.floor(150 * currentHp / maximumHp));
@@ -1709,12 +1711,16 @@ function bestSmartVoluntarySwitch(request, side, foeActive, active, activeReques
   if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
   // activeRequest reflects Choice lock and other disabled-move state.
   // The full moveSlots list does not.
-  const currentDamage = bestExpectedDamageFromRequest(active, foeActive, activeRequest);
+  const currentDamage = SMART_REQUEST_AWARE_SWITCH
+    ? bestExpectedDamageFromRequest(active, foeActive, activeRequest)
+    : bestExpectedDamage(active, foeActive);
   const currentIncoming = bestExpectedDamage(foeActive, active);
   const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
   const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
   if (currentDamage >= Number(foeActive.hp || 1) && currentSpeed >= foeSpeed) return null;
-  const currentUtility = smartMatchupUtilityFromRequest(active, foeActive, activeRequest);
+  const currentUtility = SMART_REQUEST_AWARE_SWITCH
+    ? smartMatchupUtilityFromRequest(active, foeActive, activeRequest)
+    : smartMatchupUtility(active, foeActive);
   let best = null;
   for (let idx = 0; idx < side.pokemon.length; idx += 1) {
     const mon = side.pokemon[idx];
