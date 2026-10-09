@@ -6417,6 +6417,183 @@ async function cmdExpSchedulerV1Smoke() {
 }
 
 
+
+async function cmdExpSchedulerV1ActivationScan() {
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const targetName = String(arg('target', 'Quagsire')).trim();
+  const routeGrindProxyTarget = Math.max(
+    0.01,
+    Math.min(1, Number(arg('route-grind-proxy-target', '0.5'))),
+  );
+
+  const story = await loadStory();
+  const [pool, moveAccess, baseExpContext] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'max',
+      'map-order',
+      'boss-aware-soft',
+    ),
+  ]);
+
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+    canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+    canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+  ];
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Scheduler-v1 activation-scan control team violates constraints');
+  }
+
+  const target = team.find(candidate =>
+    String(candidate.species).toLowerCase() === targetName.toLowerCase() ||
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetName.toLowerCase()
+  );
+  if (!target) throw new Error('Scheduler-v1 activation target not found: ' + targetName);
+
+  const targetKey = candidateIdentity(target);
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const allKeys = team.map(candidateIdentity);
+  const withoutTarget = allKeys.filter(key => key !== targetKey);
+  const firstEligibleIndex = routeBosses.findIndex(
+    boss => Number(boss.stage) >= Number(target.availableFrom || 0)
+  );
+  if (firstEligibleIndex < 0) {
+    throw new Error('Scheduler-v1 activation target never becomes available on route');
+  }
+
+  function recipientPolicyUntil(activationIndex) {
+    return Object.fromEntries(
+      routeBosses.slice(0, activationIndex).map((_boss, battleIndex) => [
+        String(battleIndex),
+        withoutTarget,
+      ])
+    );
+  }
+
+  async function evaluate(label, activationIndex, recipientPolicy) {
+    const evaluation = await evaluateCandidatesWithMoveAccess(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      {
+        ...baseExpContext,
+        recipientPolicy,
+      },
+      'none',
+      {
+        p1AiMode: 'smart',
+        routeBuildOptimization: true,
+        routeGrindProxy: true,
+        routeGrindProxyTarget,
+      },
+    );
+    const activationBattle = Number.isInteger(activationIndex)
+      ? evaluation.expSchedule?.battles?.[activationIndex] || null
+      : null;
+    return {
+      label,
+      activationIndex,
+      activationBoss: activationBattle?.label || label,
+      activationStage: activationBattle?.stage ?? null,
+      expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+      geometricScore: routeRiskGeometricScore(evaluation),
+      meanWinRate: routeRiskMeanWinRate(evaluation),
+      battleProgressScore: routeRiskBattleProgressScore(evaluation),
+      grindProxyBattles: evaluationRouteGrindProxy(evaluation),
+      grindProxyUnknown: evaluationRouteGrindProxyUnknown(evaluation),
+      grindProxyExp: Number(evaluation.routeGrindProxy?.cumulativeGrindExp || 0),
+      finalLevels: evaluation.finalLevels,
+      targetFinalLevel: evaluation.expSchedule?.finalLevels?.[targetKey] ?? null,
+      targetUsage: evaluation.memberUsage?.[targetKey] || null,
+      targetRouteExpAtActivation: activationBattle
+        ? Number(activationBattle.routeAllocatedExpBefore?.[targetKey] || 0)
+        : null,
+    };
+  }
+
+  const rows = [];
+  rows.push(await evaluate('always-active', null, {}));
+  for (let activationIndex = firstEligibleIndex; activationIndex < routeBosses.length; activationIndex += 1) {
+    rows.push(await evaluate(
+      'activate-' + routeBosses[activationIndex].label,
+      activationIndex,
+      recipientPolicyUntil(activationIndex),
+    ));
+  }
+
+  function finiteGrind(row) {
+    return Number.isFinite(Number(row.grindProxyBattles))
+      ? Number(row.grindProxyBattles)
+      : Number.POSITIVE_INFINITY;
+  }
+
+  function dominates(a, b) {
+    const noWorse =
+      Number(a.expectedRetryFailures) <= Number(b.expectedRetryFailures) &&
+      finiteGrind(a) <= finiteGrind(b) &&
+      Number(a.geometricScore) >= Number(b.geometricScore);
+    const strict =
+      Number(a.expectedRetryFailures) < Number(b.expectedRetryFailures) ||
+      finiteGrind(a) < finiteGrind(b) ||
+      Number(a.geometricScore) > Number(b.geometricScore);
+    return noWorse && strict;
+  }
+
+  const pareto = rows
+    .filter((row, index) =>
+      !rows.some((other, otherIndex) => index !== otherIndex && dominates(other, row))
+    )
+    .sort((a, b) =>
+      finiteGrind(a) - finiteGrind(b) ||
+      Number(a.expectedRetryFailures) - Number(b.expectedRetryFailures) ||
+      Number(b.geometricScore) - Number(a.geometricScore) ||
+      String(a.label).localeCompare(String(b.label))
+    );
+
+  const ranked = [...rows].sort((a, b) =>
+    finiteGrind(a) - finiteGrind(b) ||
+    Number(a.expectedRetryFailures) - Number(b.expectedRetryFailures) ||
+    Number(b.geometricScore) - Number(a.geometricScore) ||
+    String(a.label).localeCompare(String(b.label))
+  );
+
+  await flushBattleCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 fixed-team single-member activation-checkpoint screen',
+    assumptions: {
+      version: 'HEARTGOLD',
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      target: target.terminalSpecies || target.species,
+      targetKey,
+      runsPerBoss: runs,
+      expProfile: baseExpContext.profile,
+      expAllocator: baseExpContext.expAllocator,
+      entryLevelPolicy: baseExpContext.entryLevelPolicy,
+      sameStageJoinPolicy: baseExpContext.sameStageJoinPolicy,
+      routeGrindProxyTarget,
+      searchState: 'single target activation checkpoint; acquired target may remain benched from EXP receipt until activation',
+    },
+    firstEligibleIndex,
+    firstEligibleBoss: routeBosses[firstEligibleIndex]?.label || null,
+    pareto,
+    top10: ranked.slice(0, 10),
+    allRows: rows,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdExpAllocatorSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -13844,6 +14021,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
+  'exp-scheduler-v1-activation-scan': cmdExpSchedulerV1ActivationScan,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'team-order-smoke': cmdTeamOrderSmoke,
   'objective-smoke': cmdObjectiveSmoke,
