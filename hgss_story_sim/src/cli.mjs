@@ -12299,6 +12299,11 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
 async function cmdMovesetBuildV2ShortlistValidate() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const traceMoves = String(arg('trace', 'false')).toLowerCase() === 'true';
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
@@ -12367,6 +12372,8 @@ async function cmdMovesetBuildV2ShortlistValidate() {
       moveAccess,
       {
         seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
+        p1SmartTrace: traceMoves,
         routeMovesOverrideByCandidate: {
           [targetKey]: {
             moves: candidate.moves,
