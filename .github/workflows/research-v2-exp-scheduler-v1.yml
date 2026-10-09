@@ -1,0 +1,38 @@
+name: research-v2-exp-scheduler-v1
+# SCRUM-417 progression-state EXP scheduler v1 validation
+
+on:
+  push:
+    branches:
+      - research/v2-exp-scheduler-v1
+
+permissions:
+  contents: read
+
+jobs:
+  recipient-state-smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Existing EXP regressions
+        run: |
+          node src/cli.mjs exp-segment-smoke
+          node src/cli.mjs exp-allocator-smoke
+      - name: Scheduler v1 recipient-state smoke
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs exp-scheduler-v1-smoke | tee results/research-v2/exp-scheduler-v1-smoke.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-exp-scheduler-v1-smoke
+          path: hgss_story_sim/results/research-v2/exp-scheduler-v1-smoke.json
+          if-no-files-found: error
