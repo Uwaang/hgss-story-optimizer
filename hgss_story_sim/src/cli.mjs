@@ -9523,6 +9523,7 @@ function equalLevelRouteMovesAtStage(
   singleUsePlan,
   purchasablePlan,
   routeMoves,
+  bannedMoves = [],
 ) {
   const key = candidateIdentity(candidate);
   const assignedMachines = [
@@ -9537,13 +9538,16 @@ function equalLevelRouteMovesAtStage(
     assignedMachines,
     candidate.species,
   ));
+  const banned = new Set(bannedMoves || []);
   const selected = [];
   for (const move of routeMoves || []) {
+    if (banned.has(move)) continue;
     if (legal.has(move) && !selected.includes(move)) selected.push(move);
     if (selected.length >= 4) break;
   }
   for (const move of mon.moves || []) {
     if (selected.length >= 4) break;
+    if (banned.has(move)) continue;
     if (legal.has(move) && !selected.includes(move)) selected.push(move);
   }
   if (!selected.length) selected.push('Tackle');
@@ -9614,6 +9618,7 @@ function buildRouteExpRouteBuildPlan(
         singleUsePlan,
         purchasablePlan,
         routeMoves.moves,
+        routeMoves.bannedMoves || [],
       );
       return { mon, foeTeam: sample.foeTeam };
     });
@@ -9661,10 +9666,17 @@ function buildEqualLevelRouteBuildPlan(
       ...(singleUsePlan[key] || []),
       ...(purchasablePlan[key] || []),
     ];
-    const overrideMoves = routeMovesOverrideByCandidate?.[key];
+    const overrideValue = routeMovesOverrideByCandidate?.[key];
+    const overrideMoves = Array.isArray(overrideValue)
+      ? overrideValue
+      : overrideValue?.moves;
+    const overrideBannedMoves = Array.isArray(overrideValue?.bannedMoves)
+      ? [...new Set(overrideValue.bannedMoves)]
+      : [];
     const routeMoves = Array.isArray(overrideMoves) && overrideMoves.length
       ? {
           moves: [...new Set(overrideMoves)].slice(0, 4),
+          bannedMoves: overrideBannedMoves,
           source: 'moveset-v2-override',
           legalMoveCount: null,
           evaluatedMovesets: null,
@@ -9692,6 +9704,7 @@ function buildEqualLevelRouteBuildPlan(
         singleUsePlan,
         purchasablePlan,
         routeMoves.moves,
+        routeMoves.bannedMoves || [],
       );
       return { mon, foeTeam: sample.foeTeam };
     });
@@ -12174,7 +12187,12 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
       {
         seedOffset: 0,
         routeMovesOverrideByCandidate: {
-          [targetKey]: candidate.moves,
+          [targetKey]: candidate.isBaseline
+            ? candidate.moves
+            : {
+                moves: candidate.moves,
+                bannedMoves: [candidate.replacedMove],
+              },
         },
       },
     );
