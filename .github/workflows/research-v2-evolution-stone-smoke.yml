@@ -1,0 +1,27 @@
+name: research-v2-evolution-stone-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-evolution-stone-v1
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evolution legality smoke
+        run: node src/cli.mjs evolution-legality-smoke
+      - name: Evolution checkpoint smoke
+        run: node src/cli.mjs evolution-checkpoint-smoke
