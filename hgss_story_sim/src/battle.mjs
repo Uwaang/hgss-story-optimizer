@@ -1387,12 +1387,53 @@ function routeMovesetStaticProxyV2(mon, moves, foeTeams) {
   };
 }
 
-function routeMovesetProxyV2(mon, moves, foeTeams) {
+function routeMovesetProxyDamageEntry(mon, foe, moveName, maxHp, damageCache) {
+  let foeCache = damageCache.get(foe);
+  if (!foeCache) {
+    foeCache = new Map();
+    damageCache.set(foe, foeCache);
+  }
+  if (foeCache.has(moveName)) return foeCache.get(moveName);
+
+  const move = dex.moves.get(moveName);
+  if (!move.exists || move.category === 'Status') {
+    const entry = { dynamic: false, staticDamage: 0, hpDamage: null };
+    foeCache.set(moveName, entry);
+    return entry;
+  }
+
+  const dynamic = move.id === 'eruption' || move.id === 'waterspout';
+  if (!dynamic) {
+    const entry = {
+      dynamic: false,
+      staticDamage: previewMoveDamage({ ...mon, moves: [moveName] }, foe, moveName),
+      hpDamage: null,
+    };
+    foeCache.set(moveName, entry);
+    return entry;
+  }
+
+  const hpDamage = new Float64Array(maxHp + 1);
+  for (let hp = 1; hp <= maxHp; hp += 1) {
+    hpDamage[hp] = previewMoveDamage(
+      { ...mon, moves: [moveName] },
+      foe,
+      moveName,
+      { hp, maxhp: maxHp },
+    );
+  }
+  const entry = { dynamic: true, staticDamage: 0, hpDamage };
+  foeCache.set(moveName, entry);
+  return entry;
+}
+
+function routeMovesetProxyV2(mon, moves, foeTeams, damageCache = new WeakMap()) {
   // Smart battle policy evaluates Eruption/Water Spout from current HP. The old
   // route proxy scored only one static attacker state, so a lower-power backup
   // such as Flamethrower looked redundant even when it becomes the selected
-  // action after HP loss. Enumerate every integer own-HP state instead. This is
-  // a finite state-space average, not a tuned probability distribution.
+  // action after HP loss. Evaluate every integer own-HP state. Damage tables are
+  // cached per foe/move so enumerating thousands of sets does not recompute the
+  // same state transition.
   const maxHp = Math.max(1, Math.floor(previewStat(mon, 'hp')));
   const activeStateShareByMove = Object.fromEntries(moves.map(move => [move, 0]));
   const marginalCoverageByMove = Object.fromEntries(moves.map(move => [move, 0]));
@@ -1403,29 +1444,23 @@ function routeMovesetProxyV2(mon, moves, foeTeams) {
     const foeScores = [];
     for (const foe of foes || []) {
       const foeHp = Math.max(1, previewStat(foe, 'hp'));
+      const moveRows = moves.map((moveName, index) => ({
+        moveName,
+        index,
+        ...routeMovesetProxyDamageEntry(mon, foe, moveName, maxHp, damageCache),
+      }));
+      const hasDynamic = moveRows.some(row => row.dynamic);
       let stateCoverageSum = 0;
 
-      for (let hp = 1; hp <= maxHp; hp += 1) {
-        const damages = moves.map((moveName, index) => {
-          const move = dex.moves.get(moveName);
-          const damage = (!move.exists || move.category === 'Status')
-            ? 0
-            : previewMoveDamage(
-                { ...mon, moves },
-                foe,
-                moveName,
-                { hp, maxhp: maxHp },
-              );
-          return { moveName, index, damage };
-        });
+      const accumulateState = (damages, repetitions = 1) => {
         let bestDamage = 0;
         for (const row of damages) bestDamage = Math.max(bestDamage, row.damage);
-        stateCoverageSum += bestDamage / foeHp;
-        stateCount += 1;
+        stateCoverageSum += (bestDamage / foeHp) * repetitions;
+        stateCount += repetitions;
+        if (bestDamage <= 0) return;
 
-        if (bestDamage <= 0) continue;
         const winners = damages.filter(row => Math.abs(row.damage - bestDamage) <= 1e-12);
-        const winnerShare = 1 / winners.length;
+        const winnerShare = repetitions / winners.length;
         for (const winner of winners) {
           activeStateShareByMove[winner.moveName] += winnerShare;
           let bestWithout = 0;
@@ -1435,6 +1470,25 @@ function routeMovesetProxyV2(mon, moves, foeTeams) {
           }
           marginalCoverageByMove[winner.moveName] +=
             Math.max(0, bestDamage - bestWithout) / foeHp * winnerShare;
+        }
+      };
+
+      if (!hasDynamic) {
+        accumulateState(
+          moveRows.map(row => ({
+            moveName: row.moveName,
+            index: row.index,
+            damage: row.staticDamage,
+          })),
+          maxHp,
+        );
+      } else {
+        for (let hp = 1; hp <= maxHp; hp += 1) {
+          accumulateState(moveRows.map(row => ({
+            moveName: row.moveName,
+            index: row.index,
+            damage: row.dynamic ? row.hpDamage[hp] : row.staticDamage,
+          })));
         }
       }
 
@@ -1534,9 +1588,10 @@ export function enumeratePlayerRouteMovesetsV2(
   const sets = candidateMoves.length <= 4
     ? [candidateMoves.slice()]
     : routeMoveCombinations(candidateMoves, 4);
+  const actionProxyDamageCache = new WeakMap();
   const rows = sets.map(moves => ({
     moves,
-    proxy: routeMovesetProxyV2(mon, moves, foeTeams),
+    proxy: routeMovesetProxyV2(mon, moves, foeTeams, actionProxyDamageCache),
     staticProxy: routeMovesetStaticProxyV2(mon, moves, foeTeams),
   }));
   rows.sort((a, b) =>
