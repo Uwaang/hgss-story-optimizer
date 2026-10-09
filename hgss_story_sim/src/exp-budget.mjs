@@ -1112,6 +1112,7 @@ export function buildTeamExpSchedule({
   breakpointLevelLookahead = 12,
   breakpointDiscount = 0.72,
   activationTargets = [],
+  recipientPolicy = {},
 }) {
   if (!['major', 'normal-route', 'all-accessible'].includes(profile)) {
     throw new Error(`Unknown EXP profile: ${profile}`);
@@ -1168,7 +1169,30 @@ export function buildTeamExpSchedule({
     return { key, level };
   });
 
+  const normalizedRecipientPolicy = Object.fromEntries(
+    Object.entries(recipientPolicy || {}).map(([checkpoint, keys]) => {
+      if (!Array.isArray(keys)) {
+        throw new Error(
+          `EXP recipient policy for ${checkpoint} must be an array of candidate keys`
+        );
+      }
+      return [
+        String(checkpoint),
+        [...new Set(keys.map(key => String(key).trim()).filter(Boolean))],
+      ];
+    })
+  );
+
   const pending = candidates.map(candidate => createCandidateState(candidate, entryLevelPolicy));
+  const knownCandidateKeys = new Set(pending.map(state => state.key));
+  for (const [checkpoint, keys] of Object.entries(normalizedRecipientPolicy)) {
+    const unknown = keys.filter(key => !knownCandidateKeys.has(key));
+    if (unknown.length) {
+      throw new Error(
+        `EXP recipient policy for ${checkpoint} references unknown candidate key(s): ${unknown.join(', ')}`
+      );
+    }
+  }
   const states = [];
   const stateKeys = new Set();
   const trainerWindows = expWorld.expTiming?.trainerWindows || [];
@@ -1245,12 +1269,45 @@ export function buildTeamExpSchedule({
     return added;
   }
 
-  function allocateActivationExp(amount) {
+  function configuredRecipientKeys(targetBoss, targetIndex) {
+    const lookup = [
+      String(targetIndex),
+      String(targetBoss?.key || ''),
+      String(targetBoss?.label || ''),
+    ];
+    for (const token of lookup) {
+      if (token && Object.prototype.hasOwnProperty.call(normalizedRecipientPolicy, token)) {
+        return normalizedRecipientPolicy[token];
+      }
+    }
+    return null;
+  }
+
+  function activeRecipientStates(targetBoss, targetIndex) {
+    const configured = configuredRecipientKeys(targetBoss, targetIndex);
+    if (!configured) return states;
+    const active = new Set(configured);
+    return states.filter(state => active.has(state.key));
+  }
+
+  function recipientSnapshot(targetBoss, targetIndex) {
+    const activeStates = activeRecipientStates(targetBoss, targetIndex);
+    const active = new Set(activeStates.map(state => state.key));
+    return {
+      activeRecipientKeys: activeStates.map(state => state.key).sort(),
+      benchedRecipientKeys: states
+        .filter(state => !active.has(state.key))
+        .map(state => state.key)
+        .sort(),
+    };
+  }
+
+  function allocateActivationExp(amount, eligibleStates = states) {
     let remaining = Math.max(0, Math.floor(Number(amount || 0)));
     let allocated = 0;
     for (const target of normalizedActivationTargets) {
       if (remaining <= 0) break;
-      const state = states.find(item => item.key === target.key);
+      const state = eligibleStates.find(item => item.key === target.key);
       if (!state || state.unknown || state.level >= target.level) continue;
       const targetExp = expAtLevel(state.growthRate, target.level);
       if (targetExp === null) continue;
@@ -1270,7 +1327,8 @@ export function buildTeamExpSchedule({
   }
 
   function allocate(amount, targetBoss, targetIndex) {
-    const activation = allocateActivationExp(amount);
+    const eligibleStates = activeRecipientStates(targetBoss, targetIndex);
+    const activation = allocateActivationExp(amount, eligibleStates);
     totalActivationExp += activation.allocated;
     const remaining = activation.unallocated;
     let base;
@@ -1282,7 +1340,7 @@ export function buildTeamExpSchedule({
       );
       if (!futureBosses.length && targetBoss) futureBosses.push(targetBoss);
       base = allocateBreakpointAwareExp(
-        states,
+        eligibleStates,
         remaining,
         futureBosses,
         levelUtility,
@@ -1294,10 +1352,10 @@ export function buildTeamExpSchedule({
         },
       );
     } else if (allocator === 'boss-aware') {
-      base = allocateBossAwareExp(states, remaining, targetBoss, levelUtility);
+      base = allocateBossAwareExp(eligibleStates, remaining, targetBoss, levelUtility);
     } else if (allocator === 'boss-aware-soft') {
       base = allocateBossAwareSoftExp(
-        states,
+        eligibleStates,
         remaining,
         targetBoss,
         levelUtility,
@@ -1305,7 +1363,7 @@ export function buildTeamExpSchedule({
       );
     } else if (allocator === 'boss-aware-depth') {
       base = allocateBossAwareDepthExp(
-        states,
+        eligibleStates,
         remaining,
         targetBoss,
         levelUtility,
@@ -1313,13 +1371,13 @@ export function buildTeamExpSchedule({
       );
     } else if (allocator === 'boss-aware-saturation') {
       base = allocateBossAwareSaturationExp(
-        states,
+        eligibleStates,
         remaining,
         targetBoss,
         levelUtility,
       );
     } else {
-      base = allocateBalancedExp(states, remaining);
+      base = allocateBalancedExp(eligibleStates, remaining);
     }
     return {
       allocated: activation.allocated + Number(base?.allocated || 0),
@@ -1541,7 +1599,8 @@ export function buildTeamExpSchedule({
     }
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
-    const aceGapBefore = aceGapForStates(states, Number(boss.aceLevel));
+    const activeRecipientsForBoss = activeRecipientStates(boss, battleIndex);
+    const aceGapBefore = aceGapForStates(activeRecipientsForBoss, Number(boss.aceLevel));
     const expectedAceGapBattles = wild?.expectedExpPerBattle > 0
       ? Math.ceil(aceGapBefore.total / wild.expectedExpPerBattle)
       : (aceGapBefore.total ? null : 0);
@@ -1551,7 +1610,7 @@ export function buildTeamExpSchedule({
     let expectedGrindBattles = 0;
     if (grindPolicy === 'ace-paid' && aceGapBefore.total > 0) {
       const before = new Map(states.map(state => [state.key, Number(state.exp || 0)]));
-      const applied = applyAcePaidGrind(states, Number(boss.aceLevel));
+      const applied = applyAcePaidGrind(activeRecipientsForBoss, Number(boss.aceLevel));
       grindExpBefore = applied.total;
       for (const state of states) {
         const delta = Math.max(0, Number(state.exp || 0) - Number(before.get(state.key) || 0));
@@ -1621,6 +1680,7 @@ export function buildTeamExpSchedule({
     const levelsBefore = snapshotLevels(states);
     const expBefore = snapshotExp(states);
     const routeAllocatedExpBefore = snapshotRouteAllocatedExp(states);
+    const recipientState = recipientSnapshot(boss, battleIndex);
     const moneyBefore = currentMoney;
     const majorReward = trainerBattleExp(boss.trainer, expWorld.expYieldBySpecies);
     const majorPrizeMoney = trainerPrizeMoney(
@@ -1661,6 +1721,8 @@ export function buildTeamExpSchedule({
       levelsBefore,
       expBefore,
       routeAllocatedExpBefore,
+      activeRecipientKeysBefore: recipientState.activeRecipientKeys,
+      benchedRecipientKeysBefore: recipientState.benchedRecipientKeys,
       rewardAfter: majorReward.total,
       prizeMoneyAfter: majorPrizeMoney,
     });
@@ -1715,6 +1777,7 @@ export function buildTeamExpSchedule({
     breakpointDiscount: allocator === 'breakpoint-aware'
       ? Number(breakpointDiscount)
       : null,
+    recipientPolicy: normalizedRecipientPolicy,
     activationTargets: normalizedActivationTargets.map(target => {
       const state = states.find(item => item.key === target.key);
       return {
