@@ -289,5 +289,16 @@
       "source": "Ilex Forest Headbutt tutor",
       "sourceRef": "files/fielddata/script/scr_seq/scr_seq_0092_D36R0101.s"
     }
-  ]
+  ],
+  "moveReminder": {
+    "availableFrom": 7,
+    "location": "Blackthorn City Move Tutor House",
+    "requiresItem": "Heart Scale",
+    "itemRepeatable": true,
+    "source": "Blackthorn City Move Tutor House",
+    "sourceRef": "pret/pokeheartgold files/fielddata/script/scr_seq/scr_seq_0948_T30R0601.s",
+    "itemSource": "Rock Smash repeatable drop",
+    "itemSourceRef": "pret/pokeheartgold src/field/rock_smash_item.c",
+    "note": "Move Relearner consumes one Heart Scale. Resource inconvenience/copy cost is not priced in the current objective."
+  }
 }
