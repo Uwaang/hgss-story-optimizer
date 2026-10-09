@@ -406,6 +406,55 @@ function offensiveTypeMatchupScore(mon, target) {
 // 1) prefer the best offensive type matchup that also owns a super-effective move;
 // 2) otherwise prefer the bench member with the strongest immediate damage potential.
 // HGSS keeps the corresponding routine in overlay_10_trainer_ai.s.
+export function hgssMoveChoiceDistribution(activeRequest, active, target, aiFlags, battle) {
+  const probabilities = new Map();
+  let leaves = 0;
+
+  const walk = (path, weight) => {
+    if (!(weight > 0)) return;
+    let cursor = 0;
+    try {
+      const chosen = chooseHgssMoveIndex(
+        activeRequest,
+        active,
+        target,
+        aiFlags,
+        battle,
+        (numerator, denominator) => {
+          const den = Math.max(1, Math.floor(Number(denominator || 1)));
+          const num = Math.max(0, Math.min(den, Math.floor(Number(numerator || 0))));
+          if (cursor < path.length) return Boolean(path[cursor++]);
+          const branch = new Error('HGSS_AI_DISTRIBUTION_BRANCH');
+          branch.hgssAiDistributionBranch = true;
+          branch.numerator = num;
+          branch.denominator = den;
+          throw branch;
+        },
+      );
+      probabilities.set(chosen, Number(probabilities.get(chosen) || 0) + weight);
+      leaves += 1;
+    } catch (error) {
+      if (!error?.hgssAiDistributionBranch) throw error;
+      const den = Math.max(1, Number(error.denominator || 1));
+      const yes = Math.max(0, Math.min(1, Number(error.numerator || 0) / den));
+      if (yes < 1) walk([...path, false], weight * (1 - yes));
+      if (yes > 0) walk([...path, true], weight * yes);
+    }
+  };
+
+  walk([], 1);
+  const total = [...probabilities.values()].reduce((sum, value) => sum + Number(value || 0), 0);
+  return {
+    probabilities: [...probabilities.entries()]
+      .map(([moveIndex, probability]) => ({
+        moveIndex: Number(moveIndex),
+        probability: total > 0 ? Number(probability) / total : 0,
+      }))
+      .sort((a, b) => a.moveIndex - b.moveIndex),
+    leaves,
+  };
+}
+
 export function chooseHgssPostKoSwitch(request, side, foeActive) {
   if (!foeActive) return null;
   const bench = requestAliveBench(request, side);
