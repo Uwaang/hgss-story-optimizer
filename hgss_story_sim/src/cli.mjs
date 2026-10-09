@@ -11652,6 +11652,16 @@ async function cmdEvolutionLegalitySmoke() {
       expected: 'Steelix',
     },
     {
+      name: 'leaf-stone-before-source',
+      actual: materialized('Bellsprout', 'Victreebel', 'Whitney', 57),
+      expected: 'Weepinbell',
+    },
+    {
+      name: 'leaf-stone-after-source',
+      actual: materialized('Bellsprout', 'Victreebel', 'Morty', 57),
+      expected: 'Victreebel',
+    },
+    {
       name: 'protector-before-blue-clear',
       actual: materialized('Rhyhorn', 'Rhyperior', 'Blue', 65),
       expected: 'Rhydon',
@@ -11676,6 +11686,10 @@ async function cmdEvolutionLegalitySmoke() {
       protector: pool.evolutionAccess?.items?.ITEM_PROTECTOR || null,
       kingsRock: pool.evolutionAccess?.items?.ITEM_KINGS_ROCK || null,
       dragonScale: pool.evolutionAccess?.items?.ITEM_DRAGON_SCALE || null,
+      leafStone: pool.evolutionAccess?.items?.ITEM_LEAF_STONE || null,
+      shinyStone: pool.evolutionAccess?.items?.ITEM_SHINY_STONE || null,
+      duskStone: pool.evolutionAccess?.items?.ITEM_DUSK_STONE || null,
+      dawnStone: pool.evolutionAccess?.items?.ITEM_DAWN_STONE || null,
     },
   }, null, 2));
 }
@@ -11713,6 +11727,8 @@ async function cmdEvolutionCheckpointSmoke() {
     { check: 'Gastly->Gengar', actual: speciesAt('Gastly', 'Gengar', 'Morty', 57), expected: 'Gengar' },
     { check: 'Abra->Alakazam', actual: speciesAt('Abra', 'Alakazam', 'Whitney', 57), expected: 'Alakazam' },
     { check: 'Geodude->Golem', actual: speciesAt('Geodude', 'Golem', 'Morty', 57), expected: 'Golem' },
+    { check: 'Victreebel blocked before Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Whitney', 57), expected: 'Weepinbell' },
+    { check: 'Victreebel legal after Leaf Stone', actual: speciesAt('Bellsprout', 'Victreebel', 'Morty', 57), expected: 'Victreebel' },
     { check: 'Rhyperior blocked for Blue', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Blue', 65), expected: 'Rhydon' },
     { check: 'Rhyperior legal for Will 2', actual: speciesAt('Rhyhorn', 'Rhyperior', 'Will 2', 65), expected: 'Rhyperior' },
   ];
