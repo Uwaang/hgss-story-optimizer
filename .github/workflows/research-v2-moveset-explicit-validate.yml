@@ -1,0 +1,55 @@
+name: research-v2-moveset-explicit-validate
+
+on:
+  push:
+    branches:
+      - research/v2-moveset-calibration-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-explicit-validate]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smoke
+        run: |
+          node src/cli.mjs tutor-smoke
+          node src/cli.mjs move-score-smoke
+          node src/cli.mjs evolution-legality-smoke
+      - name: Tyranitar Red 100-run explicit finalists
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs moveset-build-v2-explicit-validate \
+            --level=57 --runs=100 --target=Tyranitar --bosses="Red" \
+            --sets="baseline=Earthquake/Stone Edge/Fire Fang/Thunder Fang;crunch-surf=Crunch/Earthquake/Stone Edge/Surf;crunch-ice=Crunch/Earthquake/Stone Edge/Ice Fang;crunch-fire=Crunch/Earthquake/Stone Edge/Fire Fang;crunch-thunder=Crunch/Earthquake/Stone Edge/Thunder Fang;bite-crunch=Bite/Crunch/Earthquake/Stone Edge" \
+            > results/research-v2/tyranitar-explicit-red100.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-explicit-red100.json','utf8'));
+          console.log(JSON.stringify(r.rows.map(x=>({
+            label:x.label,
+            moves:x.moves,
+            retry:x.actual.expectedRetryFailures,
+            winRate:x.actual.meanWinRate,
+            progress:x.actual.battleProgressScore,
+            retryBounds95:x.actual.retryBounds95,
+            usage:x.actual.targetUsage?.moveUsesByMove || {},
+            bosses:x.actual.bossRows
+          })),null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-tyranitar-explicit-red100
+          path: hgss_story_sim/results/research-v2/tyranitar-explicit-red100.json
+          if-no-files-found: error
