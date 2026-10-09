@@ -1,5 +1,5 @@
 name: research-v2-moveset-policy-trace
-# trigger: targeted decision trace
+# trigger: targeted decision trace after wiring fix
 
 on:
   push:
