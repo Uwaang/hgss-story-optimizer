@@ -9157,7 +9157,64 @@ async function cmdTutorSmoke() {
     throw new Error('Expected stage-2 Quilava to be compatible with reusable Headbutt tutor');
   }
 
-  console.log(JSON.stringify({ before, after }, null, 2));
+  const piloswineBeforeReminder = candidateMovePool(
+    'Piloswine',
+    34,
+    6,
+    moveAccess,
+    [],
+    'Swinub',
+  );
+  const piloswineAfterReminder = candidateMovePool(
+    'Piloswine',
+    34,
+    7,
+    moveAccess,
+    [],
+    'Swinub',
+  );
+  if (piloswineBeforeReminder.includes('Ancient Power')) {
+    throw new Error('Piloswine relearn-only Ancient Power became available before Blackthorn Move Reminder');
+  }
+  if (!piloswineAfterReminder.includes('Ancient Power')) {
+    throw new Error('Expected Blackthorn Move Reminder to unlock Piloswine Ancient Power');
+  }
+
+  const inheritedTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    6,
+    moveAccess,
+    [],
+    'Cyndaquil',
+  );
+  const directTyphlosion = candidateMovePool(
+    'Typhlosion',
+    50,
+    6,
+    moveAccess,
+    [],
+    'Typhlosion',
+  );
+  if (!inheritedTyphlosion.includes('Eruption')) {
+    throw new Error('Expected delayed Cyndaquil lineage to retain legal pre-evolution Eruption');
+  }
+  if (directTyphlosion.includes('Eruption')) {
+    throw new Error('Direct Typhlosion Lv50 must not gain later Eruption through lineage handling');
+  }
+
+  console.log(JSON.stringify({
+    headbutt: { before, after },
+    moveReminder: {
+      config: moveAccess.moveReminder || null,
+      piloswineBeforeReminder,
+      piloswineAfterReminder,
+    },
+    preEvolutionRetention: {
+      inheritedTyphlosion,
+      directTyphlosion,
+    },
+  }, null, 2));
 }
 
 async function cmdHmSmoke() {
