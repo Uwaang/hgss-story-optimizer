@@ -11721,6 +11721,12 @@ async function cmdMovesetBuildV2Probe() {
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const poolCap = Math.max(4, Math.floor(Number(arg('pool-cap', '32'))));
   const topCalibration = Math.max(1, Math.floor(Number(arg('top-calibration', '6'))));
+  const targetSpecies = String(arg('target', 'Typhlosion')).trim();
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const traceMoves = String(arg('trace', 'false')).toLowerCase() === 'true';
 
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
@@ -11768,7 +11774,14 @@ async function cmdMovesetBuildV2Probe() {
     levels,
   );
 
-  const target = team[0];
+  const targetIndex = team.findIndex(candidate =>
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetSpecies.toLowerCase()
+  );
+  if (targetIndex < 0) {
+    throw new Error(`Unknown moveset probe target: ${targetSpecies}`);
+  }
+  const target = team[targetIndex];
+  const targetName = String(target.terminalSpecies || target.species);
   const targetKey = candidateIdentity(target);
   const lastBoss = routeBosses[routeBosses.length - 1];
   let targetMon = materializeCandidateTeam(
@@ -11783,7 +11796,7 @@ async function cmdMovesetBuildV2Probe() {
       boss: lastBoss,
     },
   )[0];
-  if (!targetMon) throw new Error('Typhlosion target did not materialize for final route checkpoint');
+  if (!targetMon) throw new Error(`${targetName} target did not materialize for final route checkpoint`);
   targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
 
   const assignedMachines = [
@@ -11804,7 +11817,7 @@ async function cmdMovesetBuildV2Probe() {
       requiredMoves: currentRouteMoves,
     },
   );
-  if (!enumeration.rows.length) throw new Error('No Typhlosion movesets enumerated');
+  if (!enumeration.rows.length) throw new Error(`No ${targetName} movesets enumerated`);
   const staticRankByKey = new Map(
     [...enumeration.rows]
       .sort((a, b) =>
@@ -11892,7 +11905,7 @@ async function cmdMovesetBuildV2Probe() {
       sameSeedsAcrossMovesets: true,
       resourceProfile: 'all',
       spendPolicy: 'unbounded',
-      target: 'Typhlosion',
+      target: targetName,
       team: team.map(candidate => candidate.terminalSpecies || candidate.species),
       note: 'This is a calibration probe, not a global moveset winner claim.',
     },
