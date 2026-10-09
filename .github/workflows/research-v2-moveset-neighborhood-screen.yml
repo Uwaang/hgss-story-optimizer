@@ -1,0 +1,65 @@
+name: research-v2-moveset-neighborhood-screen
+
+on:
+  push:
+    branches:
+      - research/v2-moveset-calibration-v1
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    if: contains(github.event.head_commit.message, '[research-v2-moveset-neighborhood]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smoke
+        run: |
+          node src/cli.mjs tutor-smoke
+          node src/cli.mjs move-score-smoke
+          node src/cli.mjs evolution-legality-smoke
+      - name: Actual-battle one-slot neighborhood screen
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs moveset-build-v2-neighborhood-screen --level=50 --runs=1 \
+            > results/research-v2/moveset-build-v2-neighborhood-screen.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/moveset-build-v2-neighborhood-screen.json','utf8'));
+          const compact = row => row ? ({
+            moves: row.moves,
+            changedSlot: row.changedSlot,
+            replacedMove: row.replacedMove,
+            replacementMove: row.replacementMove,
+            retry: row.actual.expectedRetryFailures,
+            geometric: row.actual.geometricScore,
+            mean: row.actual.meanWinRate,
+            moveUses: row.actual.targetUsage?.moveUsesByMove || {}
+          }) : null;
+          console.log(JSON.stringify({
+            baseline: compact(r.baseline),
+            legalMoveCount: r.legalMoveCount,
+            neighborCount: r.neighborCount,
+            bySlot: r.bySlot.map(x=>({
+              slot:x.slot,
+              baselineMove:x.baselineMove,
+              baselineMoveUses:x.baselineMoveUses,
+              best:compact(x.best)
+            })),
+            top10:r.top20.slice(0,10).map(compact)
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-moveset-neighborhood-screen
+          path: hgss_story_sim/results/research-v2/moveset-build-v2-neighborhood-screen.json
+          if-no-files-found: error
