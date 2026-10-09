@@ -11635,6 +11635,25 @@ async function cmdEvolutionLegalitySmoke() {
   const crobatFriendship = transition('Zubat', 'Crobat', 'EVO_FRIENDSHIP');
   const espeonFriendship = transition('Eevee', 'Espeon', 'EVO_FRIENDSHIP_DAY');
   const umbreonFriendship = transition('Eevee', 'Umbreon', 'EVO_FRIENDSHIP_NIGHT');
+  const ambipomMove = transition('Aipom', 'Ambipom', 'EVO_HAS_MOVE');
+  const lickilickyMove = transition('Lickitung', 'Lickilicky', 'EVO_HAS_MOVE');
+  const tangrowthMove = transition('Tangela', 'Tangrowth', 'EVO_HAS_MOVE');
+  const yanmegaMove = transition('Yanma', 'Yanmega', 'EVO_HAS_MOVE');
+
+  const moveEvolutionLevels = [
+    ['Ambipom', ambipomMove, 32],
+    ['Lickilicky', lickilickyMove, 33],
+    ['Tangrowth', tangrowthMove, 33],
+    ['Yanmega', yanmegaMove, 33],
+  ];
+  for (const [name, row, expectedLevel] of moveEvolutionLevels) {
+    if (Number(row.level) !== expectedLevel) {
+      throw new Error(`${name} move-known evolution level expected ${expectedLevel}, got ${row.level}`);
+    }
+  }
+  if (pool.candidates.some(candidate => candidate.terminalSpecies === 'Mamoswine')) {
+    throw new Error('Mamoswine must remain unresolved until relearner + post-condition level-up timing is modeled');
+  }
 
   if (Number(crobatFriendship.level) !== 23) {
     throw new Error(`Crobat must require a second level-up after Golbat Lv22; got Lv${crobatFriendship.level}`);
@@ -11712,6 +11731,31 @@ async function cmdEvolutionLegalitySmoke() {
       expected: 'Blissey',
     },
     {
+      name: 'move-known-ambipom-before-trigger',
+      actual: materialized('Aipom', 'Ambipom', 'Red', 31),
+      expected: 'Aipom',
+    },
+    {
+      name: 'move-known-ambipom-at-trigger',
+      actual: materialized('Aipom', 'Ambipom', 'Red', 32),
+      expected: 'Ambipom',
+    },
+    {
+      name: 'move-known-lickilicky-at-trigger',
+      actual: materialized('Lickitung', 'Lickilicky', 'Red', 33),
+      expected: 'Lickilicky',
+    },
+    {
+      name: 'move-known-tangrowth-at-trigger',
+      actual: materialized('Tangela', 'Tangrowth', 'Red', 33),
+      expected: 'Tangrowth',
+    },
+    {
+      name: 'move-known-yanmega-at-trigger',
+      actual: materialized('Yanma', 'Yanmega', 'Red', 33),
+      expected: 'Yanmega',
+    },
+    {
       name: 'nidoran-f-moon-stone',
       actual: materialized('Nidoran-F', 'Nidoqueen', 'Morty', 57),
       expected: 'Nidoqueen',
@@ -11765,6 +11809,12 @@ async function cmdEvolutionLegalitySmoke() {
       crobat: crobatFriendship,
       espeon: espeonFriendship,
       umbreon: umbreonFriendship,
+    },
+    naturalMoveTransitions: {
+      ambipom: ambipomMove,
+      lickilicky: lickilickyMove,
+      tangrowth: tangrowthMove,
+      yanmega: yanmegaMove,
     },
     focusItemAccess: {
       metalCoat: pool.evolutionAccess?.items?.ITEM_METAL_COAT || null,
