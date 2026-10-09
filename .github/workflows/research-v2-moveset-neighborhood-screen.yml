@@ -1,5 +1,5 @@
 name: research-v2-moveset-neighborhood-screen
-# full-route low-run screen for high-participation members
+# Lapras full-route low-run screen
 # structured override cache normalization enabled
 # strict ban propagated through actual battle materialization
 
@@ -14,10 +14,6 @@ permissions:
 jobs:
   screen:
     if: contains(github.event.head_commit.message, '[research-v2-moveset-neighborhood]')
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [Alakazam, Lanturn]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -37,7 +33,7 @@ jobs:
       - name: Actual-battle one-slot neighborhood screen
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-neighborhood-screen --level=50 --runs=1 --target="${{ matrix.target }}" \
+          node src/cli.mjs moveset-build-v2-neighborhood-screen --level=50 --runs=1 --target=Lapras \
             > results/research-v2/moveset-build-v2-neighborhood-screen.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -55,9 +51,9 @@ jobs:
           console.log(JSON.stringify({
             assumptions:r.assumptions,
             baseline: compact(r.baseline),
-            legalMoveCount: r.legalMoveCount,
-            neighborCount: r.neighborCount,
-            bySlot: r.bySlot.map(x=>({
+            legalMoveCount:r.legalMoveCount,
+            neighborCount:r.neighborCount,
+            bySlot:r.bySlot.map(x=>({
               slot:x.slot,
               baselineMove:x.baselineMove,
               baselineMoveUses:x.baselineMoveUses,
@@ -68,6 +64,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-moveset-neighborhood-${{ matrix.target }}
+          name: research-v2-moveset-neighborhood-Lapras
           path: hgss_story_sim/results/research-v2/moveset-build-v2-neighborhood-screen.json
           if-no-files-found: error
