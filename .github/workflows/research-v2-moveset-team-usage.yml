@@ -1,4 +1,5 @@
 name: research-v2-moveset-team-usage
+# trigger: P0-D prioritization
 
 on:
   push:
