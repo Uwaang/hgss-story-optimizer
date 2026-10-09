@@ -11716,6 +11716,80 @@ function canonicalEvolutionVariant(pool, originSpecies, terminalSpecies) {
   return rows[0];
 }
 
+async function cmdMovesetBuildV2TargetUsage() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '20'))));
+  const targetSpecies = String(arg('target', 'Tyranitar')).trim();
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const target = team.find(candidate =>
+    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetSpecies.toLowerCase()
+  );
+  if (!target) throw new Error(`Unknown target-usage species: ${targetSpecies}`);
+  const targetKey = candidateIdentity(target);
+  const evaluation = await evaluateEqualLevelStoryTeam(
+    team,
+    story,
+    commonLevel,
+    runs,
+    moveAccess,
+    { seedOffset: 0 },
+  );
+  const bossRows = (evaluation.rows || []).map(row => {
+    const usage = row.p1Usage?.[targetKey] || {};
+    return {
+      boss: row.boss,
+      stage: Number(row.stage || 0),
+      winRate: Number(row.winRate || 0),
+      appearances: Number(usage.appearances || 0),
+      leadStarts: Number(usage.leadStarts || 0),
+      moveUses: Number(usage.moveUses || 0),
+      activeTurns: Number(usage.activeTurns || 0),
+      faints: Number(usage.faints || 0),
+      moveUsesByMove: usage.moveUsesByMove || {},
+    };
+  });
+  const activeBossRows = bossRows.filter(row =>
+    row.appearances > 0 || row.moveUses > 0 || row.activeTurns > 0 || row.leadStarts > 0
+  );
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D target member actual-battle usage map for focused moveset search',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      target: targetSpecies,
+      sameSeeds: true,
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    },
+    targetKey,
+    targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+    targetUsage: evaluation.memberUsage?.[targetKey] || null,
+    activeBossRows,
+    allBossRows: bossRows,
+    routeRisk: {
+      expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+      geometricScore: routeRiskGeometricScore(evaluation),
+      meanWinRate: routeRiskMeanWinRate(evaluation),
+    },
+  }, null, 2));
+}
+
+
 async function cmdMovesetBuildV2Probe() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
@@ -13169,6 +13243,7 @@ const commands = {
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'moveset-build-v2-target-usage': cmdMovesetBuildV2TargetUsage,
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
