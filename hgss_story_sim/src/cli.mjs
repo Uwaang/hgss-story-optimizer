@@ -12399,12 +12399,22 @@ async function cmdMovesetBuildV2ShortlistValidate() {
       ...candidate,
       actual: {
         expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        retryBounds95: routeRiskRetryBounds(evaluation),
         geometricScore: routeRiskGeometricScore(evaluation),
         meanWinRate: routeRiskMeanWinRate(evaluation),
         worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
         bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
         targetUsage: evaluation.memberUsage?.[targetKey] || null,
         targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+        bossRows: (evaluation.rows || []).map(row => ({
+          boss: row.boss,
+          stage: Number(row.stage || 0),
+          wins: Number(row.wins || 0),
+          runs: Number(row.runs || 0),
+          winRate: Number(row.winRate || 0),
+          averageTurns: Number(row.averageTurns || 0),
+          targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
+        })),
       },
     });
   }
