@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import Showdown from 'pokemon-showdown';
 const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
-import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, chooseHgssVoluntarySwitch, trainerAiProfile } from './trainer-ai.mjs';
+import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, chooseHgssVoluntarySwitch, hgssMoveChoiceDistribution, trainerAiProfile } from './trainer-ai.mjs';
 
 const dex = Dex.mod('gen4');
 const NEUTRAL_NATURE = 'Serious';
@@ -1930,6 +1930,68 @@ export function smartMoveHitProbability(moveName) {
   if (!move.exists) return 0;
   if (typeof move.accuracy !== 'number') return 1;
   return Math.max(0, Math.min(1, Number(move.accuracy) / 100));
+}
+
+export function smartMoveActsBeforeMoveProbability(attackerMoveName, defenderMoveName, attackerSpeed, defenderSpeed) {
+  const attackerMove = dex.moves.get(attackerMoveName);
+  const defenderMove = dex.moves.get(defenderMoveName);
+  if (!attackerMove.exists || !defenderMove.exists) return 0;
+  const attackerPriority = Number(attackerMove.priority || 0);
+  const defenderPriority = Number(defenderMove.priority || 0);
+  if (attackerPriority > defenderPriority) return 1;
+  if (attackerPriority < defenderPriority) return 0;
+  const aSpeed = Math.max(1, Number(attackerSpeed || 1));
+  const dSpeed = Math.max(1, Number(defenderSpeed || 1));
+  if (aSpeed > dSpeed) return 1;
+  if (aSpeed < dSpeed) return 0;
+  return 0.5;
+}
+
+function battleMonActiveRequest(mon) {
+  return {
+    moves: (mon?.moveSlots || []).map(slot => ({
+      id: slot.id || slot.move,
+      move: slot.move || slot.id,
+      disabled: Boolean(slot.disabled),
+    })),
+  };
+}
+
+export function conditionalMoveExecutionProbability(active, target, moveName, context = {}) {
+  if (!active || !target || !context?.opponentProfile) return 1;
+  const move = dex.moves.get(moveName);
+  if (!move.exists || move.id !== 'focuspunch') return 1;
+  const activeRequest = battleMonActiveRequest(target);
+  if (!activeRequest.moves.length) return 1;
+
+  const distribution = hgssMoveChoiceDistribution(
+    activeRequest,
+    target,
+    active,
+    context.opponentProfile.aiFlags || 0,
+    context.battle,
+  );
+  const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
+  const activeSpeed = Math.max(1, Number(active?.getStat?.('spe') || active?.storedStats?.spe || 1));
+  let blockProbability = 0;
+
+  for (const entry of distribution.probabilities || []) {
+    const requested = activeRequest.moves[entry.moveIndex];
+    const opposingMove = dex.moves.get(requested?.id || requested?.move || '');
+    if (!opposingMove.exists || opposingMove.category === 'Status') continue;
+    if (!dex.getImmunity(opposingMove.type, active)) continue;
+    const beforeProbability = smartMoveActsBeforeMoveProbability(
+      opposingMove.id,
+      move.id,
+      targetSpeed,
+      activeSpeed,
+    );
+    if (beforeProbability <= 0) continue;
+    const hitProbability = smartMoveHitProbability(opposingMove.id);
+    blockProbability += Number(entry.probability || 0) * beforeProbability * hitProbability;
+  }
+
+  return Math.max(0, Math.min(1, 1 - blockProbability));
 }
 
 export function smartMoveKoProbability(active, target, requestedMove) {
