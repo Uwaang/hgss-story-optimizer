@@ -12268,6 +12268,122 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
   }, null, 2));
 }
 
+
+async function cmdMovesetBuildV2ShortlistValidate() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '5'))));
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const target = team[0];
+  const targetKey = candidateIdentity(target);
+  const shortlist = [
+    {
+      label: 'baseline-v1',
+      moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Double-Edge'],
+      bannedMoves: [],
+    },
+    {
+      label: 'double-edge-to-flamethrower',
+      moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Flamethrower'],
+      bannedMoves: ['Double-Edge'],
+    },
+    {
+      label: 'focus-punch-to-flamethrower',
+      moves: ['Eruption', 'Flamethrower', 'Focus Blast', 'Double-Edge'],
+      bannedMoves: ['Focus Punch'],
+    },
+    {
+      label: 'focus-blast-to-flamethrower',
+      moves: ['Eruption', 'Focus Punch', 'Flamethrower', 'Double-Edge'],
+      bannedMoves: ['Focus Blast'],
+    },
+    {
+      label: 'double-edge-to-ember',
+      moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Ember'],
+      bannedMoves: ['Double-Edge'],
+    },
+    {
+      label: 'double-edge-to-fire-blast',
+      moves: ['Eruption', 'Focus Punch', 'Focus Blast', 'Fire Blast'],
+      bannedMoves: ['Double-Edge'],
+    },
+    {
+      label: 'eruption-fire-core',
+      moves: ['Eruption', 'Flamethrower', 'Lava Plume', 'Ember'],
+      bannedMoves: ['Focus Punch', 'Focus Blast', 'Double-Edge'],
+    },
+    {
+      label: 'no-eruption-control',
+      moves: ['Flamethrower', 'Focus Punch', 'Focus Blast', 'Double-Edge'],
+      bannedMoves: ['Eruption'],
+    },
+  ];
+
+  const rows = [];
+  for (const candidate of shortlist) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: {
+            moves: candidate.moves,
+            bannedMoves: candidate.bannedMoves,
+          },
+        },
+      },
+    );
+    rows.push({
+      ...candidate,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+      },
+    });
+  }
+
+  rows.sort(compareMovesetActual);
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D Typhlosion actual-battle shortlist validation',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeedsAcrossMovesets: true,
+      strictRemovedMoveExclusion: true,
+      target: 'Typhlosion',
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      note: 'Actual-battle shortlist validation; larger final validation is still required before a global moveset claim.',
+    },
+    rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -12763,6 +12879,7 @@ const commands = {
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
+  'moveset-build-v2-shortlist-validate': cmdMovesetBuildV2ShortlistValidate,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
