@@ -536,7 +536,7 @@ function evolutionTransitionFor(
       options.entryLevelMax,
       options.priorTransitions,
     );
-    if (!Number.isFinite(Number(triggerLevel))) return null;
+    if (triggerLevel == null || !Number.isFinite(Number(triggerLevel))) return null;
     const nextBattle = bosses.find(
       boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(triggerLevel)
     );
