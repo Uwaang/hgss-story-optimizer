@@ -1,0 +1,59 @@
+name: research-v2-moveset-joint-reconcile
+# P0-D joint reconciliation: baseline vs all local recommendations + leave-one-out
+
+on:
+  push:
+    branches:
+      - research/v2-moveset-calibration-v1
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    if: contains(github.event.head_commit.message, '[research-v2-joint-reconcile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smoke
+        run: |
+          node src/cli.mjs tutor-smoke
+          node src/cli.mjs move-score-smoke
+          node src/cli.mjs evolution-legality-smoke
+      - name: Lv50 full-route joint reconciliation
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs moveset-build-v2-joint-validate \
+            --level=50 --runs=100 \
+            > results/research-v2/joint-full100.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/joint-full100.json','utf8'));
+          console.log(JSON.stringify({
+            assumptions:r.assumptions,
+            rows:r.rows.map(x=>({
+              label:x.label,
+              appliedSpecies:x.appliedSpecies,
+              appliedMoves:x.appliedMoves,
+              retry:x.actual.expectedRetryFailures,
+              geometric:x.actual.geometricScore,
+              mean:x.actual.meanWinRate,
+              progress:x.actual.battleProgressScore,
+              retryBounds95:x.actual.retryBounds95,
+              bosses:x.actual.bossRows
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-joint-full100
+          path: hgss_story_sim/results/research-v2/joint-full100.json
+          if-no-files-found: error
