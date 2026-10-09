@@ -4,7 +4,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { applyPlayerRouteBuild, battleCacheStats, candidateBossUtility, candidateMovePool, candidateMoveUtility, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
@@ -4215,9 +4215,20 @@ async function cmdMoveScoreSmoke() {
     throw new Error(`Charge penalty regression: Energy Ball ${energyBall} <= Solar Beam ${solarBeam}`);
   }
 
+  const eruptionFull = battleMovePowerForState('Eruption', 300, 300);
+  const eruptionHalf = battleMovePowerForState('Eruption', 150, 300);
+  const eruptionLow = battleMovePowerForState('Eruption', 1, 300);
+  const waterSpoutHalf = battleMovePowerForState('Water Spout', 150, 300);
+  if (eruptionFull !== 150 || eruptionHalf !== 75 || eruptionLow !== 1 || waterSpoutHalf !== 75) {
+    throw new Error(
+      `Dynamic HP-power regression: ${JSON.stringify({ eruptionFull, eruptionHalf, eruptionLow, waterSpoutHalf })}`
+    );
+  }
+
   console.log(JSON.stringify({
     Pidgeot: { aerialAce, hyperBeam },
     Meganium: { energyBall, solarBeam },
+    dynamicPower: { eruptionFull, eruptionHalf, eruptionLow, waterSpoutHalf },
   }, null, 2));
 }
 
@@ -6607,10 +6618,64 @@ async function cmdSwitchSmoke() {
       `no-switch player policy still switched: ${noSwitchResult.p1VoluntarySwitches}`
     );
   }
+  const choiceLockPlayer = [
+    {
+      species: 'Jolteon',
+      level: 45,
+      ability: 'Volt Absorb',
+      item: 'Choice Specs',
+      nature: 'Modest',
+      moves: ['Thunderbolt', 'Shadow Ball', 'Signal Beam', 'Hyper Beam'],
+    },
+    {
+      species: 'Lapras',
+      level: 45,
+      ability: 'Water Absorb',
+      nature: 'Modest',
+      moves: ['Surf', 'Ice Beam', 'Body Slam', 'Confuse Ray'],
+    },
+  ];
+  const choiceLockEnemy = [
+    {
+      species: 'Squirtle',
+      level: 20,
+      ability: 'Torrent',
+      nature: 'Serious',
+      moves: ['Water Gun', 'Tackle'],
+    },
+    {
+      species: 'Rhydon',
+      level: 35,
+      ability: 'Rock Head',
+      nature: 'Serious',
+      moves: ['Earthquake', 'Rock Blast'],
+    },
+  ];
+  const choiceLockResult = await runBattle(
+    choiceLockPlayer,
+    choiceLockEnemy,
+    7333,
+    { p1AiMode: 'smart', p1SmartLead: false },
+  );
+  if (Number(choiceLockResult.p1VoluntarySwitches || 0) < 1) {
+    throw new Error(
+      `Expected smart AI to switch a Choice-locked Jolteon out of Rhydon: ${JSON.stringify(choiceLockResult)}`
+    );
+  }
+  if (Number(choiceLockResult.p1Usage?.Lapras?.appearances || 0) < 1) {
+    throw new Error(
+      `Expected Lapras after Choice-lock switch: ${JSON.stringify(choiceLockResult.p1Usage)}`
+    );
+  }
+
   if (result.p2VoluntarySwitches !== 0) {
     throw new Error(`NPC should not voluntarily switch, got ${result.p2VoluntarySwitches}`);
   }
-  console.log(JSON.stringify({ greedy: result, noSwitch: noSwitchResult }, null, 2));
+  console.log(JSON.stringify({
+    greedy: result,
+    noSwitch: noSwitchResult,
+    choiceLockSmart: choiceLockResult,
+  }, null, 2));
 }
 
 async function cmdAllocatorCrossCompare() {
