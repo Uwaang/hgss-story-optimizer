@@ -40,7 +40,21 @@ jobs:
           const evo=JSON.parse(await fetchText(`https://raw.githubusercontent.com/pret/pokeheartgold/${commit}/files/poketool/personal/evo.json`));
           const byBase=new Map((evo.evoTable||[]).map(r=>[r.baseSpecies,r.evos||[]]));
           const nameToConst=name=>'SPECIES_'+String(name).toUpperCase().replace(/[^A-Z0-9]+/g,'_');
-          const constToSimple=x=>String(x||'').replace(/^SPECIES_/,'').toLowerCase();
+          const constToName=x=>{
+            const token=String(x||'').replace(/^SPECIES_/,'');
+            const special={
+              NIDORAN_F:'Nidoran-F',
+              NIDORAN_M:'Nidoran-M',
+              FARFETCHD:"Farfetch'd",
+              MR_MIME:'Mr. Mime',
+              MIME_JR:'Mime Jr.',
+              HO_OH:'Ho-Oh',
+              PORYGON_Z:'Porygon-Z'
+            };
+            if(special[token]) return special[token];
+            return token.toLowerCase().split('_').map(part=>part?part[0].toUpperCase()+part.slice(1):part).join(' ');
+          };
+          const canonicalName=x=>constToName(x).toLowerCase();
           const currentByFamily=new Map();
           for(const c of pool.candidates||[]){
             const fam=String(c.familyId||c.species);
@@ -66,10 +80,10 @@ jobs:
             if(depth>7)return;
             const edges=(byBase.get(current)||[]).filter(e=>e?.target&&e.target!=='SPECIES_NONE');
             if(!edges.length){
-              const originName=constToSimple(origin);
+              const originName=canonicalName(origin);
               const candidate=(pool.candidates||[]).find(c=>String(c.species).toLowerCase()===originName);
               const family=String(candidate?.familyId||originName);
-              const terminalName=constToSimple(current);
+              const terminalName=canonicalName(current);
               const terminals=currentByFamily.get(family)?.terminals||new Set();
               if(path.length&&!terminals.has(terminalName)){
                 const methods=path.map(x=>String(x.method||'')),finalEdge=path[path.length-1];
