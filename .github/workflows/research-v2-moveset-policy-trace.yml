@@ -1,4 +1,5 @@
 name: research-v2-moveset-policy-trace
+# trigger: targeted decision trace
 
 on:
   push:
