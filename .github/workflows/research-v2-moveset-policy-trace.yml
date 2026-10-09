@@ -1,4 +1,5 @@
 name: research-v2-moveset-policy-trace
+# pure-policy-control validation
 # focus-probability + switch-utility validation
 # focus-probability validation
 # trigger: targeted decision trace after wiring fix
