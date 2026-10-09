@@ -1891,6 +1891,29 @@ function bestExpectedDamageFromRequest(mon, target, activeRequest) {
   return best;
 }
 
+function smartExpectedDamage(active, target, requestedMove, context = {}) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
+  return estimateBattleDamage(active, target, requestedMove) *
+    conditionalMoveExecutionProbability(active, target, move.id, context);
+}
+
+function bestSmartExpectedDamage(mon, target, activeRequest = null, context = {}) {
+  if (!mon || !target) return 0;
+  const moves = Array.isArray(activeRequest?.moves) && activeRequest.moves.length
+    ? activeRequest.moves
+    : (mon.moveSlots || []).map(slot => ({
+        move: slot.id || slot.move,
+        disabled: slot.disabled || false,
+      }));
+  let best = 0;
+  for (const requested of moves) {
+    if (requested?.disabled) continue;
+    best = Math.max(best, smartExpectedDamage(mon, target, requested, context));
+  }
+  return best;
+}
+
 function smartStatusMoveScore(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove?.move);
   if (!move.exists || move.category !== 'Status') return -Infinity;
@@ -2046,9 +2069,9 @@ function matchupUtility(mon, foeMon) {
 }
 
 
-function smartMatchupUtility(mon, foeMon) {
+function smartMatchupUtility(mon, foeMon, context = {}) {
   if (!mon || !foeMon || mon.fainted) return -Infinity;
-  const outgoing = bestExpectedDamage(mon, foeMon);
+  const outgoing = bestSmartExpectedDamage(mon, foeMon, null, context);
   const incoming = bestExpectedDamage(foeMon, mon);
   const foeHp = Math.max(1, Number(foeMon.hp || foeMon.maxhp || 1));
   const ownHp = Math.max(1, Number(mon.hp || mon.maxhp || 1));
@@ -2063,9 +2086,9 @@ function smartMatchupUtility(mon, foeMon) {
   return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
 }
 
-function smartMatchupUtilityFromRequest(mon, foeMon, activeRequest) {
+function smartMatchupUtilityFromRequest(mon, foeMon, activeRequest, context = {}) {
   if (!mon || !foeMon || mon.fainted) return -Infinity;
-  const outgoing = bestExpectedDamageFromRequest(mon, foeMon, activeRequest);
+  const outgoing = bestSmartExpectedDamage(mon, foeMon, activeRequest, context);
   const incoming = bestExpectedDamage(foeMon, mon);
   const foeHp = Math.max(1, Number(foeMon.hp || foeMon.maxhp || 1));
   const ownHp = Math.max(1, Number(mon.hp || mon.maxhp || 1));
@@ -2080,41 +2103,41 @@ function smartMatchupUtilityFromRequest(mon, foeMon, activeRequest) {
   return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
 }
 
-function bestSmartForcedSwitch(request, side, foeActive) {
+function bestSmartForcedSwitch(request, side, foeActive, context = {}) {
   if (!request?.side?.pokemon || !side || !foeActive) return null;
   let best = null;
   for (let idx = 0; idx < side.pokemon.length; idx += 1) {
     const mon = side.pokemon[idx];
     const reqMon = request.side.pokemon[idx];
     if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
-    const utility = smartMatchupUtility(mon, foeActive);
+    const utility = smartMatchupUtility(mon, foeActive, context);
     if (!best || utility > best.utility) best = { idx, utility };
   }
   return best?.idx ?? null;
 }
 
-function bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest) {
+function bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest, context = {}) {
   if (!side || !foeActive || !active || activeRequest?.trapped || activeRequest?.maybeTrapped) return null;
   if (!request.side?.pokemon || side.pokemon.length <= 1) return null;
   // activeRequest reflects Choice lock and other disabled-move state.
   // The full moveSlots list does not.
   const currentDamage = SMART_REQUEST_AWARE_SWITCH
-    ? bestExpectedDamageFromRequest(active, foeActive, activeRequest)
-    : bestExpectedDamage(active, foeActive);
+    ? bestSmartExpectedDamage(active, foeActive, activeRequest, context)
+    : bestSmartExpectedDamage(active, foeActive, null, context);
   const currentIncoming = bestExpectedDamage(foeActive, active);
   const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
   const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
   if (currentDamage >= Number(foeActive.hp || 1) && currentSpeed >= foeSpeed) return null;
   const currentUtility = SMART_REQUEST_AWARE_SWITCH
-    ? smartMatchupUtilityFromRequest(active, foeActive, activeRequest)
-    : smartMatchupUtility(active, foeActive);
+    ? smartMatchupUtilityFromRequest(active, foeActive, activeRequest, context)
+    : smartMatchupUtility(active, foeActive, context);
   let best = null;
   for (let idx = 0; idx < side.pokemon.length; idx += 1) {
     const mon = side.pokemon[idx];
     const reqMon = request.side.pokemon[idx];
     if (!mon || !reqMon || reqMon.active || mon.fainted || reqMon.condition?.endsWith(' fnt')) continue;
     const incoming = bestExpectedDamage(foeActive, mon);
-    const utility = smartMatchupUtility(mon, foeActive);
+    const utility = smartMatchupUtility(mon, foeActive, context);
     const survivesEntry = incoming < Number(mon.hp || 0);
     if (!best || utility > best.utility) best = { idx, utility, survivesEntry };
   }
@@ -2169,7 +2192,10 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
   if (request.forceSwitch) {
     if (sideId === 'p1' && aiOptions?.mode === 'smart' && request.forceSwitch.length === 1 && request.forceSwitch[0]) {
       const foeActive = foe?.active?.find(Boolean);
-      const slot = bestSmartForcedSwitch(request, side, foeActive);
+      const slot = bestSmartForcedSwitch(request, side, foeActive, {
+        battle,
+        opponentProfile: aiOptions?.opponentProfile || null,
+      });
       if (slot !== null && slot !== undefined) {
         if (stats) stats.forcedSwitches = Number(stats.forcedSwitches || 0) + 1;
         return `switch ${slot + 1}`;
@@ -2215,7 +2241,17 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
           const underSwitchCap = Number(stats?.voluntarySwitches || 0) < 10;
           const cooldownReady = turn - lastSwitchTurn >= 1;
           if (underSwitchCap && cooldownReady) {
-            const switchChoice = bestSmartVoluntarySwitch(request, side, foeActive, active, activeRequest);
+            const switchChoice = bestSmartVoluntarySwitch(
+              request,
+              side,
+              foeActive,
+              active,
+              activeRequest,
+              {
+                battle,
+                opponentProfile: aiOptions?.opponentProfile || null,
+              },
+            );
             if (switchChoice) return switchChoice;
           }
         } else if (p1Mode !== 'no-switch') {
