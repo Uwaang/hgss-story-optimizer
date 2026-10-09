@@ -1,4 +1,5 @@
 name: research-v2-moveset-explicit-validate
+# Alakazam + Lanturn full-route 20-run shortlist validation
 
 on:
   push:
@@ -11,8 +12,16 @@ permissions:
 jobs:
   validate:
     if: contains(github.event.head_commit.message, '[research-v2-explicit-validate]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Alakazam
+            sets: "baseline=Psychic/Focus Blast/Shadow Ball/Calm Mind;reflect-slot0=Reflect/Focus Blast/Shadow Ball/Calm Mind;psybeam-slot0=Psybeam/Focus Blast/Shadow Ball/Calm Mind;future-sight-slot0=Future Sight/Focus Blast/Shadow Ball/Calm Mind;recover-outlier=Disable/Recover/Psycho Cut/Hyper Beam"
+          - target: Lanturn
+            sets: "baseline=Hydro Pump/Thunderbolt/Signal Beam/Thunder Wave;confuse-for-tbolt=Hydro Pump/Confuse Ray/Signal Beam/Thunder Wave;watergun-for-hydro=Water Gun/Thunderbolt/Signal Beam/Thunder Wave;waterfall-for-twave=Hydro Pump/Thunderbolt/Signal Beam/Waterfall;surf-for-tbolt=Hydro Pump/Surf/Signal Beam/Thunder Wave;calibration-best=Confuse Ray/Signal Beam/Hydro Pump/Whirlpool"
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -27,29 +36,33 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Alakazam full-route 20-run shortlist
+      - name: Full-route 20-run explicit shortlist
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=50 --runs=20 --target=Alakazam \
-            --sets="baseline=Psychic/Focus Blast/Shadow Ball/Calm Mind;proxy-core=Psychic/Focus Blast/Shadow Ball/Confusion;recover-outlier=Disable/Recover/Psycho Cut/Hyper Beam" \
-            > results/research-v2/alakazam-explicit-full20.json
+            --level=50 --runs=20 --target="${{ matrix.target }}" \
+            --sets="${{ matrix.sets }}" \
+            > results/research-v2/explicit-full20.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/alakazam-explicit-full20.json','utf8'));
-          console.log(JSON.stringify(r.rows.map(x=>({
-            label:x.label,
-            moves:x.moves,
-            retry:x.actual.expectedRetryFailures,
-            winRate:x.actual.meanWinRate,
-            progress:x.actual.battleProgressScore,
-            retryBounds95:x.actual.retryBounds95,
-            usage:x.actual.targetUsage?.moveUsesByMove || {},
-            bosses:x.actual.bossRows
-          })),null,2));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/explicit-full20.json','utf8'));
+          console.log(JSON.stringify({
+            assumptions:r.assumptions,
+            rows:r.rows.map(x=>({
+              label:x.label,
+              moves:x.moves,
+              retry:x.actual.expectedRetryFailures,
+              geometric:x.actual.geometricScore,
+              mean:x.actual.meanWinRate,
+              progress:x.actual.battleProgressScore,
+              retryBounds95:x.actual.retryBounds95,
+              usage:x.actual.targetUsage?.moveUsesByMove || {},
+              bosses:x.actual.bossRows
+            }))
+          },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-alakazam-explicit-full20
-          path: hgss_story_sim/results/research-v2/alakazam-explicit-full20.json
+          name: research-v2-${{ matrix.target }}-explicit-full20
+          path: hgss_story_sim/results/research-v2/explicit-full20.json
           if-no-files-found: error
