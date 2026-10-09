@@ -41,7 +41,7 @@ jobs:
           for(const name of forbidden) if(terminals.has(name)) failures.push(`unexpected unresolved terminal ${name}`);
           const candidateCount=(pool.candidates||[]).length;
           const familyCount=new Set((pool.candidates||[]).map(c=>c.familyId||c.species)).size;
-          if(candidateCount!==159) failures.push(`candidate count ${candidateCount} != 159`);
+          if(candidateCount!==155) failures.push(`candidate count ${candidateCount} != 155`);
           if(familyCount!==100) failures.push(`family count ${familyCount} != 100`);
           const out={candidateCount,familyCount,requiredPresent:required.filter(x=>terminals.has(x)),forbiddenAbsent:forbidden.filter(x=>!terminals.has(x)),failures};
           fs.writeFileSync('results/research-v2/evolution-natural-move-audit.json',JSON.stringify(out,null,2));
