@@ -12509,6 +12509,211 @@ async function cmdMovesetBuildV2NeighborhoodScreen() {
 }
 
 
+
+async function cmdMovesetBuildV2JointValidate() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  const includeTyranitar =
+    String(arg('include-tyranitar', 'false')).toLowerCase() === 'true';
+  const selectedLabels = String(arg('labels', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const levels = Object.fromEntries(
+    team.map(candidate => [candidateIdentity(candidate), commonLevel])
+  );
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    { levelsByBattle },
+  );
+  const purchasable = planPurchasableMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const baselinePlan = buildEqualLevelRouteBuildPlan(
+    team,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasable.assignments,
+    levels,
+  );
+
+  const recommendedMovesBySpecies = new Map([
+    ['Typhlosion', ['Flamethrower', 'Focus Punch', 'Focus Blast', 'Double-Edge']],
+    ['Alakazam', ['Psychic', 'Focus Blast', 'Shadow Ball', 'Calm Mind']],
+    ['Rhyperior', ['Earthquake', 'Stone Edge', 'Hammer Arm', 'Scary Face']],
+    ['Lapras', ['Brine', 'Ice Beam', 'Dragon Pulse', 'Body Slam']],
+    ['Lanturn', ['Hydro Pump', 'Confuse Ray', 'Signal Beam', 'Thunder Wave']],
+    ['Tyranitar', ['Screech', 'Crunch', 'Earthquake', 'Stone Edge']],
+  ]);
+
+  const candidatesBySpecies = new Map(
+    team.map(candidate => [
+      String(candidate.terminalSpecies || candidate.species),
+      candidate,
+    ])
+  );
+  const baselineMovesBySpecies = Object.fromEntries(
+    team.map(candidate => {
+      const species = String(candidate.terminalSpecies || candidate.species);
+      const key = candidateIdentity(candidate);
+      return [species, [...(baselinePlan[key]?.routeMoves || [])]];
+    })
+  );
+
+  const changedSpecies = team
+    .map(candidate => String(candidate.terminalSpecies || candidate.species))
+    .filter(species => {
+      if (species === 'Tyranitar' && !includeTyranitar) return false;
+      const recommended = recommendedMovesBySpecies.get(species);
+      const baseline = baselineMovesBySpecies[species] || [];
+      return (
+        Array.isArray(recommended) &&
+        recommended.length === 4 &&
+        movesetKey(recommended) !== movesetKey(baseline)
+      );
+    });
+
+  function overrideForSpecies(speciesList) {
+    const overrides = {};
+    for (const species of speciesList) {
+      const candidate = candidatesBySpecies.get(species);
+      const recommended = recommendedMovesBySpecies.get(species);
+      if (!candidate || !recommended) continue;
+      const key = candidateIdentity(candidate);
+      const baseline = baselineMovesBySpecies[species] || [];
+      overrides[key] = {
+        moves: [...recommended],
+        bannedMoves: baseline.filter(move => !recommended.includes(move)),
+      };
+    }
+    return overrides;
+  }
+
+  const scenarioDefs = [
+    { label: 'baseline-v1', appliedSpecies: [] },
+    { label: 'joint-v2', appliedSpecies: [...changedSpecies] },
+    ...changedSpecies.map(species => ({
+      label: 'leaveout-' + species,
+      appliedSpecies: changedSpecies.filter(value => value !== species),
+    })),
+  ];
+  const requested = selectedLabels.length ? new Set(selectedLabels) : null;
+  const scenarios = requested
+    ? scenarioDefs.filter(row => requested.has(row.label))
+    : scenarioDefs;
+  if (requested && scenarios.length !== requested.size) {
+    const known = new Set(scenarioDefs.map(row => row.label));
+    const missing = selectedLabels.filter(label => !known.has(label));
+    throw new Error('Unknown joint scenario labels: ' + missing.join(', '));
+  }
+
+  const rows = [];
+  for (const scenario of scenarios) {
+    const overrides = overrideForSpecies(scenario.appliedSpecies);
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
+        routeMovesOverrideByCandidate:
+          Object.keys(overrides).length ? overrides : null,
+      },
+    );
+    const bossRows = (evaluation.rows || []).map(row => ({
+      boss: row.boss,
+      stage: Number(row.stage || 0),
+      wins: Number(row.wins || 0),
+      runs: Number(row.runs || 0),
+      winRate: Number(row.winRate || 0),
+      battleProgressScore: Number(row.battleProgressScore || 0),
+      averageOpponentFaints: Number(row.averageOpponentFaints || 0),
+      averageTurns: Number(row.averageTurns || 0),
+    }));
+    rows.push({
+      label: scenario.label,
+      appliedSpecies: scenario.appliedSpecies,
+      appliedMoves: Object.fromEntries(
+        scenario.appliedSpecies.map(species => [
+          species,
+          recommendedMovesBySpecies.get(species),
+        ])
+      ),
+      overrides,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        retryBounds95: routeRiskRetryBounds(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        battleProgressScore: routeRiskBattleProgressScore(evaluation),
+        bossRows,
+      },
+    });
+  }
+
+  rows.sort((a, b) =>
+    Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
+    Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    Number(b.actual.battleProgressScore) - Number(a.actual.battleProgressScore)
+  );
+
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D joint reconciliation of locally selected movesets',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
+      sameSeedsAcrossScenarios: true,
+      includeTyranitar,
+      strictRemovedMoveExclusion: true,
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      baselineMovesBySpecies,
+      changedSpecies,
+      note: 'Lv50 full-route reconciliation excludes Tyranitar local override because Larvitar-family materialization is not Tyranitar through most of the route. Tyranitar is reconciled separately at Lv57 Red.',
+    },
+    rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdMovesetBuildV2ExplicitValidate() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '100'))));
@@ -13507,6 +13712,7 @@ const commands = {
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
   'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
+  'moveset-build-v2-joint-validate': cmdMovesetBuildV2JointValidate,
   'moveset-build-v2-explicit-validate': cmdMovesetBuildV2ExplicitValidate,
   'moveset-build-v2-shortlist-validate': cmdMovesetBuildV2ShortlistValidate,
   'moveset-build-v2-policy-intrusion': cmdMovesetBuildV2PolicyIntrusion,
