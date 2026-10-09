@@ -9760,7 +9760,18 @@ function equalLevelPreparationKey(
       ? Object.fromEntries(
           Object.entries(routeMovesOverrideByCandidate)
             .sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, moves]) => [key, [...new Set(moves || [])]])
+            .map(([key, value]) => {
+              if (Array.isArray(value)) {
+                return [key, [...new Set(value)]];
+              }
+              if (value && typeof value === 'object') {
+                return [key, {
+                  moves: [...new Set(value.moves || [])],
+                  bannedMoves: [...new Set(value.bannedMoves || [])],
+                }];
+              }
+              return [key, value];
+            })
         )
       : null,
   });
