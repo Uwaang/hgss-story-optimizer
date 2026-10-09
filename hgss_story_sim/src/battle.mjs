@@ -973,7 +973,7 @@ function previewConditionalMoveMultiplier(mon, target, move) {
   return 1;
 }
 
-function previewMoveDamage(mon, target, moveName) {
+function previewMoveDamage(mon, target, moveName, state = null) {
   const move = dex.moves.get(moveName);
   const attacker = dex.species.get(mon.species);
   const defender = dex.species.get(target.species);
@@ -995,7 +995,18 @@ function previewMoveDamage(mon, target, moveName) {
   const level = Math.max(1, Number(mon.level || 1));
   let power = Math.max(1, effectiveMovePower(move));
   if (move.id === 'eruption' || move.id === 'waterspout') {
-    power *= 0.82;
+    if (state && Number.isFinite(Number(state.hp))) {
+      const maxhp = Math.max(
+        1,
+        Number(state.maxhp) || previewStat(mon, 'hp'),
+      );
+      power = battleMovePowerForState(move.id, Number(state.hp), maxhp);
+    } else {
+      // Legacy static preview remains available for diagnostics. Route Moveset
+      // v2 uses the exact HP-state form below instead of this historical
+      // full-route approximation.
+      power *= 0.82;
+    }
   }
   const stab = previewStabMultiplier(mon, attacker, move);
   const effectiveness = 2 ** dex.getEffectiveness(move, defender);
@@ -1345,7 +1356,7 @@ function geometricMeanPositive(values, floor = 1e-9) {
   );
 }
 
-function routeMovesetProxyV2(mon, moves, foeTeams) {
+function routeMovesetStaticProxyV2(mon, moves, foeTeams) {
   const bossScores = [];
   for (const foes of foeTeams || []) {
     const foeScores = [];
@@ -1373,6 +1384,98 @@ function routeMovesetProxyV2(mon, moves, foeTeams) {
     meanBoss: bossScores.reduce((sum, row) => sum + row.mean, 0) / bossScores.length,
     worstBoss: Math.min(...bossScores.map(row => row.geometric)),
     bossScores,
+  };
+}
+
+function routeMovesetProxyV2(mon, moves, foeTeams) {
+  // Smart battle policy evaluates Eruption/Water Spout from current HP. The old
+  // route proxy scored only one static attacker state, so a lower-power backup
+  // such as Flamethrower looked redundant even when it becomes the selected
+  // action after HP loss. Enumerate every integer own-HP state instead. This is
+  // a finite state-space average, not a tuned probability distribution.
+  const maxHp = Math.max(1, Math.floor(previewStat(mon, 'hp')));
+  const activeStateShareByMove = Object.fromEntries(moves.map(move => [move, 0]));
+  const marginalCoverageByMove = Object.fromEntries(moves.map(move => [move, 0]));
+  const bossScores = [];
+  let stateCount = 0;
+
+  for (const foes of foeTeams || []) {
+    const foeScores = [];
+    for (const foe of foes || []) {
+      const foeHp = Math.max(1, previewStat(foe, 'hp'));
+      let stateCoverageSum = 0;
+
+      for (let hp = 1; hp <= maxHp; hp += 1) {
+        const damages = moves.map((moveName, index) => {
+          const move = dex.moves.get(moveName);
+          const damage = (!move.exists || move.category === 'Status')
+            ? 0
+            : previewMoveDamage(
+                { ...mon, moves },
+                foe,
+                moveName,
+                { hp, maxhp: maxHp },
+              );
+          return { moveName, index, damage };
+        });
+        let bestDamage = 0;
+        for (const row of damages) bestDamage = Math.max(bestDamage, row.damage);
+        stateCoverageSum += bestDamage / foeHp;
+        stateCount += 1;
+
+        if (bestDamage <= 0) continue;
+        const winners = damages.filter(row => Math.abs(row.damage - bestDamage) <= 1e-12);
+        const winnerShare = 1 / winners.length;
+        for (const winner of winners) {
+          activeStateShareByMove[winner.moveName] += winnerShare;
+          let bestWithout = 0;
+          for (const row of damages) {
+            if (row.index === winner.index) continue;
+            bestWithout = Math.max(bestWithout, row.damage);
+          }
+          marginalCoverageByMove[winner.moveName] +=
+            Math.max(0, bestDamage - bestWithout) / foeHp * winnerShare;
+        }
+      }
+
+      foeScores.push(stateCoverageSum / maxHp);
+    }
+    if (!foeScores.length) continue;
+    bossScores.push({
+      geometric: geometricMeanPositive(foeScores),
+      mean: foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length,
+      worst: Math.min(...foeScores),
+    });
+  }
+
+  const divisor = Math.max(1, stateCount);
+  const actionRelevance = {
+    stateCount,
+    hpStates: maxHp,
+    activeStateShareByMove: Object.fromEntries(
+      Object.entries(activeStateShareByMove)
+        .map(([move, value]) => [move, value / divisor])
+    ),
+    marginalCoverageByMove: Object.fromEntries(
+      Object.entries(marginalCoverageByMove)
+        .map(([move, value]) => [move, value / divisor])
+    ),
+  };
+  if (!bossScores.length) {
+    return {
+      routeGeometric: 0,
+      meanBoss: 0,
+      worstBoss: 0,
+      bossScores: [],
+      actionRelevance,
+    };
+  }
+  return {
+    routeGeometric: geometricMeanPositive(bossScores.map(row => row.geometric)),
+    meanBoss: bossScores.reduce((sum, row) => sum + row.mean, 0) / bossScores.length,
+    worstBoss: Math.min(...bossScores.map(row => row.geometric)),
+    bossScores,
+    actionRelevance,
   };
 }
 
@@ -1434,6 +1537,7 @@ export function enumeratePlayerRouteMovesetsV2(
   const rows = sets.map(moves => ({
     moves,
     proxy: routeMovesetProxyV2(mon, moves, foeTeams),
+    staticProxy: routeMovesetStaticProxyV2(mon, moves, foeTeams),
   }));
   rows.sort((a, b) =>
     Number(b.proxy.routeGeometric) - Number(a.proxy.routeGeometric) ||
