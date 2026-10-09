@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-practical-grind
-# SCRUM-417 Red pricing for recipient-state shortlist
+# SCRUM-417 robust always-active Red pricing control
 
 on:
   push:
@@ -10,20 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  red-pricing:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-red]')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - state: always-active
-            activate: always-active
-            story_plan_b64: eyJNb3J0eSI6Mjk2LCJXaWxsIjoxNDksIkxhbmNlIjoyNDcsIkxhbmNlIDIiOjE3MywiQnJ1bm8gMiI6M30=
-          - state: lance
-            activate: Lance
-            story_plan_b64: eyJDbGFpciI6MjM4LCJMYW5jZSI6MjQ0LCJMYW5jZSAyIjoyNjAsIlNhYnJpbmEiOjQyLCJCcnVubyAyIjo0NX0=
+  red-pricing-control:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-red-control]')
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -35,36 +25,36 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Price Red 25 and 50 from converged Story50 plan
+      - name: Re-repair Story50 then price Red25 Red50
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
             --team-preset=d-quagsire \
             --recipient-target=Quagsire \
-            --recipient-activate="${{ matrix.activate }}" \
+            --recipient-activate="always-active" \
             --story-targets=0.5 \
             --red-targets=0.25,0.5 \
-            --reuse-story-plan-base64="${{ matrix.story_plan_b64 }}" \
             --screen-runs=2 \
             --verify-runs=8 \
-            --repair-runs=16 \
+            --repair-runs=32 \
             --final-runs=64 \
-            --max-repair-rounds=8 \
+            --max-repair-rounds=16 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/red-pricing-${{ matrix.state }}.json
+            > results/research-v2/red-pricing-always-active64.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/red-pricing-${{ matrix.state }}.json';
-          const r=JSON.parse(fs.readFileSync(file,'utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/red-pricing-always-active64.json','utf8'));
           console.log(JSON.stringify({
             assumptions:r.assumptions,
-            state:'${{ matrix.state }}',
             storyFrontier:r.storyFrontier.map(x=>({
               storyTargetWinRate:x.storyTargetWinRate,
               storyGrindBattles:x.storyGrindBattles,
               storyGrindExp:x.storyGrindExp,
+              storyWorstBossWinRate:x.storyWorstBossWinRate,
               repairConverged:x.repairConverged,
+              repairRounds:x.repairRounds,
+              storyPlan:x.storyPlan,
               redBaseline:x.redBaseline,
               redFrontier:x.redFrontier.map(y=>({
                 targetWinRate:y.targetWinRate,
@@ -82,6 +72,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-red-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/red-pricing-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-red-always-active64
+          path: hgss_story_sim/results/research-v2/red-pricing-always-active64.json
           if-no-files-found: error
