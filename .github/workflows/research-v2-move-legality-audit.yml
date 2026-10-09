@@ -1,0 +1,132 @@
+name: research-v2-move-legality-audit
+
+on:
+  push:
+    branches:
+      - research/v2-move-legality-v1
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-move-legality-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Dump canonical pool
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/research-v2/move-legality-pool.json
+      - name: Audit historical level-up move overgrant
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import Showdown from 'pokemon-showdown';
+          import { candidateMovePool } from './src/battle.mjs';
+          const { Dex } = Showdown;
+          const dex=Dex.mod('gen4');
+          const pool=JSON.parse(fs.readFileSync('results/research-v2/move-legality-pool.json','utf8'));
+
+          function learnsetRows(speciesName) {
+            const species=dex.species.get(speciesName);
+            if(!species.exists) return [];
+            const learnset=dex.species.getLearnsetData(species.id).learnset||{};
+            const rows=[];
+            for(const [moveId,sources] of Object.entries(learnset)){
+              const levels=(sources||[]).map(s=>/^4L(\d+)$/.exec(s)).filter(Boolean).map(m=>Number(m[1])).sort((a,b)=>a-b);
+              if(!levels.length) continue;
+              rows.push({move:dex.moves.get(moveId).name,levels});
+            }
+            return rows;
+          }
+
+          function lineageFloors(candidate){
+            const rows=[{species:candidate.species,floor:Number(candidate.entryLevelMin||1),origin:true,reason:'capture-floor'}];
+            let floor=Number(candidate.entryLevelMin||1);
+            for(const tr of candidate.speciesByStage||[]){
+              const level=Number(tr.level);
+              if(Number.isFinite(level)&&level>0) floor=Math.max(floor,level);
+              rows.push({species:tr.species,floor,origin:false,reason:tr.evolutionMethod||tr.derived||'evolution',transition:tr});
+            }
+            return rows;
+          }
+
+          const evolvedHistorical=[];
+          const captureHistorical=[];
+          for(const candidate of pool.candidates||[]){
+            const lineage=lineageFloors(candidate);
+            for(const entry of lineage){
+              for(const move of learnsetRows(entry.species)){
+                const hasFutureNatural=move.levels.some(level=>level>entry.floor);
+                const historicalLevels=move.levels.filter(level=>level<=entry.floor);
+                if(!historicalLevels.length || hasFutureNatural) continue;
+                const row={
+                  searchKey:candidate.searchKey,
+                  familyId:candidate.familyId,
+                  originSpecies:candidate.species,
+                  terminalSpecies:candidate.terminalSpecies,
+                  species:entry.species,
+                  formationFloor:entry.floor,
+                  move:move.move,
+                  levelSources:move.levels,
+                  formationReason:entry.reason,
+                };
+                if(entry.origin) captureHistorical.push(row); else evolvedHistorical.push(row);
+              }
+            }
+          }
+
+          const bySpecies={};
+          for(const row of evolvedHistorical){
+            const key=row.species;
+            if(!bySpecies[key]) bySpecies[key]=new Set();
+            bySpecies[key].add(row.move);
+          }
+          const speciesSummary=Object.entries(bySpecies)
+            .map(([species,moves])=>({species,moveCount:moves.size,moves:[...moves].sort()}))
+            .sort((a,b)=>b.moveCount-a.moveCount||a.species.localeCompare(b.species));
+
+          const piloswineCurrentPool=candidateMovePool('Piloswine',33,7,null,[],'Swinub').sort();
+          const out={
+            schemaVersion:1,
+            candidateCount:(pool.candidates||[]).length,
+            familyCount:new Set((pool.candidates||[]).map(c=>c.familyId||c.species)).size,
+            evolvedHistoricalOccurrenceCount:evolvedHistorical.length,
+            evolvedHistoricalUniqueSpecies:speciesSummary.length,
+            speciesSummary,
+            evolvedHistorical:evolvedHistorical.slice(0,500),
+            captureHistoricalOccurrenceCount:captureHistorical.length,
+            captureHistorical:captureHistorical.slice(0,200),
+            controls:{
+              piloswineLevel33Stage7Pool:piloswineCurrentPool,
+              piloswineAncientPowerOvergranted:piloswineCurrentPool.includes('Ancient Power'),
+            }
+          };
+          fs.writeFileSync('results/research-v2/move-legality-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            candidateCount:out.candidateCount,
+            familyCount:out.familyCount,
+            evolvedHistoricalOccurrenceCount:out.evolvedHistoricalOccurrenceCount,
+            evolvedHistoricalUniqueSpecies:out.evolvedHistoricalUniqueSpecies,
+            topSpecies:speciesSummary.slice(0,20),
+            captureHistoricalOccurrenceCount:out.captureHistoricalOccurrenceCount,
+            controls:out.controls,
+          },null,2));
+          if(!out.controls.piloswineAncientPowerOvergranted){
+            throw new Error('Expected current baseline to demonstrate Piloswine Ancient Power overgrant');
+          }
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-move-legality-audit
+          path: hgss_story_sim/results/research-v2/move-legality-audit.json
+          if-no-files-found: error
