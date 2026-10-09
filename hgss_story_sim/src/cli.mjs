@@ -11724,6 +11724,80 @@ function canonicalEvolutionVariant(pool, originSpecies, terminalSpecies) {
   return rows[0];
 }
 
+async function cmdMovesetBuildV2TeamUsage() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '20'))));
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const evaluation = await evaluateEqualLevelStoryTeam(
+    team,
+    story,
+    commonLevel,
+    runs,
+    moveAccess,
+    { seedOffset: 0 },
+  );
+  const memberRows = team.map(candidate => {
+    const key = candidateIdentity(candidate);
+    const usage = evaluation.memberUsage?.[key] || null;
+    return {
+      key,
+      originSpecies: candidate.species,
+      terminalSpecies: candidate.terminalSpecies || candidate.species,
+      build: evaluation.routeBuildPlan?.[key] || null,
+      usage,
+      bossRows: (evaluation.rows || []).map(row => ({
+        boss: row.boss,
+        stage: Number(row.stage || 0),
+        winRate: Number(row.winRate || 0),
+        materializedSpecies: row.playerBuilds?.[key]?.species || null,
+        appearances: Number(row.p1Usage?.[key]?.appearances || 0),
+        leadStarts: Number(row.p1Usage?.[key]?.leadStarts || 0),
+        moveUses: Number(row.p1Usage?.[key]?.moveUses || 0),
+        moveUsesByMove: row.p1Usage?.[key]?.moveUsesByMove || {},
+        activeTurns: Number(row.p1Usage?.[key]?.activeTurns || 0),
+        faints: Number(row.p1Usage?.[key]?.faints || 0),
+      })).filter(row => row.appearances > 0 || row.moveUses > 0 || row.activeTurns > 0 || row.leadStarts > 0),
+    };
+  }).sort((a, b) =>
+    Number(b.usage?.activeTurnsPerAvailableRun || 0) - Number(a.usage?.activeTurnsPerAvailableRun || 0) ||
+    Number(b.usage?.movesPerAvailableRun || 0) - Number(a.usage?.movesPerAvailableRun || 0) ||
+    String(a.terminalSpecies).localeCompare(String(b.terminalSpecies))
+  );
+
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D full-team actual-battle usage map for moveset optimization priority',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeeds: true,
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    },
+    routeRisk: {
+      expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+      geometricScore: routeRiskGeometricScore(evaluation),
+      meanWinRate: routeRiskMeanWinRate(evaluation),
+    },
+    members: memberRows,
+  }, null, 2));
+}
+
+
 async function cmdMovesetBuildV2TargetUsage() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '20'))));
@@ -13376,6 +13450,7 @@ const commands = {
   'boss-local-oracle-probe': cmdBossLocalOracleProbe,
   'boss-local-resource-policy-probe': cmdBossLocalResourcePolicyProbe,
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
+  'moveset-build-v2-team-usage': cmdMovesetBuildV2TeamUsage,
   'moveset-build-v2-target-usage': cmdMovesetBuildV2TargetUsage,
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
