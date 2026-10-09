@@ -1,6 +1,5 @@
 name: research-v2-moveset-calibration
-# focused Tyranitar calibration: Lv57 Red-only
-# progress-aware rerun
+# Rhyperior full-route calibration: Lv50
 
 on:
   push:
@@ -32,7 +31,7 @@ jobs:
       - name: Moveset Build v2 calibration probe
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs moveset-build-v2-probe --level=57 --runs=20 --pool-cap=24 --top-calibration=8 --target=Tyranitar --bosses="Red" \
+          node src/cli.mjs moveset-build-v2-probe --level=50 --runs=5 --pool-cap=24 --top-calibration=8 --target=Rhyperior \
             > results/research-v2/moveset-build-v2-probe.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
