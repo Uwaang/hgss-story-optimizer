@@ -1,0 +1,109 @@
+name: research-v2-evolution-conditional-audit
+
+on:
+  push:
+    branches:
+      - research/v2-evolution-conditional-v1
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-evolution-conditional-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evolution legality smoke
+        run: node src/cli.mjs evolution-legality-smoke
+      - name: Evolution checkpoint smoke
+        run: node src/cli.mjs evolution-checkpoint-smoke
+      - name: Dump pool
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/research-v2/evolution-conditional-pool.json
+      - name: Audit remaining leaf terminals
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { fetchText } from './src/hgss-data.mjs';
+          const pool=JSON.parse(fs.readFileSync('results/research-v2/evolution-conditional-pool.json','utf8'));
+          const commit=pool.sourceCommit;
+          const evo=JSON.parse(await fetchText(`https://raw.githubusercontent.com/pret/pokeheartgold/${commit}/files/poketool/personal/evo.json`));
+          const byBase=new Map((evo.evoTable||[]).map(r=>[r.baseSpecies,r.evos||[]]));
+          const nameToConst=name=>'SPECIES_'+String(name).toUpperCase().replace(/[^A-Z0-9]+/g,'_');
+          const constToSimple=x=>String(x||'').replace(/^SPECIES_/,'').toLowerCase();
+          const currentByFamily=new Map();
+          for(const c of pool.candidates||[]){
+            const fam=String(c.familyId||c.species);
+            if(!currentByFamily.has(fam)) currentByFamily.set(fam,{terminals:new Set()});
+            currentByFamily.get(fam).terminals.add(String(c.terminalSpecies||c.species).toLowerCase());
+          }
+          const supported=new Set([
+            'EVO_LEVEL','EVO_TRADE','EVO_TRADE_ITEM',
+            'EVO_STONE','EVO_STONE_MALE','EVO_STONE_FEMALE',
+            'EVO_LEVEL_ATK_EQ_DEF',
+            'EVO_LEVEL_ATK_GT_DEF',
+            'EVO_LEVEL_ATK_LT_DEF',
+            'EVO_LEVEL_FEMALE',
+            'EVO_LEVEL_MALE',
+            'EVO_LEVEL_NINJASK',
+            'EVO_LEVEL_PID_HI',
+            'EVO_LEVEL_PID_LO',
+            'EVO_LEVEL_SHEDINJA'
+          ]);
+          const dppOnly=new Set(['EVO_CORONET','EVO_ETERNA','EVO_ROUTE217','EVO_BEAUTY']);
+          const missing=[],seen=new Set();
+          function walk(origin,current,path,depth=0){
+            if(depth>7)return;
+            const edges=(byBase.get(current)||[]).filter(e=>e?.target&&e.target!=='SPECIES_NONE');
+            if(!edges.length){
+              const originName=constToSimple(origin);
+              const candidate=(pool.candidates||[]).find(c=>String(c.species).toLowerCase()===originName);
+              const family=String(candidate?.familyId||originName);
+              const terminalName=constToSimple(current);
+              const terminals=currentByFamily.get(family)?.terminals||new Set();
+              if(path.length&&!terminals.has(terminalName)){
+                const methods=path.map(x=>String(x.method||'')),finalEdge=path[path.length-1];
+                missing.push({
+                  family,origin,target:current,terminalName,
+                  finalMethod:String(finalEdge.method||''),finalParam:finalEdge.param??null,path,
+                  methodClass:methods.some(m=>dppOnly.has(m))
+                    ?'known-dppt-only-or-unavailable'
+                    :methods.some(m=>!supported.has(m))
+                      ?'unsupported-needs-hgss-legality-audit'
+                      :'supported-method-but-missing-terminal'
+                });
+              }
+              return;
+            }
+            for(const edge of edges){
+              const next=[...path,{from:current,to:edge.target,method:String(edge.method||''),param:edge.param??null}];
+              const sig=[origin,...next.map(x=>[x.from,x.to,x.method,x.param??''].join(':'))].join('|');
+              if(seen.has(sig))continue;
+              seen.add(sig); walk(origin,edge.target,next,depth+1);
+            }
+          }
+          for(const c of pool.candidates||[])walk(nameToConst(c.species),nameToConst(c.species),[]);
+          const uniq=new Map();
+          for(const m of missing){const k=[m.family,m.terminalName].join('|');if(!uniq.has(k)||m.path.length<uniq.get(k).path.length)uniq.set(k,m);}
+          const rows=[...uniq.values()].sort((a,b)=>a.methodClass.localeCompare(b.methodClass)||a.finalMethod.localeCompare(b.finalMethod)||a.family.localeCompare(b.family));
+          const methodCounts={},classCounts={};
+          for(const m of rows){methodCounts[m.finalMethod]=(methodCounts[m.finalMethod]||0)+1;classCounts[m.methodClass]=(classCounts[m.methodClass]||0)+1;}
+          const out={schemaVersion:1,sourceCommit:commit,currentCandidateCount:(pool.candidates||[]).length,currentFamilyCount:new Set((pool.candidates||[]).map(c=>c.familyId||c.species)).size,supportedByCurrentPolicy:[...supported],methodCounts,classCounts,missingTerminalCandidates:rows};
+          fs.writeFileSync('results/research-v2/evolution-conditional-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-evolution-conditional-audit
+          path: hgss_story_sim/results/research-v2/evolution-conditional-audit.json
+          if-no-files-found: error
