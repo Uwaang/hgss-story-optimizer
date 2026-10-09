@@ -439,4 +439,34 @@ Validation runs:
 - conditional-level audit: `37900471093` — success after special-name audit normalization
 - friendship audit: `37900847377` — success
 
-Disposition: **stone / conditional-level / friendship changes are validated P0-C code; remaining has-move/item-night methods stay unresolved pending scheduler-aware trigger semantics.**
+Disposition: **stone / conditional-level / friendship changes are validated P0-C code.**
+
+### 11.1 Natural move-known follow-up
+
+Four `EVO_HAS_MOVE` leaves can be resolved without progression-history state because their required move is learned naturally at a future level by the pre-evolution species:
+
+- Aipom -> Ambipom: Double Hit at Lv32
+- Lickitung -> Lickilicky: Rollout at Lv33
+- Tangela -> Tangrowth: Ancient Power at Lv33
+- Yanma -> Yanmega: Ancient Power at Lv33
+
+Implementation derives the Gen4 natural level-up source from the pinned `pokemon-showdown` dependency and only accepts a level source strictly above the member's entry/prior-evolution level. This intentionally rejects Piloswine Ancient Power `4L1` as a natural future trigger.
+
+Validation run `37902300498` — SUCCESS:
+
+- candidate count: **155**
+- family count: **100**
+- Ambipom / Lickilicky / Tangrowth / Yanmega present
+- Mamoswine / Gliscor / Weavile remain absent
+- DPPt-only Magnezone / Leafeon / Glaceon remain absent
+- regression failures: 0
+
+The candidate count does not rise from 155 because these terminal forms replace the conservative unevolved variant rather than adding an additional branch.
+
+HGSS-native unresolved evolution leaves are therefore reduced from **7 to 3**:
+
+- Mamoswine — Ancient Power must become legally available to Piloswine, then a subsequent level-up is required
+- Gliscor — Razor Fang + night, then post-item level-up
+- Weavile — Razor Claw + night, then post-item level-up
+
+These three require progression-history-aware trigger state and are assigned to the EXP Scheduler / legality integration rather than approximated with static stage-only evolution.
