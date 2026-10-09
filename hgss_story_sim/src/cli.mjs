@@ -11813,6 +11813,8 @@ async function cmdMovesetBuildV2Probe() {
       moveAccess,
       {
         seedOffset: 0,
+        bossLabels: bossLabels.length ? bossLabels : null,
+        p1SmartTrace: traceMoves,
         routeMovesOverrideByCandidate: {
           [targetKey]: row.moves,
         },
@@ -12374,6 +12376,8 @@ async function cmdMovesetBuildV2ShortlistValidate() {
       runsPerBoss: runs,
       sameSeedsAcrossMovesets: true,
       strictRemovedMoveExclusion: true,
+      bossLabels: bossLabels.length ? bossLabels : 'all',
+      traceMoves,
       target: 'Typhlosion',
       team: team.map(candidate => candidate.terminalSpecies || candidate.species),
       note: 'Actual-battle shortlist validation; larger final validation is still required before a global moveset claim.',
@@ -12388,6 +12392,11 @@ async function cmdMovesetBuildV2ShortlistValidate() {
 async function cmdMovesetBuildV2PolicyIntrusion() {
   const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '10'))));
+  const traceMoves = String(arg('trace', 'false')).toLowerCase() === 'true';
+  const bossLabels = String(arg('bosses', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
   const story = await loadEqualLevelStory();
   const [pool, moveAccess] = await Promise.all([
     loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
@@ -12478,6 +12487,11 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
           winRate: Number(row.winRate || 0),
           averageTurns: Number(row.averageTurns || 0),
           targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
+          targetDecisionTrace: traceMoves
+            ? (row.p1SmartDecisionTrace || []).filter(decision =>
+                String(decision.active || '').toLowerCase().includes('typhlosion')
+              )
+            : [],
         })),
       },
     });
