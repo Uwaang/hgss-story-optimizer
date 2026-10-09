@@ -1,0 +1,48 @@
+name: research-v2-exp-scheduler-activation-scan
+# SCRUM-417 fixed-team activation-checkpoint screen
+
+on:
+  push:
+    branches:
+      - research/v2-exp-scheduler-v1
+
+permissions:
+  contents: read
+
+jobs:
+  activation-scan:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-scan]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Scheduler recipient-state smoke
+        run: node src/cli.mjs exp-scheduler-v1-smoke
+      - name: D+Quagsire activation checkpoint screen
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs exp-scheduler-v1-activation-scan \
+            --runs=2 --target=Quagsire --route-grind-proxy-target=0.5 \
+            > results/research-v2/exp-scheduler-v1-activation-scan.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/exp-scheduler-v1-activation-scan.json','utf8'));
+          console.log(JSON.stringify({
+            assumptions:r.assumptions,
+            firstEligibleBoss:r.firstEligibleBoss,
+            pareto:r.pareto,
+            top10:r.top10
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-exp-scheduler-activation-scan
+          path: hgss_story_sim/results/research-v2/exp-scheduler-v1-activation-scan.json
+          if-no-files-found: error
