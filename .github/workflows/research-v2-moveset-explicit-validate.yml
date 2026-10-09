@@ -1,5 +1,5 @@
 name: research-v2-moveset-explicit-validate
-# Alakazam + Lanturn full-route 20-run shortlist validation
+# Alakazam + Lanturn + Lapras full-route 20-run shortlist validation
 
 on:
   push:
@@ -20,6 +20,8 @@ jobs:
             sets: "baseline=Psychic/Focus Blast/Shadow Ball/Calm Mind;reflect-slot0=Reflect/Focus Blast/Shadow Ball/Calm Mind;psybeam-slot0=Psybeam/Focus Blast/Shadow Ball/Calm Mind;future-sight-slot0=Future Sight/Focus Blast/Shadow Ball/Calm Mind;recover-outlier=Disable/Recover/Psycho Cut/Hyper Beam"
           - target: Lanturn
             sets: "baseline=Hydro Pump/Thunderbolt/Signal Beam/Thunder Wave;confuse-for-tbolt=Hydro Pump/Confuse Ray/Signal Beam/Thunder Wave;watergun-for-hydro=Water Gun/Thunderbolt/Signal Beam/Thunder Wave;waterfall-for-twave=Hydro Pump/Thunderbolt/Signal Beam/Waterfall;surf-for-tbolt=Hydro Pump/Surf/Signal Beam/Thunder Wave;calibration-best=Confuse Ray/Signal Beam/Hydro Pump/Whirlpool"
+          - target: Lapras
+            sets: "baseline=Hydro Pump/Ice Beam/Dragon Pulse/Body Slam;blizzard-for-hydro=Blizzard/Ice Beam/Dragon Pulse/Body Slam;brine-for-hydro=Brine/Ice Beam/Dragon Pulse/Body Slam;ice-shard-for-hydro=Ice Shard/Ice Beam/Dragon Pulse/Body Slam;surf-for-dragon=Hydro Pump/Ice Beam/Surf/Body Slam"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -51,6 +53,7 @@ jobs:
             rows:r.rows.map(x=>({
               label:x.label,
               moves:x.moves,
+              bannedMoves:x.bannedMoves,
               retry:x.actual.expectedRetryFailures,
               geometric:x.actual.geometricScore,
               mean:x.actual.meanWinRate,
