@@ -11662,6 +11662,16 @@ async function cmdEvolutionLegalitySmoke() {
       expected: 'Victreebel',
     },
     {
+      name: 'nidoran-f-moon-stone',
+      actual: materialized('Nidoran-F', 'Nidoqueen', 'Morty', 57),
+      expected: 'Nidoqueen',
+    },
+    {
+      name: 'nidoran-m-moon-stone',
+      actual: materialized('Nidoran-M', 'Nidoking', 'Morty', 57),
+      expected: 'Nidoking',
+    },
+    {
       name: 'tyrogue-hitmontop-before-level',
       actual: materialized('Tyrogue', 'Hitmontop', 'Red', 19),
       expected: 'Tyrogue',
