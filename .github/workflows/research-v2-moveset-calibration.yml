@@ -1,5 +1,6 @@
 name: research-v2-moveset-calibration
 # focused Tyranitar calibration: Lv57 Red-only
+# progress-aware rerun
 
 on:
   push:
