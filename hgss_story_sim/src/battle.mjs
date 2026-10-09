@@ -1336,6 +1336,123 @@ function routeMoveCombinations(values, choose = 4, start = 0, prefix = [], outpu
   return output;
 }
 
+function geometricMeanPositive(values, floor = 1e-9) {
+  if (!values.length) return 0;
+  const safeFloor = Math.max(Number.MIN_VALUE, Number(floor) || 1e-9);
+  return Math.exp(
+    values.reduce((sum, value) => sum + Math.log(Math.max(safeFloor, Number(value) || 0)), 0) /
+      values.length
+  );
+}
+
+function routeMovesetProxyV2(mon, moves, foeTeams) {
+  const bossScores = [];
+  for (const foes of foeTeams || []) {
+    const foeScores = [];
+    for (const foe of foes || []) {
+      const foeHp = Math.max(1, previewStat(foe, 'hp'));
+      const bestDamage = Math.max(0, ...moves.map(moveName => {
+        const move = dex.moves.get(moveName);
+        if (!move.exists || move.category === 'Status') return 0;
+        return previewMoveDamage({ ...mon, moves }, foe, moveName);
+      }));
+      foeScores.push(bestDamage / foeHp);
+    }
+    if (!foeScores.length) continue;
+    bossScores.push({
+      geometric: geometricMeanPositive(foeScores),
+      mean: foeScores.reduce((sum, value) => sum + value, 0) / foeScores.length,
+      worst: Math.min(...foeScores),
+    });
+  }
+  if (!bossScores.length) {
+    return { routeGeometric: 0, meanBoss: 0, worstBoss: 0, bossScores: [] };
+  }
+  return {
+    routeGeometric: geometricMeanPositive(bossScores.map(row => row.geometric)),
+    meanBoss: bossScores.reduce((sum, row) => sum + row.mean, 0) / bossScores.length,
+    worstBoss: Math.min(...bossScores.map(row => row.geometric)),
+    bossScores,
+  };
+}
+
+export function enumeratePlayerRouteMovesetsV2(
+  mon,
+  foeTeams,
+  {
+    stage = 21,
+    moveAccess = null,
+    extraMachines = [],
+    originSpeciesName = null,
+    poolCap = 32,
+    requiredMoves = [],
+  } = {},
+) {
+  const legalPool = candidateMovePool(
+    mon.species,
+    mon.level,
+    stage,
+    moveAccess,
+    extraMachines,
+    originSpeciesName || mon.species,
+  );
+  const allFoes = (foeTeams || []).flat().filter(Boolean);
+  const individual = legalPool.map(name => {
+    const move = dex.moves.get(name);
+    if (!move.exists) return { name, score: 0 };
+    if (move.category === 'Status') {
+      return {
+        name,
+        score: candidateMoveScore(dex.species.get(mon.species), name) / 1000,
+      };
+    }
+    const fractions = allFoes.map(foe =>
+      previewMoveDamage({ ...mon, moves: [name] }, foe, name) /
+      Math.max(1, previewStat(foe, 'hp'))
+    );
+    const mean = fractions.length
+      ? fractions.reduce((sum, value) => sum + value, 0) / fractions.length
+      : 0;
+    const best = fractions.length ? Math.max(...fractions) : 0;
+    return { name, score: mean + best };
+  }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const cap = Math.max(4, Math.floor(Number(poolCap || 32)));
+  let candidateMoves = legalPool.length <= cap
+    ? [...legalPool]
+    : individual.slice(0, cap).map(row => row.name);
+  for (const move of requiredMoves || []) {
+    if (legalPool.includes(move) && !candidateMoves.includes(move)) {
+      candidateMoves.push(move);
+    }
+  }
+  candidateMoves = [...new Set(candidateMoves)];
+
+  const sets = candidateMoves.length <= 4
+    ? [candidateMoves.slice()]
+    : routeMoveCombinations(candidateMoves, 4);
+  const rows = sets.map(moves => ({
+    moves,
+    proxy: routeMovesetProxyV2(mon, moves, foeTeams),
+  }));
+  rows.sort((a, b) =>
+    Number(b.proxy.routeGeometric) - Number(a.proxy.routeGeometric) ||
+    Number(b.proxy.meanBoss) - Number(a.proxy.meanBoss) ||
+    Number(b.proxy.worstBoss) - Number(a.proxy.worstBoss) ||
+    a.moves.join('/').localeCompare(b.moves.join('/'))
+  );
+
+  return {
+    legalMoveCount: legalPool.length,
+    legalPool,
+    poolCap: cap,
+    truncated: legalPool.length > cap,
+    candidateMoves,
+    evaluatedMovesets: rows.length,
+    rows,
+  };
+}
+
 function routeMovesetScore(mon, moves, foeTeams) {
   const bossScores = [];
   for (const foes of foeTeams || []) {
