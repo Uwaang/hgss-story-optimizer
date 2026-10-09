@@ -61,37 +61,45 @@ jobs:
           const supported=new Set(['EVO_LEVEL','EVO_TRADE','EVO_TRADE_ITEM']);
           const dppOnly=new Set(['EVO_CORONET','EVO_ETERNA','EVO_ROUTE217','EVO_BEAUTY']);
           const missing=[];
-          const seen=new Set();
+          const seenPath=new Set();
 
           function walk(origin,current,path,depth=0){
             if(depth>7) return;
-            for(const edge of byBase.get(current)||[]){
-              if(!edge?.target || edge.target==='SPECIES_NONE') continue;
-              const key=[origin,current,edge.target,edge.method,edge.param??''].join('|');
-              if(seen.has(key)) continue;
-              seen.add(key);
-              const nextPath=[...path,{from:current,to:edge.target,method:String(edge.method||''),param:edge.param??null}];
-
+            const edges=(byBase.get(current)||[])
+              .filter(edge=>edge?.target && edge.target!=='SPECIES_NONE');
+            if(!edges.length){
               const originName=constToSimple(origin);
               const candidate=(pool.candidates||[]).find(c=>String(c.species).toLowerCase()===originName);
               const family=String(candidate?.familyId||originName);
               const terminals=currentByFamily.get(family)?.terminals||new Set();
-              const targetName=constToSimple(edge.target);
-              if(!terminals.has(targetName)){
+              const terminalName=constToSimple(current);
+              if(path.length && !terminals.has(terminalName)){
+                const finalEdge=path[path.length-1];
+                const methods=path.map(x=>String(x.method||''));
+                const hasDppOnly=methods.some(m=>dppOnly.has(m));
+                const hasUnsupported=methods.some(m=>!supported.has(m));
                 missing.push({
                   family,
                   origin,
-                  target:edge.target,
-                  terminalName:targetName,
-                  finalMethod:String(edge.method||''),
-                  finalParam:edge.param??null,
-                  path:nextPath,
-                  methodClass:
-                    dppOnly.has(String(edge.method||'')) ? 'known-dppt-only-or-unavailable' :
-                    supported.has(String(edge.method||'')) ? 'supported-method-but-missing-terminal' :
-                    'unsupported-needs-hgss-legality-audit'
+                  target:current,
+                  terminalName,
+                  finalMethod:String(finalEdge.method||''),
+                  finalParam:finalEdge.param??null,
+                  path,
+                  methodClass: hasDppOnly
+                    ? 'known-dppt-only-or-unavailable'
+                    : hasUnsupported
+                      ? 'unsupported-needs-hgss-legality-audit'
+                      : 'supported-method-but-missing-terminal'
                 });
               }
+              return;
+            }
+            for(const edge of edges){
+              const nextPath=[...path,{from:current,to:edge.target,method:String(edge.method||''),param:edge.param??null}];
+              const sig=[origin,...nextPath.map(x=>[x.from,x.to,x.method,x.param??''].join(':'))].join('|');
+              if(seenPath.has(sig)) continue;
+              seenPath.add(sig);
               walk(origin,edge.target,nextPath,depth+1);
             }
           }
@@ -102,7 +110,7 @@ jobs:
 
           const uniq=new Map();
           for(const m of missing){
-            const k=[m.family,m.terminalName,m.finalMethod,m.finalParam??''].join('|');
+            const k=[m.family,m.terminalName].join('|');
             if(!uniq.has(k) || m.path.length<uniq.get(k).path.length) uniq.set(k,m);
           }
           const rowsOut=[...uniq.values()].sort((a,b)=>
@@ -134,6 +142,7 @@ jobs:
             currentFamilyCount:out.currentFamilyCount,
             methodCounts,
             classCounts,
+            comparison:'leaf terminal only',
             examples:rowsOut.slice(0,80)
           },null,2));
           NODE
