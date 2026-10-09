@@ -11564,27 +11564,73 @@ function movesetKey(moves) {
   return [...new Set(moves || [])].sort().join('|');
 }
 
+function averageRankMap(rows, compare, tieKey) {
+  const sorted = [...rows].sort((a, b) =>
+    compare(a, b) || movesetKey(a.moves).localeCompare(movesetKey(b.moves))
+  );
+  const ranks = new Map();
+  let start = 0;
+  while (start < sorted.length) {
+    let end = start + 1;
+    const key = tieKey(sorted[start]);
+    while (end < sorted.length && tieKey(sorted[end]) === key) end += 1;
+    const averageRank = ((start + 1) + end) / 2;
+    for (let index = start; index < end; index += 1) {
+      ranks.set(movesetKey(sorted[index].moves), averageRank);
+    }
+    start = end;
+  }
+  return ranks;
+}
+
+function pearsonCorrelation(xs, ys) {
+  if (xs.length !== ys.length || xs.length < 2) return null;
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+  let numerator = 0;
+  let denomX = 0;
+  let denomY = 0;
+  for (let index = 0; index < xs.length; index += 1) {
+    const dx = xs[index] - meanX;
+    const dy = ys[index] - meanY;
+    numerator += dx * dy;
+    denomX += dx * dx;
+    denomY += dy * dy;
+  }
+  if (!(denomX > 0) || !(denomY > 0)) return null;
+  return numerator / Math.sqrt(denomX * denomY);
+}
+
 function spearmanFromRankedRows(rows) {
   if (!Array.isArray(rows) || rows.length < 2) return null;
-  const proxyOrder = [...rows].sort((a, b) =>
-    Number(a.proxyRank) - Number(b.proxyRank) ||
-    movesetKey(a.moves).localeCompare(movesetKey(b.moves))
-  );
-  const actualOrder = [...rows].sort((a, b) =>
+  const proxyCompare = (a, b) =>
+    Number(b.proxy.routeGeometric) - Number(a.proxy.routeGeometric) ||
+    Number(b.proxy.meanBoss) - Number(a.proxy.meanBoss) ||
+    Number(b.proxy.worstBoss) - Number(a.proxy.worstBoss);
+  const actualCompare = (a, b) =>
     Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
     Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
-    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
-    movesetKey(a.moves).localeCompare(movesetKey(b.moves))
-  );
-  const proxyRank = new Map(proxyOrder.map((row, index) => [movesetKey(row.moves), index + 1]));
-  const actualRank = new Map(actualOrder.map((row, index) => [movesetKey(row.moves), index + 1]));
-  const n = rows.length;
-  const sumD2 = rows.reduce((sum, row) => {
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate);
+  const proxyTieKey = row => [
+    Number(row.proxy.routeGeometric),
+    Number(row.proxy.meanBoss),
+    Number(row.proxy.worstBoss),
+  ].join('|');
+  const actualTieKey = row => [
+    Number(row.actual.expectedRetryFailures),
+    Number(row.actual.geometricScore),
+    Number(row.actual.meanWinRate),
+  ].join('|');
+  const proxyRanks = averageRankMap(rows, proxyCompare, proxyTieKey);
+  const actualRanks = averageRankMap(rows, actualCompare, actualTieKey);
+  const xs = [];
+  const ys = [];
+  for (const row of rows) {
     const key = movesetKey(row.moves);
-    const d = Number(proxyRank.get(key)) - Number(actualRank.get(key));
-    return sum + d * d;
-  }, 0);
-  return 1 - (6 * sumD2) / (n * (n * n - 1));
+    xs.push(Number(proxyRanks.get(key)));
+    ys.push(Number(actualRanks.get(key)));
+  }
+  return pearsonCorrelation(xs, ys);
 }
 
 function canonicalEvolutionVariant(pool, originSpecies, terminalSpecies) {
@@ -11739,6 +11785,14 @@ async function cmdMovesetBuildV2Probe() {
     Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
     movesetKey(a.moves).localeCompare(movesetKey(b.moves))
   );
+  const bestActual = actualSorted[0] || null;
+  const bestActualTies = bestActual
+    ? actualSorted.filter(row =>
+        Number(row.actual.expectedRetryFailures) === Number(bestActual.actual.expectedRetryFailures) &&
+        Number(row.actual.geometricScore) === Number(bestActual.actual.geometricScore) &&
+        Number(row.actual.meanWinRate) === Number(bestActual.actual.meanWinRate)
+      )
+    : [];
   await flushBattleCache();
   await flushEqualLevelPreparationCache();
 
@@ -11778,7 +11832,13 @@ async function cmdMovesetBuildV2Probe() {
       sampleCount: calibration.length,
       proxyActualSpearman: spearmanFromRankedRows(calibration),
       rows: calibration,
-      bestActualSample: actualSorted[0] || null,
+      bestActualSample: bestActual,
+      bestActualTies,
+      actualDistinctOutcomeCount: new Set(calibration.map(row => [
+        Number(row.actual.expectedRetryFailures),
+        Number(row.actual.geometricScore),
+        Number(row.actual.meanWinRate),
+      ].join('|'))).size,
     },
     battleCache: battleCacheStats(),
     preparationCache: equalLevelPreparationCacheStats(),
