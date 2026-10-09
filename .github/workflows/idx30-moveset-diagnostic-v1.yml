@@ -1,0 +1,170 @@
+name: idx30-moveset-diagnostic-v1
+
+on:
+  push:
+    branches:
+      - diag/idx30-movesets-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    if: contains(github.event.head_commit.message, '[idx30-moveset-diagnostic-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+
+      - name: Download idx30 saturation 100-run state
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37755171480
+          name: red-frontier-highsample-reprice-v1-state-1
+          path: hgss_story_sim/results/idx30-moveset-source
+
+      - name: Reconstruct exact checkpoint builds from stored plans
+        run: |
+          mkdir -p results/idx30-movesets-v1
+          node <<'NODE'
+          const fs=require('fs'),cp=require('child_process'),path=require('path');
+
+          const sourceDir='results/idx30-moveset-source';
+          const sourceFile=fs.readdirSync(sourceDir).find(f=>f.endsWith('.json'));
+          if(!sourceFile) throw new Error('state json not found');
+          const state=JSON.parse(fs.readFileSync(path.join(sourceDir,sourceFile),'utf8'));
+          if(Number(state.index)!==30 || state.allocator!=='boss-aware-saturation') {
+            throw new Error('unexpected source state: '+JSON.stringify({index:state.index,allocator:state.allocator}));
+          }
+
+          const red25=state.redFrontier.find(x=>Number(x.targetWinRate)===0.25);
+          const red50=state.redFrontier.find(x=>Number(x.targetWinRate)===0.5);
+          if(!state.storyPlan || !red25?.plan || !red50?.plan) throw new Error('stored plans missing');
+
+          const plans=[
+            ['story50',state.storyPlan],
+            ['red25',red25.plan],
+            ['red50',red50.plan],
+          ];
+
+          function evalPlan(label,plan){
+            const plan64=Buffer.from(JSON.stringify(plan),'utf8').toString('base64');
+            const args=[
+              'src/cli.mjs','route-exp-practical-grind',
+              '--version=HEARTGOLD','--starter=Cyndaquil',
+              '--evolution-policy=trade-aware',
+              '--team-keys='+state.teamKeys.join(','),
+              '--exp-profile=normal-route',
+              '--exp-allocator='+state.allocator,
+              '--entry-level=expected','--same-stage-join=map-order',
+              '--resources=all','--spend-policy=natural',
+              '--story-targets=0.01','--red-targets=0.25',
+              '--repair-mode=global-only','--lean-repair=true',
+              '--screen-runs=1','--verify-runs=1','--repair-runs=1','--final-runs=1',
+              '--max-repair-rounds=1',
+              '--reuse-story-plan-base64='+plan64,
+              '--skip-red=true',
+            ];
+            const p=cp.spawnSync(process.execPath,args,{
+              cwd:process.cwd(),encoding:'utf8',env:process.env,
+              maxBuffer:64*1024*1024,timeout:50*60*1000
+            });
+            if(p.status!==0) throw new Error(label+' failed: '+(p.stderr||p.stdout||'unknown').slice(-10000));
+            return JSON.parse(p.stdout);
+          }
+
+          const evaluated=Object.fromEntries(plans.map(([label,plan])=>[label,evalPlan(label,plan)]));
+
+          const storyLabels=['Will','Koga','Bruno','Karen','Lance','Blue','Will 2','Koga 2','Bruno 2','Karen 2','Lance 2'];
+          const output={
+            schemaVersion:1,
+            sourceRun:37755171480,
+            index:state.index,
+            allocator:state.allocator,
+            teamKeys:state.teamKeys,
+            storedTotals:{
+              story:state.storyGrindBattles,
+              red25:red25.totalGrindBattles,
+              red50:red50.totalGrindBattles
+            },
+            storySnapshots:[],
+            red25:null,
+            red50:null,
+          };
+
+          function checkpoints(data){
+            return data.storyFrontier?.[0]?.checkpoints||[];
+          }
+          function slim(cp){
+            return {
+              boss:cp.boss,
+              stage:cp.stage,
+              winRate:cp.winRate,
+              playerLevels:cp.playerLevels,
+              playerBuilds:Object.fromEntries(
+                Object.entries(cp.playerBuilds||{}).map(([key,b])=>[key,{
+                  species:b.species,
+                  level:cp.playerLevels?.[b.species]??null,
+                  nature:b.nature,
+                  ability:b.ability,
+                  item:b.item,
+                  evs:b.evs,
+                  moves:b.moves,
+                }])
+              ),
+              heldItemPolicy:cp.heldItemPolicy||null,
+              grindBattlesBefore:cp.grindBattlesBefore,
+            };
+          }
+
+          const storyCps=checkpoints(evaluated.story50);
+          for(const label of storyLabels){
+            const cp=storyCps.find(x=>String(x.boss)===label);
+            if(cp) output.storySnapshots.push(slim(cp));
+          }
+          const r25=checkpoints(evaluated.red25).find(x=>String(x.boss)==='Red');
+          const r50=checkpoints(evaluated.red50).find(x=>String(x.boss)==='Red');
+          output.red25=r25?slim(r25):null;
+          output.red50=r50?slim(r50):null;
+
+          fs.writeFileSync('results/idx30-movesets-v1/idx30-saturation-movesets.json',JSON.stringify(output,null,2));
+
+          const brief={
+            storedTotals:output.storedTotals,
+            storySnapshots:output.storySnapshots.map(cp=>({
+              boss:cp.boss,
+              levels:cp.playerLevels,
+              builds:Object.fromEntries(Object.entries(cp.playerBuilds).map(([k,b])=>[
+                b.species,{moves:b.moves,item:b.item,nature:b.nature}
+              ]))
+            })),
+            red25:output.red25&&{
+              levels:output.red25.playerLevels,
+              builds:Object.fromEntries(Object.entries(output.red25.playerBuilds).map(([k,b])=>[
+                b.species,{moves:b.moves,item:b.item,nature:b.nature}
+              ]))
+            },
+            red50:output.red50&&{
+              levels:output.red50.playerLevels,
+              builds:Object.fromEntries(Object.entries(output.red50.playerBuilds).map(([k,b])=>[
+                b.species,{moves:b.moves,item:b.item,nature:b.nature}
+              ]))
+            }
+          };
+          console.log(JSON.stringify(brief,null,2));
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: idx30-saturation-movesets-v1
+          path: hgss_story_sim/results/idx30-movesets-v1/idx30-saturation-movesets.json
+          if-no-files-found: error
