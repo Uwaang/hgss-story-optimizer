@@ -1,0 +1,55 @@
+name: research-v2-evolution-natural-move-audit
+
+on:
+  push:
+    branches:
+      - research/v2-evolution-natural-move-v1
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-evolution-natural-move-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evolution legality smoke
+        run: node src/cli.mjs evolution-legality-smoke
+      - name: Evolution checkpoint smoke
+        run: node src/cli.mjs evolution-checkpoint-smoke
+      - name: Dump and verify pool
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/research-v2/evolution-natural-move-pool.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const pool=JSON.parse(fs.readFileSync('results/research-v2/evolution-natural-move-pool.json','utf8'));
+          const terminals=new Set((pool.candidates||[]).map(c=>c.terminalSpecies));
+          const required=['Ambipom','Lickilicky','Tangrowth','Yanmega'];
+          const forbidden=['Mamoswine','Gliscor','Weavile','Magnezone','Leafeon','Glaceon'];
+          const failures=[];
+          for(const name of required) if(!terminals.has(name)) failures.push(`missing required terminal ${name}`);
+          for(const name of forbidden) if(terminals.has(name)) failures.push(`unexpected unresolved terminal ${name}`);
+          const candidateCount=(pool.candidates||[]).length;
+          const familyCount=new Set((pool.candidates||[]).map(c=>c.familyId||c.species)).size;
+          if(candidateCount!==155) failures.push(`candidate count ${candidateCount} != 155`);
+          if(familyCount!==100) failures.push(`family count ${familyCount} != 100`);
+          const out={candidateCount,familyCount,requiredPresent:required.filter(x=>terminals.has(x)),forbiddenAbsent:forbidden.filter(x=>!terminals.has(x)),failures};
+          fs.writeFileSync('results/research-v2/evolution-natural-move-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          if(failures.length) process.exit(1);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-evolution-natural-move-audit
+          path: hgss_story_sim/results/research-v2/evolution-natural-move-audit.json
+          if-no-files-found: error

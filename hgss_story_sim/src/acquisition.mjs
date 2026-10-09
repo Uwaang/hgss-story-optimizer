@@ -1,4 +1,8 @@
+import Showdown from 'pokemon-showdown';
 import { constantToName, fetchText } from './hgss-data.mjs';
+
+const { Dex } = Showdown;
+const GEN4_DEX = Dex.mod('gen4');
 
 const PRET_RAW_ROOT = 'https://raw.githubusercontent.com/pret/pokeheartgold';
 
@@ -429,7 +433,7 @@ const FRIENDSHIP_EVOLUTION_METHODS = new Set([
   'EVO_FRIENDSHIP_NIGHT',
 ]);
 
-function nextLevelEvolutionTrigger(entryLevelMax, transitions) {
+function priorEvolutionLevel(entryLevelMax, transitions) {
   const entry = Number(entryLevelMax);
   if (!Number.isFinite(entry)) return null;
   let priorLevel = Math.max(1, Math.floor(entry));
@@ -441,8 +445,30 @@ function nextLevelEvolutionTrigger(entryLevelMax, transitions) {
       priorLevel = Math.max(priorLevel, Number(transition.level));
     }
   }
-  if (priorLevel >= 100) return null;
+  return priorLevel;
+}
+
+function nextLevelEvolutionTrigger(entryLevelMax, transitions) {
+  const priorLevel = priorEvolutionLevel(entryLevelMax, transitions);
+  if (!Number.isFinite(Number(priorLevel)) || priorLevel >= 100) return null;
   return priorLevel + 1;
+}
+
+function naturalMoveEvolutionLevel(fromSpecies, moveConst, entryLevelMax, transitions) {
+  const priorLevel = priorEvolutionLevel(entryLevelMax, transitions);
+  if (!Number.isFinite(Number(priorLevel))) return null;
+  const species = GEN4_DEX.species.get(fromSpecies);
+  const moveName = constantToName(moveConst, 'MOVE_');
+  const move = GEN4_DEX.moves.get(moveName);
+  if (!species.exists || !move.exists) return null;
+  const learnset = GEN4_DEX.species.getLearnsetData(species.id).learnset || {};
+  const levels = (learnset[move.id] || [])
+    .map(source => /^4L(\d+)$/.exec(source))
+    .filter(Boolean)
+    .map(match => Number(match[1]))
+    .filter(level => Number.isFinite(level) && level > priorLevel)
+    .sort((a, b) => a - b);
+  return levels[0] ?? null;
 }
 
 function evolutionTransitionFor(
@@ -501,6 +527,31 @@ function evolutionTransitionFor(
       evolutionCondition: condition,
       requiresLevelUp: true,
       reason: `${condition} + level-up (minimum level ${triggerLevel})`,
+    };
+  }
+  if (evo.method === 'EVO_HAS_MOVE') {
+    const triggerLevel = naturalMoveEvolutionLevel(
+      fromSpecies,
+      String(evo.param),
+      options.entryLevelMax,
+      options.priorTransitions,
+    );
+    if (triggerLevel == null || !Number.isFinite(Number(triggerLevel))) return null;
+    const nextBattle = bosses.find(
+      boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(triggerLevel)
+    );
+    return {
+      order,
+      stage: Number(nextBattle?.stage ?? availableFrom),
+      level: Number(triggerLevel),
+      fromSpecies,
+      species: targetSpecies,
+      derived: 'level-evolution',
+      evolutionMethod: evo.method,
+      evolutionCondition: 'known-move',
+      requiredMove: String(evo.param),
+      requiresLevelUp: true,
+      reason: `learn ${evo.param} naturally at level ${triggerLevel} + evolve on that level-up`,
     };
   }
   if (evo.method === 'EVO_TRADE') {
@@ -602,7 +653,8 @@ function buildTradeAwareEvolutionPaths(
         evo.method === 'EVO_STONE' ||
         evo.method === 'EVO_STONE_MALE' ||
         evo.method === 'EVO_STONE_FEMALE' ||
-        FRIENDSHIP_EVOLUTION_METHODS.has(evo.method)
+        FRIENDSHIP_EVOLUTION_METHODS.has(evo.method) ||
+        evo.method === 'EVO_HAS_MOVE'
       ) {
         edges.push(evo);
       }
