@@ -1313,11 +1313,29 @@ function routeMoveCombinations(values, choose = 4, start = 0, prefix = [], outpu
   return output;
 }
 
+function routeMoveStandaloneUtility(mon, moveName, foes) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return 0;
+  if (move.category === 'Status') {
+    return candidateMoveScore(dex.species.get(mon.species), moveName) * 0.02;
+  }
+  const fractions = (foes || []).map(foe =>
+    previewMoveDamage({ ...mon, moves: [moveName] }, foe, moveName) /
+      Math.max(1, previewStat(foe, 'hp'))
+  );
+  if (!fractions.length) return 0;
+  const mean = fractions.reduce((sum, value) => sum + value, 0) / fractions.length;
+  const best = Math.max(...fractions);
+  return mean + 0.35 * best;
+}
+
 function routeMovesetScore(mon, moves, foeTeams) {
   const bossScores = [];
+  const allFoes = [];
   for (const foes of foeTeams || []) {
     const foeScores = [];
     for (const foe of foes || []) {
+      allFoes.push(foe);
       const foeHp = Math.max(1, previewStat(foe, 'hp'));
       const bestDamage = Math.max(0, ...moves.map(move => previewMoveDamage(
         { ...mon, moves },
@@ -1332,21 +1350,31 @@ function routeMovesetScore(mon, moves, foeTeams) {
       bossScores.push(0.7 * mean + 0.3 * best);
     }
   }
-  if (!bossScores.length) return 0;
+  if (!bossScores.length) return { primary: 0, secondary: 0 };
   const meanBoss = bossScores.reduce((sum, value) => sum + value, 0) / bossScores.length;
   const specialist = [...bossScores].sort((a, b) => b - a)
     .slice(0, Math.min(5, bossScores.length))
     .reduce((sum, value, _, arr) => sum + value / arr.length, 0);
-  const damagingTypes = new Set(
-    moves.map(name => dex.moves.get(name))
-      .filter(move => move.exists && move.category !== 'Status')
-      .map(move => move.type)
-  ).size;
   const statusBonus = moves
     .map(name => dex.moves.get(name))
     .filter(move => move.exists && move.category === 'Status')
     .reduce((sum, move) => sum + Math.min(0.08, moveStrategicMultiplier(move) * 0.02), 0);
-  return meanBoss + 0.25 * specialist + 0.015 * damagingTypes + statusBonus;
+
+  // Primary objective remains route coverage: for each foe, how well can the
+  // set's best available move answer it?  Do not reward type count by itself;
+  // that previously filled otherwise irrelevant slots with weak off-build
+  // attacks once one dominant move (e.g. Eruption) already covered the route.
+  const primary = meanBoss + 0.25 * specialist + statusBonus;
+
+  // If two sets have indistinguishable route coverage, prefer the set whose
+  // individual moves have more standalone utility under the *current build*.
+  // This is a lexicographic tie-break only, so it cannot trade away route
+  // coverage merely to make all four slots look individually strong.
+  const secondary = moves.reduce(
+    (sum, moveName) => sum + routeMoveStandaloneUtility(mon, moveName, allFoes),
+    0,
+  );
+  return { primary, secondary };
 }
 
 export function optimizePlayerRouteMoves(
@@ -1414,8 +1442,12 @@ export function optimizePlayerRouteMoves(
     const score = routeMovesetScore(mon, moves, foeTeams);
     if (
       !best ||
-      score > best.score + 1e-12 ||
-      (Math.abs(score - best.score) <= 1e-12 && moves.join('/').localeCompare(best.moves.join('/')) < 0)
+      score.primary > best.score.primary + 1e-12 ||
+      (Math.abs(score.primary - best.score.primary) <= 1e-12 &&
+        score.secondary > best.score.secondary + 1e-12) ||
+      (Math.abs(score.primary - best.score.primary) <= 1e-12 &&
+        Math.abs(score.secondary - best.score.secondary) <= 1e-12 &&
+        moves.join('/').localeCompare(best.moves.join('/')) < 0)
     ) {
       best = { moves: [...moves], score };
     }
@@ -1425,7 +1457,8 @@ export function optimizePlayerRouteMoves(
     legalMoveCount: pool.length,
     shortlist: candidates,
     evaluatedMovesets: sets.length,
-    proxyScore: Number(best?.score || 0),
+    proxyScore: Number(best?.score?.primary || 0),
+    tieBreakScore: Number(best?.score?.secondary || 0),
   };
 }
 
