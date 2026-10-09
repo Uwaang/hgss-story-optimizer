@@ -27,16 +27,16 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Tyranitar Red-only 1000-run finalists
+      - name: Rhyperior full-route 100-run finalists
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=57 --runs=1000 --target=Tyranitar --bosses="Red" \
-            --sets="screech=Screech/Crunch/Earthquake/Stone Edge;baseline=Earthquake/Stone Edge/Leer/Sandstorm;proxy-top=Bite/Crunch/Earthquake/Stone Edge" \
-            > results/research-v2/tyranitar-red57-final1000.json
+            --level=50 --runs=100 --target=Rhyperior \
+            --sets="scary=Earthquake/Stone Edge/Hammer Arm/Scary Face;baseline=Earthquake/Stone Edge/Hammer Arm/Poison Jab" \
+            > results/research-v2/rhyperior-final100.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-red57-final1000.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/rhyperior-final100.json','utf8'));
           console.log(JSON.stringify(r.rows.map(x=>({
             label:x.label,
             moves:x.moves,
@@ -50,6 +50,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-tyranitar-red57-final1000
-          path: hgss_story_sim/results/research-v2/tyranitar-red57-final1000.json
+          name: research-v2-rhyperior-final100
+          path: hgss_story_sim/results/research-v2/rhyperior-final100.json
           if-no-files-found: error
