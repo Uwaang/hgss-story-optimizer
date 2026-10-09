@@ -12477,9 +12477,39 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
     },
   ];
 
-  const rows = [];
-  for (const candidate of candidates) {
-    const evaluation = await evaluateEqualLevelStoryTeam(
+  function rowFromEvaluation(candidate, evaluation) {
+    return {
+      ...candidate,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        targetRouteBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+        bossRows: (evaluation.rows || []).map(row => ({
+          boss: row.boss,
+          stage: Number(row.stage || 0),
+          wins: Number(row.wins || 0),
+          runs: Number(row.runs || 0),
+          winRate: Number(row.winRate || 0),
+          averageTurns: Number(row.averageTurns || 0),
+          targetBuild: row.playerBuilds?.[targetKey] || null,
+          heldItems: row.heldItemPolicy?.selected || null,
+          targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
+          targetDecisionTrace: traceMoves
+            ? (row.p1SmartDecisionTrace || []).filter(decision =>
+                String(decision.active || '').toLowerCase().includes('typhlosion')
+              )
+            : [],
+        })),
+      },
+    };
+  }
+
+  async function evaluateCandidate(candidate, controls = null) {
+    return evaluateEqualLevelStoryTeam(
       team,
       story,
       commonLevel,
@@ -12489,6 +12519,8 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
         seedOffset: 0,
         bossLabels: bossLabels.length ? bossLabels : null,
         p1SmartTrace: traceMoves,
+        playerBuildOverrideByCandidate: controls?.playerBuildOverrideByCandidate || null,
+        heldItemsByBoss: controls?.heldItemsByBoss || null,
         routeMovesOverrideByCandidate: {
           [targetKey]: {
             moves: candidate.moves,
@@ -12497,31 +12529,42 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
         },
       },
     );
-    rows.push({
-      ...candidate,
-      actual: {
-        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
-        geometricScore: routeRiskGeometricScore(evaluation),
-        meanWinRate: routeRiskMeanWinRate(evaluation),
-        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
-        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
-        targetUsage: evaluation.memberUsage?.[targetKey] || null,
-        bossRows: (evaluation.rows || []).map(row => ({
-          boss: row.boss,
-          stage: Number(row.stage || 0),
-          wins: Number(row.wins || 0),
-          runs: Number(row.runs || 0),
-          winRate: Number(row.winRate || 0),
-          averageTurns: Number(row.averageTurns || 0),
-          targetMoveUses: row.p1Usage?.[targetKey]?.moveUsesByMove || {},
-          targetDecisionTrace: traceMoves
-            ? (row.p1SmartDecisionTrace || []).filter(decision =>
-                String(decision.active || '').toLowerCase().includes('typhlosion')
-              )
-            : [],
-        })),
-      },
+  }
+
+  const controlCandidate = candidates.find(candidate => candidate.label === 'two-active-control');
+  if (!controlCandidate) throw new Error('Policy intrusion control candidate missing');
+  const controlEvaluation = await evaluateCandidate(controlCandidate);
+  const controlRouteBuild = controlEvaluation.routeBuildPlan?.[targetKey] || null;
+  const fixedTargetBuild = controlRouteBuild
+    ? {
+        iv: controlRouteBuild.iv,
+        ivs: controlRouteBuild.ivs,
+        evSpread: controlRouteBuild.evSpread,
+        evs: controlRouteBuild.evs,
+        nature: controlRouteBuild.nature,
+        abilitySlot: controlRouteBuild.abilitySlot,
+        proxyScore: controlRouteBuild.proxyScore,
+      }
+    : null;
+  const fixedHeldItemsByBoss = Object.fromEntries(
+    (controlEvaluation.rows || []).map(row => [
+      String(row.boss),
+      Object.fromEntries(
+        Object.entries(row.playerBuilds || {}).map(([key, build]) => [key, build?.item || ''])
+      ),
+    ])
+  );
+
+  const rows = [rowFromEvaluation(controlCandidate, controlEvaluation)];
+  for (const candidate of candidates) {
+    if (candidate === controlCandidate) continue;
+    const evaluation = await evaluateCandidate(candidate, {
+      playerBuildOverrideByCandidate: fixedTargetBuild
+        ? { [targetKey]: fixedTargetBuild }
+        : null,
+      heldItemsByBoss: fixedHeldItemsByBoss,
     });
+    rows.push(rowFromEvaluation(candidate, evaluation));
   }
 
   const control = rows.find(row => row.label === 'two-active-control');
@@ -12571,7 +12614,9 @@ async function cmdMovesetBuildV2PolicyIntrusion() {
       traceMoves,
       fixedActiveCore: ['Eruption', 'Flamethrower', 'Ember'],
       controlFourth: 'Lava Plume',
-      note: 'Tests whether exposing one additional move changes actual smart-policy route outcomes; no move-specific scoring coefficients are introduced.',
+      fixedTargetBuildFromControl: fixedTargetBuild,
+      fixedHeldItemsFromControl: true,
+      note: 'Pure policy ablation: target EV/nature/ability build and full-team boss held-item assignments are frozen from the control; only exposed target moves differ.',
     },
     controlLabel: 'two-active-control',
     rows,
