@@ -12047,6 +12047,196 @@ async function cmdMovesetBuildV2FourthSlotScreen() {
   }, null, 2));
 }
 
+
+function compareMovesetActual(a, b) {
+  return Number(a.actual.expectedRetryFailures) - Number(b.actual.expectedRetryFailures) ||
+    Number(b.actual.geometricScore) - Number(a.actual.geometricScore) ||
+    Number(b.actual.meanWinRate) - Number(a.actual.meanWinRate) ||
+    movesetKey(a.moves).localeCompare(movesetKey(b.moves));
+}
+
+async function cmdMovesetBuildV2NeighborhoodScreen() {
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '50')))));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '1'))));
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'unbounded'),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Abra', 'Alakazam'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Lapras', 'Lapras'),
+    canonicalEvolutionVariant(pool, 'Chinchou', 'Lanturn'),
+    canonicalEvolutionVariant(pool, 'Larvitar', 'Tyranitar'),
+  ];
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const levels = Object.fromEntries(team.map(candidate => [candidateIdentity(candidate), commonLevel]));
+  const levelsByBattle = routeBosses.map(() => ({ ...levels }));
+  const singleUsePlan = planSingleUseMachines(team, routeBosses, moveAccess, { levelsByBattle });
+  const purchasable = planPurchasableMachines(
+    team,
+    routeBosses,
+    moveAccess,
+    singleUsePlan,
+    { levelsByBattle },
+  );
+  const purchasablePlan = purchasable.assignments;
+  const baselinePlan = buildEqualLevelRouteBuildPlan(
+    team,
+    routeBosses,
+    commonLevel,
+    moveAccess,
+    singleUsePlan,
+    purchasablePlan,
+    levels,
+  );
+
+  const target = team[0];
+  const targetKey = candidateIdentity(target);
+  const baselineMoves = [...(baselinePlan[targetKey]?.routeMoves || [])];
+  if (baselineMoves.length !== 4) {
+    throw new Error('Neighborhood screen requires a four-move Typhlosion baseline');
+  }
+
+  const lastBoss = routeBosses[routeBosses.length - 1];
+  let targetMon = materializeCandidateTeam(
+    [target],
+    lastBoss.stage,
+    commonLevel,
+    {
+      moveAccess,
+      singleUsePlan,
+      purchasablePlan,
+      levelsByCandidate: levels,
+      boss: lastBoss,
+    },
+  )[0];
+  if (!targetMon) throw new Error('Typhlosion target did not materialize');
+  targetMon = applyPlayerRouteBuild(targetMon, baselinePlan[targetKey]);
+
+  const assignedMachines = [
+    ...(singleUsePlan[targetKey] || []),
+    ...(purchasablePlan[targetKey] || []),
+  ];
+  const foeTeams = routeBosses.map(boss => hgssTrainerToShowdownTeam(boss.trainer, boss));
+  const enumeration = enumeratePlayerRouteMovesetsV2(
+    targetMon,
+    foeTeams,
+    {
+      stage: Number(lastBoss.stage),
+      moveAccess,
+      extraMachines: assignedMachines,
+      originSpeciesName: target.species,
+      poolCap: 64,
+      requiredMoves: baselineMoves,
+    },
+  );
+
+  const candidateByKey = new Map();
+  candidateByKey.set(movesetKey(baselineMoves), {
+    moves: baselineMoves,
+    changedSlot: null,
+    replacedMove: null,
+    replacementMove: null,
+    isBaseline: true,
+  });
+  for (let slot = 0; slot < baselineMoves.length; slot += 1) {
+    for (const replacementMove of enumeration.legalPool) {
+      if (replacementMove === baselineMoves[slot]) continue;
+      if (baselineMoves.includes(replacementMove)) continue;
+      const moves = [...baselineMoves];
+      const replacedMove = moves[slot];
+      moves[slot] = replacementMove;
+      if (new Set(moves).size !== 4) continue;
+      const key = movesetKey(moves);
+      if (!candidateByKey.has(key)) {
+        candidateByKey.set(key, {
+          moves,
+          changedSlot: slot,
+          replacedMove,
+          replacementMove,
+          isBaseline: false,
+        });
+      }
+    }
+  }
+
+  const rows = [];
+  for (const candidate of candidateByKey.values()) {
+    const evaluation = await evaluateEqualLevelStoryTeam(
+      team,
+      story,
+      commonLevel,
+      runs,
+      moveAccess,
+      {
+        seedOffset: 0,
+        routeMovesOverrideByCandidate: {
+          [targetKey]: candidate.moves,
+        },
+      },
+    );
+    rows.push({
+      ...candidate,
+      actual: {
+        expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+        geometricScore: routeRiskGeometricScore(evaluation),
+        meanWinRate: routeRiskMeanWinRate(evaluation),
+        worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
+        bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
+        targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
+      },
+    });
+  }
+
+  const baseline = rows.find(row => row.isBaseline);
+  if (!baseline) throw new Error('Neighborhood baseline evaluation missing');
+  const neighbors = rows.filter(row => !row.isBaseline).sort(compareMovesetActual);
+  const bySlot = baselineMoves.map((baselineMove, slot) => {
+    const slotRows = neighbors
+      .filter(row => row.changedSlot === slot)
+      .sort(compareMovesetActual);
+    return {
+      slot,
+      baselineMove,
+      baselineMoveUses: Number(
+        baseline.actual.targetUsage?.moveUsesByMove?.[baselineMove] || 0
+      ),
+      best: slotRows[0] || null,
+      top5: slotRows.slice(0, 5),
+    };
+  });
+  const actualSorted = [...rows].sort(compareMovesetActual);
+
+  await flushBattleCache();
+  await flushEqualLevelPreparationCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'P0-D actual-battle one-slot counterfactual neighborhood screen',
+    assumptions: {
+      version: 'HEARTGOLD',
+      commonLevel,
+      runsPerBoss: runs,
+      sameSeedsAcrossMovesets: true,
+      target: 'Typhlosion',
+      team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+      search: 'replace exactly one baseline move with every legal alternative',
+      note: 'Low-run actual battle screening only; finalists require higher-run validation.',
+    },
+    baseline,
+    legalMoveCount: enumeration.legalMoveCount,
+    neighborCount: neighbors.length,
+    bySlot,
+    top20: actualSorted.slice(0, 20),
+    allRows: rows,
+    battleCache: battleCacheStats(),
+    preparationCache: equalLevelPreparationCacheStats(),
+  }, null, 2));
+}
+
 async function cmdEqualLevelStoryEvaluate() {
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -12541,6 +12731,7 @@ const commands = {
   'equal-level-story-evaluate': cmdEqualLevelStoryEvaluate,
   'moveset-build-v2-probe': cmdMovesetBuildV2Probe,
   'moveset-build-v2-fourth-slot-screen': cmdMovesetBuildV2FourthSlotScreen,
+  'moveset-build-v2-neighborhood-screen': cmdMovesetBuildV2NeighborhoodScreen,
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
