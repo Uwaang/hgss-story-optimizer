@@ -714,9 +714,11 @@ function summarizeMemberUsage(candidates, rows) {
       appearances: 0,
       leadStarts: 0,
       moveUses: 0,
+      moveUsesByMove: {},
       activeTurns: 0,
       faints: 0,
       winningMoveUses: 0,
+      winningMoveUsesByMove: {},
       winningActiveTurns: 0,
       peakUseRate: 0,
       peakWinningUseRate: 0,
@@ -781,9 +783,17 @@ function summarizeMemberUsage(candidates, rows) {
       target.appearances += Number(usage.appearances || 0);
       target.leadStarts += Number(usage.leadStarts || 0);
       target.moveUses += moves;
+      for (const [moveName, count] of Object.entries(usage.moveUsesByMove || {})) {
+        target.moveUsesByMove[moveName] =
+          Number(target.moveUsesByMove[moveName] || 0) + Number(count || 0);
+      }
       target.activeTurns += activeTurns;
       target.faints += Number(usage.faints || 0);
       target.winningMoveUses += Number(usage.winningMoveUses || 0);
+      for (const [moveName, count] of Object.entries(usage.winningMoveUsesByMove || {})) {
+        target.winningMoveUsesByMove[moveName] =
+          Number(target.winningMoveUsesByMove[moveName] || 0) + Number(count || 0);
+      }
       target.winningActiveTurns += winningActiveTurns;
       target.bossUsage.push({
         boss: row.boss,
@@ -8228,9 +8238,11 @@ function matchupUsageForCandidate(result, candidateKey) {
       appearances: 0,
       leadStarts: 0,
       moveUses: 0,
+      moveUsesByMove: {},
       activeTurns: 0,
       faints: 0,
       winningMoveUses: 0,
+      winningMoveUsesByMove: {},
       winningActiveTurns: 0,
       useRate: 0,
       winningUseRate: 0,
@@ -9989,6 +10001,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
   }
 
   const score = weightedRuns ? weightedWins / weightedRuns : 0;
+  const memberUsage = summarizeMemberUsage(candidates, rows);
   const worstBossWinRate = rows.length
     ? Math.min(...rows.map(row => Number(row.winRate || 0)))
     : 0;
@@ -10018,6 +10031,7 @@ async function evaluateEqualLevelStoryTeam(candidates, story, commonLevel, runs,
     singleUsePlan,
     purchasablePlan,
     routeBuildPlan,
+    memberUsage,
     preparationCache: {
       ...equalLevelPreparationCacheStats(),
       reused: preparationCacheHit,
@@ -11774,6 +11788,7 @@ async function cmdMovesetBuildV2Probe() {
         meanWinRate: routeRiskMeanWinRate(evaluation),
         worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
         bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
+        targetUsage: evaluation.memberUsage?.[targetKey] || null,
         targetBuild: evaluation.routeBuildPlan?.[targetKey] || null,
       },
     });
