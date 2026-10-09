@@ -1925,6 +1925,24 @@ export function smartMoveActsBeforeNeutralPriority(moveName, activeSpeed, target
   return Math.max(1, Number(activeSpeed || 1)) >= Math.max(1, Number(targetSpeed || 1));
 }
 
+export function smartMoveHitProbability(moveName) {
+  const move = dex.moves.get(moveName);
+  if (!move.exists) return 0;
+  if (typeof move.accuracy !== 'number') return 1;
+  return Math.max(0, Math.min(1, Number(move.accuracy) / 100));
+}
+
+export function smartMoveKoProbability(active, target, requestedMove) {
+  const move = dex.moves.get(requestedMove?.move);
+  if (!active || !target || !move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
+  const hitProbability = smartMoveHitProbability(move.id);
+  if (hitProbability <= 0) return 0;
+  const expectedDamage = estimateBattleDamage(active, target, requestedMove);
+  const damageOnHit = expectedDamage / hitProbability;
+  const targetHp = Math.max(1, Number(target?.hp || target?.maxhp || 1));
+  return damageOnHit >= targetHp ? hitProbability : 0;
+}
+
 function smartMoveScore(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove?.move);
   if (!move.exists || requestedMove?.disabled) return -Infinity;
@@ -1936,12 +1954,12 @@ function smartMoveScore(active, target, requestedMove) {
   const targetSpeed = Math.max(1, Number(target?.getStat?.('spe') || target?.storedStats?.spe || 1));
   const priority = Number(move.priority || 0);
   const actsFirst = smartMoveActsBeforeNeutralPriority(move.id, activeSpeed, targetSpeed);
-  const ko = damage >= targetHp;
+  const koProbability = smartMoveKoProbability(active, target, requestedMove);
   let score = 100 * damage / targetMaxHp;
-  if (ko) score += actsFirst ? 420 : 220;
+  if (koProbability > 0) score += (actsFirst ? 420 : 220) * koProbability;
   if (priority > 0 && targetHp <= damage * 1.2) score += 45;
   const incoming = bestExpectedDamage(target, active);
-  if (!actsFirst && incoming >= Number(active?.hp || 0) && !ko) score *= 0.3;
+  if (!actsFirst && incoming >= Number(active?.hp || 0) && koProbability <= 0) score *= 0.3;
   return score;
 }
 
@@ -2221,6 +2239,9 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
               score: Number(entry.score),
               estimatedDamage: active && foeActive
                 ? Number(estimateBattleDamage(active, foeActive, entry.move))
+                : 0,
+              koProbability: active && foeActive
+                ? Number(smartMoveKoProbability(active, foeActive, entry.move))
                 : 0,
               priority: Number(move?.priority || 0),
               accuracy: typeof move?.accuracy === 'number' ? Number(move.accuracy) : true,
