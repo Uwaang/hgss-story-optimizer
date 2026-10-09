@@ -27,16 +27,16 @@ jobs:
           node src/cli.mjs tutor-smoke
           node src/cli.mjs move-score-smoke
           node src/cli.mjs evolution-legality-smoke
-      - name: Rhyperior full-route 20-run explicit candidates
+      - name: Tyranitar Red-only 100-run explicit candidates
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs moveset-build-v2-explicit-validate \
-            --level=50 --runs=20 --target=Rhyperior \
-            --sets="baseline=Earthquake/Stone Edge/Hammer Arm/Poison Jab;scary=Earthquake/Stone Edge/Hammer Arm/Scary Face;surf=Earthquake/Stone Edge/Hammer Arm/Surf;rock-blast=Earthquake/Stone Edge/Hammer Arm/Rock Blast;strength=Earthquake/Stone Edge/Hammer Arm/Strength" \
-            > results/research-v2/rhyperior-explicit-full20.json
+            --level=57 --runs=100 --target=Tyranitar --bosses="Red" \
+            --sets="baseline=Earthquake/Stone Edge/Leer/Sandstorm;proxy-top=Bite/Crunch/Earthquake/Stone Edge;headbutt=Crunch/Earthquake/Stone Edge/Headbutt;payback=Payback/Crunch/Earthquake/Stone Edge;rock-slide=Rock Slide/Crunch/Earthquake/Stone Edge;dark-pulse=Dark Pulse/Crunch/Earthquake/Stone Edge;screech=Screech/Crunch/Earthquake/Stone Edge;hyper-beam=Hyper Beam/Crunch/Earthquake/Stone Edge" \
+            > results/research-v2/tyranitar-red57-explicit100.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('results/research-v2/rhyperior-explicit-full20.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/tyranitar-red57-explicit100.json','utf8'));
           console.log(JSON.stringify(r.rows.map(x=>({
             label:x.label,
             moves:x.moves,
@@ -50,6 +50,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-rhyperior-explicit-full20
-          path: hgss_story_sim/results/research-v2/rhyperior-explicit-full20.json
+          name: research-v2-tyranitar-red57-explicit100
+          path: hgss_story_sim/results/research-v2/tyranitar-red57-explicit100.json
           if-no-files-found: error
