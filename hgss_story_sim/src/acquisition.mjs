@@ -396,13 +396,44 @@ function effectiveEvolutionItemAccess(baseAccess, earliest, personalRows, bosses
   return result;
 }
 
+const CONDITIONAL_LEVEL_EVOLUTION_METHODS = new Set([
+  'EVO_LEVEL_ATK_EQ_DEF',
+  'EVO_LEVEL_ATK_GT_DEF',
+  'EVO_LEVEL_ATK_LT_DEF',
+  'EVO_LEVEL_FEMALE',
+  'EVO_LEVEL_MALE',
+  'EVO_LEVEL_NINJASK',
+  'EVO_LEVEL_PID_HI',
+  'EVO_LEVEL_PID_LO',
+  'EVO_LEVEL_SHEDINJA',
+]);
+
+function conditionalLevelEvolutionCondition(method) {
+  const conditions = {
+    EVO_LEVEL_ATK_EQ_DEF: 'atk=def',
+    EVO_LEVEL_ATK_GT_DEF: 'atk>def',
+    EVO_LEVEL_ATK_LT_DEF: 'atk<def',
+    EVO_LEVEL_FEMALE: 'female',
+    EVO_LEVEL_MALE: 'male',
+    EVO_LEVEL_NINJASK: 'ninjask-branch',
+    EVO_LEVEL_PID_HI: 'pid-high',
+    EVO_LEVEL_PID_LO: 'pid-low',
+    EVO_LEVEL_SHEDINJA: 'shedinja-branch',
+  };
+  return conditions[method] || null;
+}
+
 function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlockStage, itemAccess, order) {
   const fromSpecies = constantToName(fromConst, 'SPECIES_');
   const targetSpecies = constantToName(evo.target, 'SPECIES_');
-  if (evo.method === 'EVO_LEVEL' && Number.isFinite(Number(evo.param))) {
+  if (
+    (evo.method === 'EVO_LEVEL' || CONDITIONAL_LEVEL_EVOLUTION_METHODS.has(evo.method)) &&
+    Number.isFinite(Number(evo.param))
+  ) {
     const nextBattle = bosses.find(
       boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(evo.param)
     );
+    const condition = conditionalLevelEvolutionCondition(evo.method);
     return {
       order,
       stage: Number(nextBattle?.stage ?? availableFrom),
@@ -411,7 +442,10 @@ function evolutionTransitionFor(evo, fromConst, availableFrom, bosses, tradeUnlo
       species: targetSpecies,
       derived: 'level-evolution',
       evolutionMethod: evo.method,
-      reason: `level ${evo.param}`,
+      evolutionCondition: condition,
+      reason: condition
+        ? `level ${evo.param} + ${condition}`
+        : `level ${evo.param}`,
     };
   }
   if (evo.method === 'EVO_TRADE') {
@@ -501,10 +535,12 @@ function buildTradeAwareEvolutionPaths(
     );
     const edges = [];
     // Preserve prior conservative behavior: only an unambiguous plain level
-    // evolution is auto-followed.
+    // evolution is auto-followed. Conditional level branches are explicit
+    // alternatives and remain distinct search variants.
     if (levelEvos.length === 1) edges.push(levelEvos[0]);
     for (const evo of all) {
       if (
+        CONDITIONAL_LEVEL_EVOLUTION_METHODS.has(evo.method) ||
         evo.method === 'EVO_TRADE' ||
         evo.method === 'EVO_TRADE_ITEM' ||
         evo.method === 'EVO_STONE' ||
