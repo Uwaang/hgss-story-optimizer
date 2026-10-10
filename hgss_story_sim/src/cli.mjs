@@ -6586,6 +6586,9 @@ async function cmdExpSchedulerV1ActivationScan() {
   const requestedActivationLabels = activationLabels.length
     ? new Set(activationLabels)
     : null;
+  const baseScheduleBase64 = String(arg('base-recipient-schedule-base64', '')).trim();
+  const baseRecipientSchedule =
+    decodeRecipientActivationScheduleBase64(baseScheduleBase64);
 
   const story = await loadStory();
   const [pool, moveAccess, baseExpContext] = await Promise.all([
@@ -6614,16 +6617,10 @@ async function cmdExpSchedulerV1ActivationScan() {
     throw new Error('Scheduler-v1 activation-scan control team violates constraints');
   }
 
-  const target = team.find(candidate =>
-    String(candidate.species).toLowerCase() === targetName.toLowerCase() ||
-    String(candidate.terminalSpecies || candidate.species).toLowerCase() === targetName.toLowerCase()
-  );
-  if (!target) throw new Error('Scheduler-v1 activation target not found: ' + targetName);
+  const target = resolveRecipientScheduleCandidate(team, targetName);
 
   const targetKey = candidateIdentity(target);
   const routeBosses = storyBattlesForCandidates(story.bosses, team);
-  const allKeys = team.map(candidateIdentity);
-  const withoutTarget = allKeys.filter(key => key !== targetKey);
   const firstEligibleIndex = routeBosses.findIndex(
     boss => Number(boss.stage) >= Number(target.availableFrom || 0)
   );
@@ -6631,16 +6628,15 @@ async function cmdExpSchedulerV1ActivationScan() {
     throw new Error('Scheduler-v1 activation target never becomes available on route');
   }
 
-  function recipientPolicyUntil(activationIndex) {
-    return Object.fromEntries(
-      routeBosses.slice(0, activationIndex).map((_boss, battleIndex) => [
-        String(battleIndex),
-        withoutTarget,
-      ])
-    );
-  }
-
-  async function evaluate(label, activationIndex, recipientPolicy) {
+  async function evaluate(label, activationIndex, activationToken) {
+    const schedule = {
+      ...baseRecipientSchedule,
+      [targetKey]: activationToken,
+    };
+    const {
+      recipientPolicy,
+      resolvedSchedule,
+    } = buildRecipientPolicyFromActivationSchedule(team, routeBosses, schedule);
     const evaluation = await evaluateCandidatesWithMoveAccess(
       team,
       story.bosses,
@@ -6679,12 +6675,13 @@ async function cmdExpSchedulerV1ActivationScan() {
       targetRouteExpAtActivation: activationBattle
         ? Number(activationBattle.routeAllocatedExpBefore?.[targetKey] || 0)
         : null,
+      recipientSchedule: resolvedSchedule,
     };
   }
 
   const rows = [];
   if (!requestedActivationLabels || requestedActivationLabels.has('always-active')) {
-    rows.push(await evaluate('always-active', null, {}));
+    rows.push(await evaluate('always-active', null, 'always-active'));
   }
   for (let activationIndex = firstEligibleIndex; activationIndex < routeBosses.length; activationIndex += 1) {
     const label = 'activate-' + routeBosses[activationIndex].label;
@@ -6692,7 +6689,7 @@ async function cmdExpSchedulerV1ActivationScan() {
     rows.push(await evaluate(
       label,
       activationIndex,
-      recipientPolicyUntil(activationIndex),
+      routeBosses[activationIndex].label,
     ));
   }
   if (requestedActivationLabels) {
@@ -6755,7 +6752,8 @@ async function cmdExpSchedulerV1ActivationScan() {
       sameStageJoinPolicy: baseExpContext.sameStageJoinPolicy,
       routeGrindProxyTarget,
       activationLabels: activationLabels.length ? activationLabels : 'all',
-      searchState: 'single target activation checkpoint; acquired target may remain benched from EXP receipt until activation',
+      baseRecipientSchedule,
+      searchState: 'single-coordinate activation checkpoint screen over a generic multi-member recipient schedule',
     },
     firstEligibleIndex,
     firstEligibleBoss: routeBosses[firstEligibleIndex]?.label || null,
