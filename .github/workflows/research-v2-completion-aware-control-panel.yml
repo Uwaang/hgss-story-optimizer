@@ -85,7 +85,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: research-v2-completion-control-*
-          path: results/research-v2/control-panel
+          path: hgss_story_sim/results/research-v2/control-panel
           merge-multiple: true
       - name: Summarize cross-basin completion gaps
         run: |
