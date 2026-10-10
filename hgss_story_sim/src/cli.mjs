@@ -21,6 +21,7 @@ import {
 } from './recipient-scheduler.mjs';
 import {
   completionRecallSummary,
+  rankParentCompletions,
 } from './completion-aware.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -3817,6 +3818,115 @@ async function cmdCompletionAwareArtifactRank() {
     sourceCounts,
     controlKindPrefix,
     ...summary,
+  }, null, 2));
+}
+
+
+async function cmdRouteExpStoryCompletionRollout() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const parentLimitRaw = Math.floor(Number(arg('parent-limit', '0')));
+  const parentLimit = Number.isFinite(parentLimitRaw) && parentLimitRaw > 0
+    ? parentLimitRaw
+    : null;
+  const childCandidateLimitRaw = Math.floor(Number(arg('child-candidate-limit', '0')));
+  const childCandidateLimit =
+    Number.isFinite(childCandidateLimitRaw) && childCandidateLimitRaw > 0
+      ? childCandidateLimitRaw
+      : null;
+
+  const byKey = stagedCandidateMap(ctx);
+  const screened = (checkpoint.screenedKeys || []).map(key => {
+    const candidate = byKey.get(key);
+    if (!candidate) throw new Error('screened candidate missing: ' + key);
+    return candidate;
+  });
+  if (!screened.length) {
+    throw new Error('completion rollout requires checkpoint.screenedKeys');
+  }
+
+  const sourceParents = (checkpoint.beam || []).map(row => ({
+    teamKeys: row.teamKeys,
+    evaluation: row.evaluation || null,
+  }));
+  if (!sourceParents.length) {
+    throw new Error('completion rollout checkpoint beam is empty');
+  }
+  const parentSize = sourceParents[0].teamKeys.length;
+  if (!sourceParents.every(row => row.teamKeys.length === parentSize)) {
+    throw new Error('completion rollout parent beam contains mixed team sizes');
+  }
+  if (parentSize >= 6) {
+    throw new Error('completion rollout requires parent team size < 6');
+  }
+
+  const orderedParents = [...sourceParents].sort((a, b) => {
+    if (a.evaluation && b.evaluation) {
+      const byObjective = evaluationObjectiveCompare(
+        a.evaluation,
+        b.evaluation,
+        ctx.objective,
+      );
+      if (byObjective) return byObjective;
+    }
+    return [...a.teamKeys].sort().join('|').localeCompare(
+      [...b.teamKeys].sort().join('|')
+    );
+  });
+  const parents = parentLimit
+    ? orderedParents.slice(0, parentLimit)
+    : orderedParents;
+
+  const childCandidates = childCandidateLimit
+    ? screened.slice(0, childCandidateLimit)
+    : screened;
+
+  const childMap = new Map();
+  for (const parent of parents) {
+    const team = stagedTeamFromKeys(parent.teamKeys, byKey);
+    const existing = new Set(parent.teamKeys);
+    for (const candidate of childCandidates) {
+      const key = candidateIdentity(candidate);
+      if (existing.has(key)) continue;
+      const childTeam = [...team, candidate];
+      if (!validateCandidateTeam(childTeam) || !teamRespectsExclusiveGroups(childTeam)) {
+        continue;
+      }
+      const childKey = childTeam.map(candidateIdentity).sort().join('|');
+      if (childMap.has(childKey)) continue;
+      const evaluation = await stagedEvaluateTeam(ctx, childTeam, runs);
+      childMap.set(childKey, {
+        teamKeys: childTeam.map(candidateIdentity),
+        evaluation,
+      });
+    }
+  }
+
+  const children = [...childMap.values()];
+  const ranked = rankParentCompletions(parents, children);
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'completion-aware-one-step-rollout',
+    purpose: 'SCRUM-418 generic one-step completion potential for partial team states',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+    parentSize,
+    childSize: parentSize + 1,
+    runs,
+    sourceParentCount: sourceParents.length,
+    evaluatedParentCount: parents.length,
+    screenedCandidateCount: screened.length,
+    rolloutCandidateCount: childCandidates.length,
+    uniqueChildren: ranked.uniqueChildren,
+    wallMs: Date.now() - startedAt,
+    battleCache: battleCacheStats(),
+    rows: ranked.rows,
   }, null, 2));
 }
 
@@ -14851,6 +14961,7 @@ const commands = {
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
+  'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
