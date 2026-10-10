@@ -1,0 +1,86 @@
+name: research-v2-completion-aware-recall
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  historical-recall:
+    if: contains(github.event.head_commit.message, '[research-v2-completion-recall]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Download historical completion-aware parents
+        uses: actions/download-artifact@v4
+        with:
+          name: beam4-completion-aware-parents-v1
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download successful original 5-member children
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37106088087
+          github-token: ${{ github.token }}
+      - name: Download recovered 5-member children
+        uses: actions/download-artifact@v4
+        with:
+          pattern: beam4-completion-aware-recovery-child-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 37112225313
+          github-token: ${{ github.token }}
+      - name: Reproduce historical prefix recall with generic v2 utility
+        run: |
+          set -euo pipefail
+          INPUTS="$(find results/children -name 'beam-5-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs completion-aware-artifact-rank \
+            --parents=results/input/parent-info.json \
+            --inputs="$INPUTS" \
+            --control-kind-prefix=n04 \
+            --top-k=6 \
+            --expected-children=1150 \
+            --require-control-top-k=true \
+            > results/completion-aware-recall.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/completion-aware-recall.json','utf8'));
+          const best=r.bestControl;
+          if (!best) throw new Error('missing historical control result');
+          console.log(JSON.stringify({
+            parentCount:r.parentCount,
+            uniqueChildren:r.uniqueChildren,
+            controlRecoveredIntoTopK:r.controlRecoveredIntoTopK,
+            bestControl:{
+              rank:best.completionRank,
+              teamKeys:best.teamKeys,
+              currentMetrics:best.currentMetrics,
+              bestChild:best.bestChild
+            },
+            controlRanks:r.controlRanks
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-completion-aware-recall
+          path: hgss_story_sim/results/completion-aware-recall.json
+          if-no-files-found: error
