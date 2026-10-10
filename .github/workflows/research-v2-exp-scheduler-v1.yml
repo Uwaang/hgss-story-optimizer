@@ -34,10 +34,14 @@ jobs:
       - name: Scheduler v1 Pareto/state smoke
         run: |
           node src/cli.mjs exp-scheduler-v1-pareto-smoke | tee results/research-v2/exp-scheduler-v1-pareto-smoke.json
+      - name: Scheduler v1 frontier expansion
+        run: |
+          node src/cli.mjs exp-scheduler-v1-frontier-expand | tee results/research-v2/exp-scheduler-v1-frontier-expand.json
       - uses: actions/upload-artifact@v4
         with:
           name: research-v2-exp-scheduler-v1-smoke
           path: |
             hgss_story_sim/results/research-v2/exp-scheduler-v1-smoke.json
             hgss_story_sim/results/research-v2/exp-scheduler-v1-pareto-smoke.json
+            hgss_story_sim/results/research-v2/exp-scheduler-v1-frontier-expand.json
           if-no-files-found: error
