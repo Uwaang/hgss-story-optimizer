@@ -6792,6 +6792,143 @@ async function cmdExpSchedulerV1ActivationScan() {
 }
 
 
+async function cmdExpSchedulerV1EvolutionTriggerSmoke() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const cases = [
+    {
+      origin: 'Sneasel',
+      terminal: 'Weavile',
+      method: 'EVO_ITEM_NIGHT',
+      condition: 'item-night',
+      requiredItem: 'ITEM_RAZOR_CLAW',
+    },
+    {
+      origin: 'Gligar',
+      terminal: 'Gliscor',
+      method: 'EVO_ITEM_NIGHT',
+      condition: 'item-night',
+      requiredItem: 'ITEM_RAZOR_FANG',
+    },
+    {
+      origin: 'Swinub',
+      terminal: 'Mamoswine',
+      method: 'EVO_HAS_MOVE',
+      requiredMove: 'MOVE_ANCIENT_POWER',
+    },
+  ];
+
+  const variants = cases.map(spec => {
+    const candidate = canonicalEvolutionVariant(pool, spec.origin, spec.terminal);
+    const transition = [...(candidate.speciesByStage || [])]
+      .reverse()
+      .find(row => String(row.species) === spec.terminal);
+    if (!transition) {
+      throw new Error(
+        'Missing scheduler evolution transition for ' + spec.origin + '->' + spec.terminal
+      );
+    }
+    if (String(transition.evolutionMethod) !== spec.method) {
+      throw new Error(
+        'Unexpected evolution method for ' + spec.origin + '->' + spec.terminal +
+        ': ' + transition.evolutionMethod
+      );
+    }
+    if (spec.requiredItem && String(transition.requiredItem) !== spec.requiredItem) {
+      throw new Error('Missing required item for ' + spec.terminal);
+    }
+    if (spec.requiredMove && String(transition.requiredMove) !== spec.requiredMove) {
+      throw new Error('Missing required move for ' + spec.terminal);
+    }
+    if (
+      spec.method === 'EVO_ITEM_NIGHT' &&
+      !transition.requiresLevelUpAfterCheckpoint
+    ) {
+      throw new Error(spec.terminal + ' must remain pending until a post-item level-up');
+    }
+    return { spec, candidate, transition };
+  });
+
+  const expContext = await loadExpContext(
+    story,
+    'normal-route',
+    'HEARTGOLD',
+    'none',
+    'max',
+    'map-order',
+    'balanced',
+  );
+
+  const schedules = [];
+  for (const { spec, candidate, transition } of variants) {
+    const route = storyBattlesForCandidates(story.bosses, [candidate]);
+    const schedule = buildTeamExpSchedule({
+      candidates: [candidate],
+      routeBosses: route,
+      expWorld: expContext.world,
+      profile: 'normal-route',
+      grindPolicy: 'none',
+      entryLevelPolicy: 'max',
+      sameStageJoinPolicy: 'map-order',
+      allocator: 'balanced',
+    });
+    const key = candidateIdentity(candidate);
+    const history = schedule.evolutionHistory?.[key] || [];
+    const targetEvent = history.find(row => row.species === spec.terminal) || null;
+    if (
+      targetEvent &&
+      transition.requiresLevelUpAfterCheckpoint &&
+      targetEvent.trigger !== 'level-up-after-condition'
+    ) {
+      throw new Error(
+        spec.terminal + ' evolved without a post-condition level-up: ' +
+        JSON.stringify(targetEvent)
+      );
+    }
+
+    const materializedSnapshots = schedule.battles
+      .filter(battle => battle.speciesBefore?.[key])
+      .map(battle => ({
+        boss: battle.label,
+        level: battle.levelsBefore?.[key] ?? null,
+        species: battle.speciesBefore?.[key] ?? null,
+        pending: battle.evolutionStateBefore?.[key]?.pending || null,
+      }));
+
+    schedules.push({
+      origin: spec.origin,
+      terminal: spec.terminal,
+      key,
+      transition,
+      targetEvent,
+      finalSpecies: schedule.finalSpecies?.[key] || null,
+      snapshots: materializedSnapshots.filter((row, index, rows) =>
+        index === 0 ||
+        row.species !== rows[index - 1].species ||
+        Boolean(row.pending) !== Boolean(rows[index - 1].pending)
+      ),
+    });
+  }
+
+  const weavile = schedules.find(row => row.terminal === 'Weavile');
+  const gliscor = schedules.find(row => row.terminal === 'Gliscor');
+  for (const row of [weavile, gliscor]) {
+    if (!row?.targetEvent) {
+      throw new Error(row?.terminal + ' never triggered in the full-route scheduler smoke');
+    }
+    if (row.targetEvent.trigger !== 'level-up-after-condition') {
+      throw new Error(row.terminal + ' trigger was not scheduler level-up state');
+    }
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 pending evolution-trigger scheduler regression smoke',
+    cases: schedules,
+  }, null, 2));
+}
+
+
 async function cmdExpSchedulerV1ParetoSmoke() {
   const objectives = [
     { key: 'story50', direction: 'min' },
@@ -14572,6 +14709,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
+  'exp-scheduler-v1-evolution-trigger-smoke': cmdExpSchedulerV1EvolutionTriggerSmoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,
   'exp-scheduler-v1-frontier-screen': cmdExpSchedulerV1FrontierScreen,
