@@ -14,6 +14,11 @@ import {
   teamRespectsExclusiveGroups,
   validateAndResolveCandidates,
 } from './availability.mjs';
+import {
+  expandRecipientScheduleCoordinates,
+  nondominatedScheduleRows,
+  recipientScheduleStateKey,
+} from './recipient-scheduler.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MONEY_PER_COIN = 20;
@@ -6761,6 +6766,111 @@ async function cmdExpSchedulerV1ActivationScan() {
     top10: ranked.slice(0, 10),
     allRows: rows,
     battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
+async function cmdExpSchedulerV1ParetoSmoke() {
+  const objectives = [
+    { key: 'story50', direction: 'min' },
+    { key: 'red25', direction: 'min' },
+    { key: 'red50', direction: 'min' },
+  ];
+  const validated = [
+    {
+      name: 'control',
+      feasible: true,
+      schedule: { Quagsire: 'Lance' },
+      story50: 792,
+      red25: 1523,
+      red50: 1802,
+    },
+    {
+      name: 'gengar-rhyperior-lance',
+      feasible: true,
+      schedule: { Quagsire: 'Lance', Gengar: 'Lance', Rhyperior: 'Lance' },
+      story50: 791,
+      red25: 1591,
+      red50: 1785,
+    },
+    {
+      name: 'rhyperior-misty',
+      feasible: true,
+      schedule: { Quagsire: 'Lance', Rhyperior: 'Misty' },
+      story50: 757,
+      red25: 1612,
+      red50: 1806,
+    },
+    {
+      name: 'dominated-regression-control',
+      feasible: true,
+      schedule: { Quagsire: 'Lance', Gengar: 'Red' },
+      story50: 900,
+      red25: 1700,
+      red50: 1900,
+    },
+    {
+      name: 'infeasible-control',
+      feasible: false,
+      schedule: { Quagsire: 'Red' },
+      story50: 700,
+      red25: 1400,
+      red50: 1700,
+    },
+  ];
+
+  const frontier = nondominatedScheduleRows(validated, objectives);
+  const frontierNames = frontier.map(row => row.name).sort();
+  const expectedFrontier = [
+    'control',
+    'gengar-rhyperior-lance',
+    'rhyperior-misty',
+  ].sort();
+  if (JSON.stringify(frontierNames) !== JSON.stringify(expectedFrontier)) {
+    throw new Error(
+      'Scheduler Pareto smoke frontier mismatch: ' +
+      JSON.stringify({ frontierNames, expectedFrontier })
+    );
+  }
+
+  const keyA = recipientScheduleStateKey({ Rhyperior: 'Misty', Quagsire: 'Lance' });
+  const keyB = recipientScheduleStateKey({ Quagsire: 'Lance', Rhyperior: 'Misty' });
+  if (keyA !== keyB) {
+    throw new Error('Recipient schedule state key is not deterministic');
+  }
+
+  const neighbors = expandRecipientScheduleCoordinates({
+    schedule: { Quagsire: 'Lance' },
+    members: ['Gengar', 'Rhyperior'],
+    checkpoints: ['Will', 'Lance', 'Misty'],
+  });
+  const neighborKeys = new Set(neighbors.map(row => row.stateKey));
+  if (neighbors.length !== neighborKeys.size) {
+    throw new Error('Recipient schedule coordinate expansion emitted duplicate states');
+  }
+  if (!neighbors.some(row =>
+    row.member === 'Rhyperior' &&
+    row.to === 'Misty' &&
+    row.schedule.Rhyperior === 'Misty' &&
+    row.schedule.Quagsire === 'Lance'
+  )) {
+    throw new Error('Recipient schedule coordinate expansion missed Rhyperior->Misty');
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 recipient schedule Pareto/state utility regression smoke',
+    objectives,
+    frontier: frontier.map(row => ({
+      name: row.name,
+      stateKey: recipientScheduleStateKey(row.schedule),
+      story50: row.story50,
+      red25: row.red25,
+      red50: row.red50,
+    })),
+    deterministicKey: keyA,
+    neighborCount: neighbors.length,
+    sampleNeighbors: neighbors.slice(0, 8),
   }, null, 2));
 }
 
@@ -14192,6 +14302,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
+  'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-activation-scan': cmdExpSchedulerV1ActivationScan,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'team-order-smoke': cmdTeamOrderSmoke,
