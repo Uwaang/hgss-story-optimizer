@@ -1,0 +1,130 @@
+name: research-v2-completion-aware-control-panel
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  prefix-probe:
+    if: contains(github.event.head_commit.message, '[research-v2-completion-control-panel]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - control: idx30-core
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIl0=
+          - control: idx168-d-core
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHYXN0bHk6Okdhc3RseS0+R2VuZ2FyIzEiLCJSaHlob3JuOjpSaHlob3JuLT5SaHlwZXJpb3IjMSJd
+          - control: idx217-a-core
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiR2VvZHVkZTo6R2VvZHVkZS0+R29sZW0jMSIsIlBpbmVjbzo6UGluZWNvLT5Gb3JyZXRyZXNzIzEiLCJNYXJlZXA6Ok1hcmVlcC0+QW1waGFyb3MjMSJd
+          - control: idx83-b-core
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHZW9kdWRlOjpHZW9kdWRlLT5Hb2xlbSMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/completion-control-${{ matrix.control }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Probe current-evaluator completion potential
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64="${{ matrix.prefix }}" \
+            --runs=1 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/research-v2/control-${{ matrix.control }}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const control=process.env.CONTROL;
+          const r=JSON.parse(fs.readFileSync(`results/research-v2/control-${control}.json`,'utf8'));
+          if (!r.bestChild) throw new Error('completion probe found no legal child');
+          console.log(JSON.stringify({
+            control,
+            runs:r.runs,
+            prefixKeys:r.prefixKeys,
+            parentMetrics:r.parentMetrics,
+            legalChildCount:r.legalChildCount,
+            bestChild:r.bestChild,
+            improvement:r.improvement,
+            battleCache:r.battleCache
+          },null,2));
+          NODE
+        env:
+          CONTROL: ${{ matrix.control }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-completion-control-${{ matrix.control }}
+          path: hgss_story_sim/results/research-v2/control-${{ matrix.control }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-completion-control-panel]')
+    needs: prefix-probe
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-completion-control-*
+          path: results/research-v2/control-panel
+          merge-multiple: true
+      - name: Summarize cross-basin completion gaps
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/research-v2/control-panel';
+          const files=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort();
+          const rows=files.map(file=>{
+            const r=JSON.parse(fs.readFileSync(`${dir}/${file}`,'utf8'));
+            return {
+              control:file.replace(/^control-/,'').replace(/\.json$/,''),
+              prefixKeys:r.prefixKeys,
+              parentMetrics:r.parentMetrics,
+              legalChildCount:r.legalChildCount,
+              bestAddedKey:r.bestChild?.addedKey ?? null,
+              bestChildMetrics:r.bestChild?.metrics ?? null,
+              improvement:r.improvement
+            };
+          });
+          const summary={
+            schemaVersion:1,
+            runsPerBoss:1,
+            evaluator:'current source-backed complete-route / boss-aware-soft / no-grind',
+            controls:rows,
+            retryGapControls:rows.filter(x=>(x.improvement?.retry ?? 0) > 0).map(x=>x.control),
+            geometricGapControls:rows.filter(x=>(x.improvement?.geometric ?? 0) > 0).map(x=>x.control),
+            meanGapControls:rows.filter(x=>(x.improvement?.mean ?? 0) > 0).map(x=>x.control),
+            progressOnlyControls:rows.filter(x=>
+              (x.improvement?.retry ?? 0) === 0 &&
+              (x.improvement?.geometric ?? 0) === 0 &&
+              (x.improvement?.mean ?? 0) === 0 &&
+              (x.improvement?.progress ?? 0) > 0
+            ).map(x=>x.control)
+          };
+          fs.writeFileSync('results/research-v2/completion-control-panel-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-completion-control-panel-summary
+          path: hgss_story_sim/results/research-v2/completion-control-panel-summary.json
+          if-no-files-found: error
