@@ -821,6 +821,7 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
   const singleUsePlan = options.singleUsePlan || {};
   const purchasablePlan = options.purchasablePlan || {};
   const levelsByCandidate = options.levelsByCandidate || null;
+  const speciesByCandidate = options.speciesByCandidate || null;
   const checkpointIndex = Number.isFinite(Number(options.routeIndex))
     ? Number(options.routeIndex)
     : Number(options.boss?._routeIndex);
@@ -832,7 +833,10 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       const candidateLevel = levelsByCandidate && Number.isFinite(Number(levelsByCandidate[key]))
         ? Math.max(1, Math.min(100, Math.floor(Number(levelsByCandidate[key]))))
         : level;
-      const speciesName = candidateSpeciesAtStage(mon, stage, candidateLevel, checkpointIndex);
+      const speciesName =
+        speciesByCandidate && speciesByCandidate[key]
+          ? String(speciesByCandidate[key])
+          : candidateSpeciesAtStage(mon, stage, candidateLevel, checkpointIndex);
       const species = dex.species.get(speciesName);
       if (!species.exists) throw new Error(`Unknown candidate species: ${speciesName}`);
       const assignedMachines = [
