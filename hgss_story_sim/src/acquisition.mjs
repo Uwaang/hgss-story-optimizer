@@ -471,6 +471,25 @@ function naturalMoveEvolutionLevel(fromSpecies, moveConst, entryLevelMax, transi
   return levels[0] ?? null;
 }
 
+function moveReminderCanTeachEvolutionMove(fromSpecies, moveConst, currentLevel) {
+  const level = Number(currentLevel);
+  if (!Number.isFinite(level)) return false;
+  const species = GEN4_DEX.species.get(fromSpecies);
+  const moveName = constantToName(moveConst, 'MOVE_');
+  const move = GEN4_DEX.moves.get(moveName);
+  if (!species.exists || !move.exists) return false;
+  const learnset = GEN4_DEX.species.getLearnsetData(species.id).learnset || {};
+  return (learnset[move.id] || []).some(source => {
+    const match = /^4L(\d+)$/.exec(source);
+    return match && Number(match[1]) <= level;
+  });
+}
+
+const HELD_ITEM_LEVEL_EVOLUTION_METHODS = new Set([
+  'EVO_ITEM_DAY',
+  'EVO_ITEM_NIGHT',
+]);
+
 function evolutionTransitionFor(
   evo,
   fromConst,
@@ -536,22 +555,82 @@ function evolutionTransitionFor(
       options.entryLevelMax,
       options.priorTransitions,
     );
-    if (triggerLevel == null || !Number.isFinite(Number(triggerLevel))) return null;
-    const nextBattle = bosses.find(
-      boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(triggerLevel)
+    if (triggerLevel != null && Number.isFinite(Number(triggerLevel))) {
+      const nextBattle = bosses.find(
+        boss => Number(boss.stage) >= Number(availableFrom) && Number(boss.aceLevel) >= Number(triggerLevel)
+      );
+      return {
+        order,
+        stage: Number(nextBattle?.stage ?? availableFrom),
+        level: Number(triggerLevel),
+        fromSpecies,
+        species: targetSpecies,
+        derived: 'level-evolution',
+        evolutionMethod: evo.method,
+        evolutionCondition: 'known-move-natural',
+        requiredMove: String(evo.param),
+        requiresLevelUp: true,
+        reason: `learn ${evo.param} naturally at level ${triggerLevel} + evolve on that level-up`,
+      };
+    }
+
+    const priorLevel = priorEvolutionLevel(
+      options.entryLevelMax,
+      options.priorTransitions,
     );
+    const reminder = options.moveReminderAccess || null;
+    if (
+      reminder &&
+      Number.isFinite(Number(reminder.availableFrom)) &&
+      moveReminderCanTeachEvolutionMove(fromSpecies, String(evo.param), priorLevel)
+    ) {
+      const conditionStage = Math.max(
+        Number(availableFrom || 0),
+        Number(reminder.availableFrom),
+      );
+      return {
+        order,
+        stage: conditionStage,
+        checkpointIndex: evolutionCheckpointIndex(bosses, { availableFrom: conditionStage }),
+        fromSpecies,
+        species: targetSpecies,
+        derived: 'level-up-trigger-evolution',
+        evolutionMethod: evo.method,
+        evolutionCondition: 'known-move-reminder',
+        requiredMove: String(evo.param),
+        requiresLevelUp: true,
+        requiresLevelUpAfterCheckpoint: true,
+        conditionSource: reminder.source || null,
+        reason: `relearn ${evo.param} once Move Reminder is available, then evolve on a subsequent level-up`,
+      };
+    }
+    return null;
+  }
+
+  if (HELD_ITEM_LEVEL_EVOLUTION_METHODS.has(evo.method)) {
+    const access = itemAccess.get(String(evo.param));
+    if (!access || !Number.isFinite(Number(access.availableFrom))) return null;
+    const acquisitionCheckpoint = evolutionCheckpointIndex(bosses, { availableFrom });
+    const checkpointIndex = Math.max(
+      Number(acquisitionCheckpoint),
+      Number(access.checkpointIndex),
+    );
+    const condition = evo.method === 'EVO_ITEM_NIGHT' ? 'item-night' : 'item-day';
     return {
       order,
-      stage: Number(nextBattle?.stage ?? availableFrom),
-      level: Number(triggerLevel),
+      stage: Math.max(Number(availableFrom || 0), Number(access.availableFrom)),
+      checkpointIndex,
       fromSpecies,
       species: targetSpecies,
-      derived: 'level-evolution',
+      derived: 'level-up-trigger-evolution',
       evolutionMethod: evo.method,
-      evolutionCondition: 'known-move',
-      requiredMove: String(evo.param),
+      evolutionCondition: condition,
+      requiredItem: String(evo.param),
+      itemRepeatable: Boolean(access.repeatable),
+      itemSource: access.source || null,
       requiresLevelUp: true,
-      reason: `learn ${evo.param} naturally at level ${triggerLevel} + evolve on that level-up`,
+      requiresLevelUpAfterCheckpoint: true,
+      reason: `hold ${evo.param} during ${condition === 'item-night' ? 'night' : 'day'} and level up after item access`,
     };
   }
   if (evo.method === 'EVO_TRADE') {
@@ -631,6 +710,7 @@ function buildTradeAwareEvolutionPaths(
   evolutionAccess,
   itemAccess,
   entryLevelMax,
+  moveAccess = null,
 ) {
   const tradeUnlockStage = Number(evolutionAccess?.tradeUnlockStage || 0);
 
@@ -654,6 +734,7 @@ function buildTradeAwareEvolutionPaths(
         evo.method === 'EVO_STONE_MALE' ||
         evo.method === 'EVO_STONE_FEMALE' ||
         FRIENDSHIP_EVOLUTION_METHODS.has(evo.method) ||
+        HELD_ITEM_LEVEL_EVOLUTION_METHODS.has(evo.method) ||
         evo.method === 'EVO_HAS_MOVE'
       ) {
         edges.push(evo);
@@ -674,6 +755,7 @@ function buildTradeAwareEvolutionPaths(
           {
             entryLevelMax,
             priorTransitions: transitions,
+            moveReminderAccess: moveAccess?.moveReminder || null,
           },
         ),
       }))
@@ -707,6 +789,7 @@ function expandTradeAwareCandidate(
   evoByBase,
   evolutionAccess,
   itemAccess,
+  moveAccess = null,
 ) {
   const paths = buildTradeAwareEvolutionPaths(
     speciesConst,
@@ -716,6 +799,7 @@ function expandTradeAwareCandidate(
     evolutionAccess,
     itemAccess,
     candidate.entryLevelMax,
+    moveAccess,
   );
   return paths.map((path, index) => {
     const terminalSpecies = path.length ? path[path.length - 1].species : candidate.species;
@@ -737,6 +821,7 @@ export async function buildCanonicalCandidatePool({
   version = 'HEARTGOLD',
   evolutionPolicy = 'level-only',
   evolutionAccess = null,
+  moveAccess = null,
 }) {
   if (!['HEARTGOLD', 'SOULSILVER'].includes(version)) {
     throw new Error('version must be HEARTGOLD or SOULSILVER');
@@ -926,6 +1011,7 @@ export async function buildCanonicalCandidatePool({
         evoByBase,
         evolutionAccess || {},
         evolutionItemAccess,
+        moveAccess,
       )
     );
     candidates.splice(0, candidates.length, ...expanded);
