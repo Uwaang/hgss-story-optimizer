@@ -6974,6 +6974,147 @@ async function cmdExpSchedulerV1FrontierExpand() {
 }
 
 
+async function cmdExpSchedulerV1FrontierScreen() {
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '1'))));
+  const routeGrindProxyTarget = Math.max(
+    0.01,
+    Math.min(1, Number(arg('route-grind-proxy-target', '0.5'))),
+  );
+
+  const story = await loadStory();
+  const [pool, moveAccess, baseExpContext] = await Promise.all([
+    loadCanonicalPool('HEARTGOLD', story, 'trade-aware'),
+    loadMoveAccess('all', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      'HEARTGOLD',
+      'none',
+      'max',
+      'map-order',
+      'boss-aware-soft',
+    ),
+  ]);
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+    canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+    canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+  ];
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Scheduler-v1 frontier screen control team violates constraints');
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const seeds = [
+    { Quagsire: 'Lance' },
+    { Quagsire: 'Lance', Gengar: 'Lance', Rhyperior: 'Lance' },
+    { Quagsire: 'Lance', Rhyperior: 'Misty' },
+  ];
+  const expandable = team.filter(candidate => candidate.exclusiveGroup !== 'starter');
+  const states = new Map();
+
+  for (const seed of seeds) {
+    states.set(recipientScheduleStateKey(seed), seed);
+    for (const candidate of expandable) {
+      const member = candidate.terminalSpecies || candidate.species;
+      const firstEligibleIndex = routeBosses.findIndex(
+        boss => Number(boss.stage) >= Number(candidate.availableFrom || 0)
+      );
+      if (firstEligibleIndex < 0) continue;
+      const checkpoints = routeBosses
+        .slice(firstEligibleIndex)
+        .map(boss => String(boss.label));
+      for (const neighbor of expandRecipientScheduleCoordinates({
+        schedule: seed,
+        members: [member],
+        checkpoints,
+      })) {
+        states.set(neighbor.stateKey, neighbor.schedule);
+      }
+    }
+  }
+
+  const rows = [];
+  let index = 0;
+  for (const [stateKey, schedule] of states) {
+    index += 1;
+    const { recipientPolicy, resolvedSchedule } =
+      buildRecipientPolicyFromActivationSchedule(team, routeBosses, schedule);
+    const evaluation = await evaluateCandidatesWithMoveAccess(
+      team,
+      story.bosses,
+      runs,
+      moveAccess,
+      {
+        ...baseExpContext,
+        recipientPolicy,
+      },
+      'none',
+      {
+        p1AiMode: 'smart',
+        routeBuildOptimization: true,
+        routeGrindProxy: true,
+        routeGrindProxyTarget,
+      },
+    );
+    rows.push({
+      index,
+      stateKey,
+      schedule: resolvedSchedule,
+      expectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+      geometricScore: routeRiskGeometricScore(evaluation),
+      meanWinRate: routeRiskMeanWinRate(evaluation),
+      battleProgressScore: routeRiskBattleProgressScore(evaluation),
+      grindProxyBattles: evaluationRouteGrindProxy(evaluation),
+      grindProxyExp: Number(evaluation.routeGrindProxy?.cumulativeGrindExp || 0),
+      finalLevels: evaluation.finalLevels,
+    });
+  }
+
+  const objectives = [
+    { key: 'expectedRetryFailures', direction: 'min' },
+    { key: 'grindProxyBattles', direction: 'min' },
+    { key: 'geometricScore', direction: 'max' },
+  ];
+  const frontier = nondominatedScheduleRows(rows, objectives)
+    .sort((a, b) =>
+      Number(a.grindProxyBattles) - Number(b.grindProxyBattles) ||
+      Number(a.expectedRetryFailures) - Number(b.expectedRetryFailures) ||
+      Number(b.geometricScore) - Number(a.geometricScore) ||
+      String(a.stateKey).localeCompare(String(b.stateKey))
+    );
+
+  const byGrind = [...rows]
+    .sort((a, b) =>
+      Number(a.grindProxyBattles) - Number(b.grindProxyBattles) ||
+      Number(a.expectedRetryFailures) - Number(b.expectedRetryFailures) ||
+      Number(b.geometricScore) - Number(a.geometricScore)
+    )
+    .slice(0, 25);
+
+  await flushBattleCache();
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 low-run proxy screen over one-coordinate expansions of validated schedule Pareto seeds',
+    assumptions: {
+      runsPerBoss: runs,
+      routeGrindProxyTarget,
+      seedCount: seeds.length,
+      stateCount: rows.length,
+      objectives,
+    },
+    seedStateKeys: seeds.map(recipientScheduleStateKey),
+    frontierCount: frontier.length,
+    frontier,
+    top25ByGrind: byGrind,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdExpAllocatorSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -14403,6 +14544,7 @@ const commands = {
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,
+  'exp-scheduler-v1-frontier-screen': cmdExpSchedulerV1FrontierScreen,
   'exp-scheduler-v1-activation-scan': cmdExpSchedulerV1ActivationScan,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'team-order-smoke': cmdTeamOrderSmoke,
