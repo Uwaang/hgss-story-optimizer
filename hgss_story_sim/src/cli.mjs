@@ -20,6 +20,7 @@ import {
   recipientScheduleStateKey,
 } from './recipient-scheduler.mjs';
 import {
+  completionEvaluationMetrics,
   completionRecallSummary,
   rankParentCompletions,
 } from './completion-aware.mjs';
@@ -3917,6 +3918,7 @@ async function cmdRouteExpStoryCompletionRollout() {
   stagedCheckpointCompatibility(checkpoint, ctx);
 
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const confirmRuns = Math.max(runs, Math.floor(Number(arg('confirm-runs', String(runs)))));
   const parentLimitRaw = Math.floor(Number(arg('parent-limit', '0')));
   const parentLimit = Number.isFinite(parentLimitRaw) && parentLimitRaw > 0
     ? parentLimitRaw
@@ -3996,6 +3998,32 @@ async function cmdRouteExpStoryCompletionRollout() {
 
   const children = [...childMap.values()];
   const ranked = rankParentCompletions(parents, children);
+  const confirmedRows = [];
+  if (confirmRuns > runs) {
+    for (const row of ranked.rows) {
+      if (!row?.bestChild) continue;
+      const parentTeam = stagedTeamFromKeys(row.teamKeys, byKey);
+      const childTeam = stagedTeamFromKeys(row.bestChild.teamKeys, byKey);
+      const parentEvaluation = await stagedEvaluateTeam(ctx, parentTeam, confirmRuns);
+      const childEvaluation = await stagedEvaluateTeam(ctx, childTeam, confirmRuns);
+      const parentMetrics = completionEvaluationMetrics(parentEvaluation);
+      const childMetrics = completionEvaluationMetrics(childEvaluation);
+      confirmedRows.push({
+        key: row.key,
+        teamKeys: row.teamKeys,
+        lowSampleCompletionRank: row.completionRank,
+        selectedAddedKey: row.bestChild.addedKey,
+        parentMetrics,
+        childMetrics,
+        improvement: {
+          retry: Number(parentMetrics.retry) - Number(childMetrics.retry),
+          geometric: Number(childMetrics.geometric) - Number(parentMetrics.geometric),
+          mean: Number(childMetrics.mean) - Number(parentMetrics.mean),
+          progress: Number(childMetrics.progress) - Number(parentMetrics.progress || 0),
+        },
+      });
+    }
+  }
   await flushBattleCache();
 
   console.log(JSON.stringify({
@@ -4007,6 +4035,7 @@ async function cmdRouteExpStoryCompletionRollout() {
     parentSize,
     childSize: parentSize + 1,
     runs,
+    confirmRuns,
     sourceParentCount: sourceParents.length,
     evaluatedParentCount: parents.length,
     screenedCandidateCount: screened.length,
@@ -4015,6 +4044,7 @@ async function cmdRouteExpStoryCompletionRollout() {
     wallMs: Date.now() - startedAt,
     battleCache: battleCacheStats(),
     rows: ranked.rows,
+    confirmedRows,
   }, null, 2));
 }
 
