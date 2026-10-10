@@ -19,6 +19,9 @@ import {
   nondominatedScheduleRows,
   recipientScheduleStateKey,
 } from './recipient-scheduler.mjs';
+import {
+  completionRecallSummary,
+} from './completion-aware.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MONEY_PER_COIN = 20;
@@ -3740,6 +3743,83 @@ async function cmdRouteExpStoryScreenMerge() {
     })),
   }, null, 2));
 }
+
+async function cmdCompletionAwareArtifactRank() {
+  const parentPath = String(arg('parents', '')).trim();
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const controlKindPrefix = String(arg('control-kind-prefix', 'n04')).trim();
+  const topK = Math.max(1, Math.floor(Number(arg('top-k', '6'))));
+  const expectedChildrenRaw = String(arg('expected-children', '')).trim();
+  const expectedChildren = expectedChildrenRaw
+    ? Math.max(0, Math.floor(Number(expectedChildrenRaw)))
+    : null;
+  const requireControlTopK = arg('require-control-top-k', 'false') === 'true';
+
+  if (!parentPath) {
+    throw new Error('completion-aware-artifact-rank requires --parents');
+  }
+  if (!inputs.length) {
+    throw new Error('completion-aware-artifact-rank requires --inputs');
+  }
+
+  const parentDoc = await readJsonPath(parentPath);
+  const parents = Array.isArray(parentDoc?.parents) ? parentDoc.parents : [];
+  if (!parents.length) {
+    throw new Error('completion-aware parent document has no parents[]');
+  }
+
+  const children = [];
+  const sourceCounts = {};
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    const rows = Array.isArray(doc?.expanded)
+      ? doc.expanded
+      : Array.isArray(doc?.rescored)
+        ? doc.rescored
+        : Array.isArray(doc?.rows)
+          ? doc.rows
+          : [];
+    sourceCounts[input] = rows.length;
+    children.push(...rows);
+  }
+
+  const summary = completionRecallSummary(
+    parents,
+    children,
+    {
+      topK,
+      controlPredicate: row =>
+        String(row?.kind || '').startsWith(controlKindPrefix),
+    },
+  );
+
+  if (
+    expectedChildren !== null &&
+    summary.uniqueChildren !== expectedChildren
+  ) {
+    throw new Error(
+      'completion-aware unique child count mismatch: ' +
+      summary.uniqueChildren + ' != ' + expectedChildren
+    );
+  }
+  if (requireControlTopK && !summary.controlRecoveredIntoTopK) {
+    throw new Error(
+      'completion-aware control recall regression: no ' +
+      controlKindPrefix + ' parent recovered into top ' + topK
+    );
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-418 generic completion-aware parent ranking / historical recall regression',
+    parentSource: parentPath,
+    childSources: inputs,
+    sourceCounts,
+    controlKindPrefix,
+    ...summary,
+  }, null, 2));
+}
+
 
 async function cmdRouteExpStoryBeamShard() {
   const startedAt = Date.now();
@@ -14770,6 +14850,7 @@ const commands = {
   'route-exp-story-stamp-checkpoint': cmdRouteExpStoryStampCheckpoint,
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
+  'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
