@@ -31,6 +31,9 @@ jobs:
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs exp-scheduler-v1-smoke | tee results/research-v2/exp-scheduler-v1-smoke.json
+      - name: Scheduler v1 evolution-trigger smoke
+        run: |
+          node src/cli.mjs exp-scheduler-v1-evolution-trigger-smoke | tee results/research-v2/exp-scheduler-v1-evolution-trigger-smoke.json
       - name: Scheduler v1 Pareto/state smoke
         run: |
           node src/cli.mjs exp-scheduler-v1-pareto-smoke | tee results/research-v2/exp-scheduler-v1-pareto-smoke.json
@@ -42,6 +45,7 @@ jobs:
           name: research-v2-exp-scheduler-v1-smoke
           path: |
             hgss_story_sim/results/research-v2/exp-scheduler-v1-smoke.json
+            hgss_story_sim/results/research-v2/exp-scheduler-v1-evolution-trigger-smoke.json
             hgss_story_sim/results/research-v2/exp-scheduler-v1-pareto-smoke.json
             hgss_story_sim/results/research-v2/exp-scheduler-v1-frontier-expand.json
           if-no-files-found: error
