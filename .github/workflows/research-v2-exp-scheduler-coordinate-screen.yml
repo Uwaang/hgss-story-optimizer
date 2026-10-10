@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-screen
-# SCRUM-417 bounded multi-member recipient schedule interaction screen
+# SCRUM-417 high-sample recipient schedule finalists
 
 on:
   push:
@@ -10,30 +10,20 @@ permissions:
   contents: read
 
 jobs:
-  coordinate-screen:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-interaction]')
+  finalist-validation:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-finalists]')
     strategy:
       fail-fast: false
       matrix:
         include:
           - state: control
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIn0=
-          - state: gengar-lance
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UifQ==
-          - state: gengar-bruno
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiQnJ1bm8ifQ==
-          - state: rhyperior-lance
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTGFuY2UifQ==
           - state: rhyperior-misty
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkifQ==
           - state: gengar-lance-rhyperior-lance
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9
-          - state: gengar-lance-rhyperior-misty
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
-          - state: gengar-bruno-rhyperior-misty
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiQnJ1bm8iLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -45,25 +35,25 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Practical grind interaction screen
+      - name: Story50 and Red25 Red50 finalist validation
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
             --team-preset=d-quagsire \
             --recipient-schedule-base64="${{ matrix.schedule_b64 }}" \
             --story-targets=0.5 \
-            --skip-red=true \
+            --red-targets=0.25,0.5 \
             --screen-runs=2 \
             --verify-runs=8 \
-            --repair-runs=16 \
-            --final-runs=32 \
-            --max-repair-rounds=12 \
+            --repair-runs=32 \
+            --final-runs=64 \
+            --max-repair-rounds=16 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/interaction-${{ matrix.state }}.json
+            > results/research-v2/finalist-${{ matrix.state }}.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/interaction-${{ matrix.state }}.json';
+          const file='results/research-v2/finalist-${{ matrix.state }}.json';
           const r=JSON.parse(fs.readFileSync(file,'utf8'));
           console.log(JSON.stringify({
             state:'${{ matrix.state }}',
@@ -75,12 +65,23 @@ jobs:
               storyWorstBossWinRate:x.storyWorstBossWinRate,
               repairConverged:x.repairConverged,
               repairRounds:x.repairRounds,
-              storyPlan:x.storyPlan
+              storyPlan:x.storyPlan,
+              redBaseline:x.redBaseline,
+              redFrontier:x.redFrontier.map(y=>({
+                targetWinRate:y.targetWinRate,
+                additionalRedGrindBattles:y.additionalRedGrindBattles,
+                totalGrindBattles:y.totalGrindBattles,
+                totalGrindExp:y.totalGrindExp,
+                achievedWinRate:y.achievedWinRate,
+                averageOpponentFaints:y.averageOpponentFaints,
+                finalLevels:y.finalLevels,
+                plan:y.plan
+              }))
             }))
           },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-interaction-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/interaction-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-finalist-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/finalist-${{ matrix.state }}.json
           if-no-files-found: error
