@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-screen
-# SCRUM-417 high-sample recipient schedule finalists
+# SCRUM-417 proxy-frontier practical shortlist
 
 on:
   push:
@@ -10,20 +10,24 @@ permissions:
   contents: read
 
 jobs:
-  finalist-validation:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-finalists]')
+  practical-shortlist:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-proxy-shortlist]')
     strategy:
       fail-fast: false
       matrix:
         include:
-          - state: control
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIn0=
           - state: rhyperior-misty
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkifQ==
-          - state: gengar-lance-rhyperior-lance
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9
+          - state: quagsire-lt-surge-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0=
+          - state: gyarados-will-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkiLCJHeWFyYWRvcyI6IldpbGwifQ==
+          - state: magneton-blaine-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkiLCJNYWduZXRvbiI6IkJsYWluZSJ9
+          - state: magneton-red-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkiLCJNYWduZXRvbiI6IlJlZCJ9
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -35,25 +39,25 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Story50 and Red25 Red50 finalist validation
+      - name: Story50 practical shortlist
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
             --team-preset=d-quagsire \
             --recipient-schedule-base64="${{ matrix.schedule_b64 }}" \
             --story-targets=0.5 \
-            --red-targets=0.25,0.5 \
-            --screen-runs=2 \
-            --verify-runs=8 \
-            --repair-runs=32 \
-            --final-runs=64 \
-            --max-repair-rounds=16 \
+            --skip-red=true \
+            --screen-runs=1 \
+            --verify-runs=4 \
+            --repair-runs=8 \
+            --final-runs=16 \
+            --max-repair-rounds=10 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/finalist-${{ matrix.state }}.json
+            > results/research-v2/proxy-shortlist-${{ matrix.state }}.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/finalist-${{ matrix.state }}.json';
+          const file='results/research-v2/proxy-shortlist-${{ matrix.state }}.json';
           const r=JSON.parse(fs.readFileSync(file,'utf8'));
           console.log(JSON.stringify({
             state:'${{ matrix.state }}',
@@ -65,23 +69,12 @@ jobs:
               storyWorstBossWinRate:x.storyWorstBossWinRate,
               repairConverged:x.repairConverged,
               repairRounds:x.repairRounds,
-              storyPlan:x.storyPlan,
-              redBaseline:x.redBaseline,
-              redFrontier:x.redFrontier.map(y=>({
-                targetWinRate:y.targetWinRate,
-                additionalRedGrindBattles:y.additionalRedGrindBattles,
-                totalGrindBattles:y.totalGrindBattles,
-                totalGrindExp:y.totalGrindExp,
-                achievedWinRate:y.achievedWinRate,
-                averageOpponentFaints:y.averageOpponentFaints,
-                finalLevels:y.finalLevels,
-                plan:y.plan
-              }))
+              storyPlan:x.storyPlan
             }))
           },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-finalist-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/finalist-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-proxy-shortlist-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/proxy-shortlist-${{ matrix.state }}.json
           if-no-files-found: error
