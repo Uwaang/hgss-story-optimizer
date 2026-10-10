@@ -102,6 +102,17 @@ export function rankParentCompletions(parents = [], children = []) {
     };
   });
 
+  const currentOrder = [...rows].sort((a, b) => {
+    if (!a.currentMetrics && !b.currentMetrics) return a.key.localeCompare(b.key);
+    if (!a.currentMetrics) return 1;
+    if (!b.currentMetrics) return -1;
+    return compareCompletionMetrics(a.currentMetrics, b.currentMetrics) ||
+      a.key.localeCompare(b.key);
+  });
+  currentOrder.forEach((row, index) => {
+    row.currentRank = index + 1;
+  });
+
   rows.sort((a, b) => {
     if (!a.bestChild && !b.bestChild) return a.key.localeCompare(b.key);
     if (!a.bestChild) return 1;
