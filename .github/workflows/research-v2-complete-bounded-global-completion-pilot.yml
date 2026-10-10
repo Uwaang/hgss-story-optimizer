@@ -1,4 +1,5 @@
 name: research-v2-complete-bounded-global-completion-pilot
+# corrected complete-route pilot trigger
 
 on:
   push:
