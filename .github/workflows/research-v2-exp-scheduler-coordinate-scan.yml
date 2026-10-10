@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-scan
-# SCRUM-417 multi-member recipient schedule coordinate screen
+# SCRUM-417 bounded frontier proxy screen
 
 on:
   push:
@@ -10,19 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  coordinate-scan:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-coordinate]')
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - Typhlosion
-          - Magneton
-          - Gyarados
-          - Gengar
-          - Rhyperior
+  frontier-screen:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-frontier-screen]')
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -34,39 +25,34 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Coordinate scan with Quagsire fixed at Lance
+      - name: Screen one-coordinate frontier expansions
         run: |
           mkdir -p results/research-v2
-          node src/cli.mjs exp-scheduler-v1-activation-scan \
-            --runs=2 \
-            --target="${{ matrix.target }}" \
+          node src/cli.mjs exp-scheduler-v1-frontier-screen \
+            --runs=1 \
             --route-grind-proxy-target=0.5 \
-            --base-recipient-schedule-base64="eyJRdWFnc2lyZSI6IkxhbmNlIn0=" \
-            > "results/research-v2/coordinate-${{ matrix.target }}.json"
+            > results/research-v2/frontier-screen.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const target='${{ matrix.target }}';
-          const r=JSON.parse(fs.readFileSync(`results/research-v2/coordinate-${target}.json`,'utf8'));
+          const r=JSON.parse(fs.readFileSync('results/research-v2/frontier-screen.json','utf8'));
           const slim=row=>({
-            label:row.label,
-            activationBoss:row.activationBoss,
+            stateKey:row.stateKey,
+            schedule:row.schedule,
             retry:row.expectedRetryFailures,
             geometric:row.geometricScore,
             mean:row.meanWinRate,
             progress:row.battleProgressScore,
-            grindProxyBattles:row.grindProxyBattles,
-            targetFinalLevel:row.targetFinalLevel
+            grindProxyBattles:row.grindProxyBattles
           });
           console.log(JSON.stringify({
-            target,
             assumptions:r.assumptions,
-            firstEligibleBoss:r.firstEligibleBoss,
-            pareto:r.pareto.map(slim),
-            top10:r.top10.map(slim)
+            frontierCount:r.frontierCount,
+            frontier:r.frontier.map(slim),
+            top25ByGrind:r.top25ByGrind.map(slim)
           },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-coordinate-${{ matrix.target }}
-          path: hgss_story_sim/results/research-v2/coordinate-${{ matrix.target }}.json
+          name: research-v2-exp-scheduler-frontier-screen
+          path: hgss_story_sim/results/research-v2/frontier-screen.json
           if-no-files-found: error
