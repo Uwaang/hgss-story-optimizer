@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-screen
-# SCRUM-417 bounded multi-member recipient schedule screen
+# SCRUM-417 bounded multi-member recipient schedule interaction screen
 
 on:
   push:
@@ -11,31 +11,29 @@ permissions:
 
 jobs:
   coordinate-screen:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-coordinate]')
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-interaction]')
     strategy:
       fail-fast: false
       matrix:
         include:
           - state: control
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIn0=
-          - state: magneton-will
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiTWFnbmV0b24iOiJXaWxsIn0=
-          - state: magneton-lance
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiTWFnbmV0b24iOiJMYW5jZSJ9
-          - state: gyarados-will
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR3lhcmFkb3MiOiJXaWxsIn0=
-          - state: gyarados-lance
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR3lhcmFkb3MiOiJMYW5jZSJ9
-          - state: gengar-will
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiV2lsbCJ9
           - state: gengar-lance
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UifQ==
-          - state: rhyperior-will
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiV2lsbCJ9
+          - state: gengar-bruno
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiQnJ1bm8ifQ==
           - state: rhyperior-lance
             schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTGFuY2UifQ==
+          - state: rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkifQ==
+          - state: gengar-lance-rhyperior-lance
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9
+          - state: gengar-lance-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
+          - state: gengar-bruno-rhyperior-misty
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiQnJ1bm8iLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -47,7 +45,7 @@ jobs:
       - run: npm install
       - name: Recipient-state regression smoke
         run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Practical grind coordinate screen
+      - name: Practical grind interaction screen
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
@@ -55,17 +53,17 @@ jobs:
             --recipient-schedule-base64="${{ matrix.schedule_b64 }}" \
             --story-targets=0.5 \
             --skip-red=true \
-            --screen-runs=1 \
-            --verify-runs=4 \
-            --repair-runs=8 \
-            --final-runs=16 \
-            --max-repair-rounds=8 \
+            --screen-runs=2 \
+            --verify-runs=8 \
+            --repair-runs=16 \
+            --final-runs=32 \
+            --max-repair-rounds=12 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/coordinate-${{ matrix.state }}.json
+            > results/research-v2/interaction-${{ matrix.state }}.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/coordinate-${{ matrix.state }}.json';
+          const file='results/research-v2/interaction-${{ matrix.state }}.json';
           const r=JSON.parse(fs.readFileSync(file,'utf8'));
           console.log(JSON.stringify({
             state:'${{ matrix.state }}',
@@ -83,6 +81,6 @@ jobs:
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-coordinate-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/coordinate-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-interaction-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/interaction-${{ matrix.state }}.json
           if-no-files-found: error
