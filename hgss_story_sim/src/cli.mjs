@@ -5130,6 +5130,23 @@ async function cmdRouteExpPracticalGrind() {
   const teamPreset = String(arg('team-preset', '')).trim().toLowerCase();
   const recipientTargetName = String(arg('recipient-target', '')).trim();
   const recipientActivateBoss = String(arg('recipient-activate', '')).trim();
+  const recipientScheduleBase64 = String(arg('recipient-schedule-base64', '')).trim();
+  const requestedRecipientSchedule = recipientScheduleBase64
+    ? JSON.parse(Buffer.from(recipientScheduleBase64, 'base64').toString('utf8'))
+    : null;
+  if (
+    requestedRecipientSchedule &&
+    (typeof requestedRecipientSchedule !== 'object' || Array.isArray(requestedRecipientSchedule))
+  ) {
+    throw new Error(
+      'route-exp-practical-grind --recipient-schedule-base64 must decode to an object'
+    );
+  }
+  if (requestedRecipientSchedule && recipientTargetName) {
+    throw new Error(
+      'Use either --recipient-schedule-base64 or --recipient-target/--recipient-activate, not both'
+    );
+  }
 
   if (version !== 'HEARTGOLD' || starterName !== 'Cyndaquil') {
     throw new Error('route-exp-practical-grind pilot currently supports HEARTGOLD + Cyndaquil only');
@@ -5185,26 +5202,72 @@ async function cmdRouteExpPracticalGrind() {
   let recipientPolicy = {};
   let recipientTarget = null;
   let recipientActivationIndex = null;
-  if (recipientTargetName) {
-    recipientTarget = team.find(candidate =>
-      String(candidate.species).toLowerCase() === recipientTargetName.toLowerCase() ||
+  const resolvedRecipientSchedule = {};
+
+  function resolveRecipientCandidate(token) {
+    const normalized = String(token || '').trim();
+    if (!normalized) return null;
+    return team.find(candidate =>
+      candidateIdentity(candidate) === normalized ||
+      String(candidate.species).toLowerCase() === normalized.toLowerCase() ||
       String(candidate.terminalSpecies || candidate.species).toLowerCase() ===
-        recipientTargetName.toLowerCase()
+        normalized.toLowerCase()
+    ) || null;
+  }
+
+  function activationIndexFor(token) {
+    const normalized = String(token || '').trim();
+    if (!normalized || normalized.toLowerCase() === 'always-active') return null;
+    const index = routeBosses.findIndex(
+      boss => String(boss.label) === normalized || String(boss.key) === normalized
     );
+    if (index < 0) {
+      throw new Error('Recipient activation checkpoint not found: ' + normalized);
+    }
+    return index;
+  }
+
+  if (requestedRecipientSchedule) {
+    const activationByKey = new Map();
+    for (const [memberToken, activationToken] of Object.entries(requestedRecipientSchedule)) {
+      const candidate = resolveRecipientCandidate(memberToken);
+      if (!candidate) {
+        throw new Error('Recipient schedule member not found: ' + memberToken);
+      }
+      const key = candidateIdentity(candidate);
+      const activationIndex = activationIndexFor(activationToken);
+      activationByKey.set(key, activationIndex);
+      resolvedRecipientSchedule[key] = {
+        species: candidate.terminalSpecies || candidate.species,
+        activation: activationIndex === null
+          ? 'always-active'
+          : routeBosses[activationIndex].label,
+        activationIndex,
+      };
+    }
+    const allKeys = team.map(candidateIdentity);
+    for (let index = 0; index < routeBosses.length; index += 1) {
+      const active = allKeys.filter(key => {
+        const activationIndex = activationByKey.get(key);
+        return activationIndex === undefined || activationIndex === null || index >= activationIndex;
+      });
+      if (active.length !== allKeys.length) recipientPolicy[String(index)] = active;
+    }
+  } else if (recipientTargetName) {
+    recipientTarget = resolveRecipientCandidate(recipientTargetName);
     if (!recipientTarget) {
       throw new Error('Recipient target not found in practical-grind team: ' + recipientTargetName);
     }
-    if (recipientActivateBoss && recipientActivateBoss.toLowerCase() !== 'always-active') {
-      recipientActivationIndex = routeBosses.findIndex(
-        boss => String(boss.label) === recipientActivateBoss ||
-          String(boss.key) === recipientActivateBoss
-      );
-      if (recipientActivationIndex < 0) {
-        throw new Error(
-          'Recipient activation checkpoint not found: ' + recipientActivateBoss
-        );
-      }
-      const targetKey = candidateIdentity(recipientTarget);
+    recipientActivationIndex = activationIndexFor(recipientActivateBoss);
+    const targetKey = candidateIdentity(recipientTarget);
+    resolvedRecipientSchedule[targetKey] = {
+      species: recipientTarget.terminalSpecies || recipientTarget.species,
+      activation: recipientActivationIndex === null
+        ? 'always-active'
+        : routeBosses[recipientActivationIndex].label,
+      activationIndex: recipientActivationIndex,
+    };
+    if (recipientActivationIndex !== null) {
       const activeWithoutTarget = team
         .map(candidateIdentity)
         .filter(key => key !== targetKey);
@@ -5217,6 +5280,7 @@ async function cmdRouteExpPracticalGrind() {
     }
   }
 
+  const storyBossLabels = routeBosses
   const storyBossLabels = routeBosses
     .filter(boss =>
       String(boss.label) !== 'Red' &&
@@ -5841,8 +5905,12 @@ async function cmdRouteExpPracticalGrind() {
         ? (recipientTarget.terminalSpecies || recipientTarget.species)
         : null,
       recipientTargetKey: recipientTarget ? candidateIdentity(recipientTarget) : null,
-      recipientActivateBoss: recipientActivateBoss || 'always-active',
+      recipientActivateBoss: recipientTarget
+        ? (recipientActivateBoss || 'always-active')
+        : null,
       recipientActivationIndex,
+      recipientSchedule: resolvedRecipientSchedule,
+      recipientScheduleMode: requestedRecipientSchedule ? 'multi-member' : 'single-member',
       recipientPolicyEnabled: Object.keys(recipientPolicy).length > 0,
     },
     storyFrontier,
