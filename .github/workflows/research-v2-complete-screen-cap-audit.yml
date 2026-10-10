@@ -1,0 +1,116 @@
+name: research-v2-complete-screen-cap-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  screen:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-screen-cap-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Screen complete-route candidate shard
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs route-exp-story-screen-shard \
+            --route-profile=complete \
+            --screen-runs=2 --shard-count=4 --shard-index=${{ matrix.shard }} \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/research-v2/complete-screen-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-screen-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/research-v2/complete-screen-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  sweep:
+    needs: screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-screen-shard-*
+          path: hgss_story_sim/results/research-v2/screen
+          merge-multiple: true
+      - name: Sweep family caps on complete-route evidence
+        run: |
+          SHARDS="$(find results/research-v2/screen -name 'complete-screen-shard-*.json' -type f | sort | paste -sd, -)"
+          for CAP in 36 48 60 72 84 100; do
+            node src/cli.mjs route-exp-story-screen-merge \
+              --route-profile=complete \
+              --inputs="$SHARDS" --candidate-cap="$CAP" \
+              --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+              --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+              --entry-level=expected --same-stage-join=map-order \
+              --resources=all --spend-policy=natural \
+              --objective=route-risk --route-grind-proxy=false \
+              > "results/research-v2/complete-cap-${CAP}.json"
+          done
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const caps=[36,48,60,72,84,100];
+          const targets={
+            gyarados:'Magikarp::Gyarados->Gyarados#1',
+            blissey:'Happiny::Chansey->Blissey#1',
+            donphan:'Phanpy::Donphan->Donphan#1',
+            beautifly:'Wurmple::Wurmple->Beautifly#1'
+          };
+          const rows=caps.map(cap=>{
+            const d=JSON.parse(fs.readFileSync(`results/research-v2/complete-cap-${cap}.json`,'utf8'));
+            const keys=d.screenedKeys||[];
+            const selected=new Set(keys);
+            return {
+              cap,
+              routeProfile:d.config?.routeProfile,
+              scannedCandidates:d.scannedCandidates,
+              screenedCandidates:d.screenedCandidates,
+              screenedCandidateFamilies:d.screenedCandidateFamilies,
+              exactRecall:Object.fromEntries(Object.entries(targets).map(([name,key])=>[name,selected.has(key)])),
+              blisseyFamilyKeys:keys.filter(k=>/Happiny|Chansey|Blissey/.test(k)),
+              gyaradosFamilyKeys:keys.filter(k=>/Magikarp|Gyarados/.test(k))
+            };
+          });
+          const out={schemaVersion:1,routeProfile:'complete',rows};
+          fs.writeFileSync('results/research-v2/complete-screen-cap-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-screen-cap-audit
+          path: |
+            hgss_story_sim/results/research-v2/complete-screen-cap-audit.json
+            hgss_story_sim/results/research-v2/complete-cap-*.json
+          if-no-files-found: error
