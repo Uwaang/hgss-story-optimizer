@@ -1,0 +1,88 @@
+name: research-v2-exp-scheduler-coordinate-screen
+# SCRUM-417 bounded multi-member recipient schedule screen
+
+on:
+  push:
+    branches:
+      - research/v2-exp-scheduler-v1
+
+permissions:
+  contents: read
+
+jobs:
+  coordinate-screen:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-coordinate]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - state: control
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIn0=
+          - state: magneton-will
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiTWFnbmV0b24iOiJXaWxsIn0=
+          - state: magneton-lance
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiTWFnbmV0b24iOiJMYW5jZSJ9
+          - state: gyarados-will
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR3lhcmFkb3MiOiJXaWxsIn0=
+          - state: gyarados-lance
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR3lhcmFkb3MiOiJMYW5jZSJ9
+          - state: gengar-will
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiV2lsbCJ9
+          - state: gengar-lance
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiR2VuZ2FyIjoiTGFuY2UifQ==
+          - state: rhyperior-will
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiV2lsbCJ9
+          - state: rhyperior-lance
+            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTGFuY2UifQ==
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Recipient-state regression smoke
+        run: node src/cli.mjs exp-scheduler-v1-smoke
+      - name: Practical grind coordinate screen
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs route-exp-practical-grind \
+            --team-preset=d-quagsire \
+            --recipient-schedule-base64="${{ matrix.schedule_b64 }}" \
+            --story-targets=0.5 \
+            --skip-red=true \
+            --screen-runs=1 \
+            --verify-runs=4 \
+            --repair-runs=8 \
+            --final-runs=16 \
+            --max-repair-rounds=8 \
+            --repair-mode=global-only \
+            --lean-repair=true \
+            > results/research-v2/coordinate-${{ matrix.state }}.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const file='results/research-v2/coordinate-${{ matrix.state }}.json';
+          const r=JSON.parse(fs.readFileSync(file,'utf8'));
+          console.log(JSON.stringify({
+            state:'${{ matrix.state }}',
+            assumptions:r.assumptions,
+            storyFrontier:r.storyFrontier.map(x=>({
+              storyTargetWinRate:x.storyTargetWinRate,
+              storyGrindBattles:x.storyGrindBattles,
+              storyGrindExp:x.storyGrindExp,
+              storyWorstBossWinRate:x.storyWorstBossWinRate,
+              repairConverged:x.repairConverged,
+              repairRounds:x.repairRounds,
+              storyPlan:x.storyPlan
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-exp-scheduler-coordinate-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/coordinate-${{ matrix.state }}.json
+          if-no-files-found: error
