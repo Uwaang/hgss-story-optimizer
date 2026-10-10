@@ -6547,6 +6547,91 @@ async function cmdExpSchedulerV1Smoke() {
 
 
 
+
+function decodeRecipientActivationScheduleBase64(encoded) {
+  const value = String(encoded || '').trim();
+  if (!value) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('Invalid recipient activation schedule base64 JSON: ' + error.message);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Recipient activation schedule must decode to an object');
+  }
+  return Object.fromEntries(
+    Object.entries(parsed).map(([selector, checkpoint]) => [
+      String(selector).trim(),
+      String(checkpoint).trim(),
+    ])
+  );
+}
+
+function resolveRecipientScheduleCandidate(team, selector) {
+  const token = String(selector || '').trim();
+  const direct = team.find(candidate => candidateIdentity(candidate) === token);
+  if (direct) return direct;
+  const matches = team.filter(candidate =>
+    String(candidate.species) === token ||
+    String(candidate.terminalSpecies || candidate.species) === token
+  );
+  if (!matches.length) {
+    throw new Error('Recipient schedule selector not found in team: ' + token);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      'Ambiguous recipient schedule selector ' + token + '; use candidate key: ' +
+      matches.map(candidateIdentity).join(', ')
+    );
+  }
+  return matches[0];
+}
+
+function buildRecipientPolicyFromActivationSchedule(team, routeBosses, schedule = {}) {
+  const allKeys = team.map(candidateIdentity);
+  const activationByKey = new Map();
+  const resolved = {};
+
+  for (const [selector, checkpoint] of Object.entries(schedule || {})) {
+    const candidate = resolveRecipientScheduleCandidate(team, selector);
+    const key = candidateIdentity(candidate);
+    const token = String(checkpoint || '').trim();
+    if (!token || token.toLowerCase() === 'always-active') {
+      resolved[key] = 'always-active';
+      continue;
+    }
+    const activationIndex = routeBosses.findIndex(
+      boss => String(boss.label) === token || String(boss.key) === token
+    );
+    if (activationIndex < 0) {
+      throw new Error(
+        'Recipient activation checkpoint not found for ' + selector + ': ' + token
+      );
+    }
+    activationByKey.set(key, activationIndex);
+    resolved[key] = routeBosses[activationIndex].label;
+  }
+
+  const recipientPolicy = {};
+  for (let battleIndex = 0; battleIndex < routeBosses.length; battleIndex += 1) {
+    const activeKeys = allKeys.filter(key => {
+      const activationIndex = activationByKey.get(key);
+      return activationIndex === undefined || battleIndex >= activationIndex;
+    });
+    if (activeKeys.length !== allKeys.length) {
+      recipientPolicy[String(battleIndex)] = activeKeys;
+    }
+  }
+
+  return {
+    recipientPolicy,
+    resolvedSchedule: resolved,
+    activationByKey: Object.fromEntries(activationByKey),
+  };
+}
+
+
 async function cmdExpSchedulerV1ActivationScan() {
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const targetName = String(arg('target', 'Quagsire')).trim();
