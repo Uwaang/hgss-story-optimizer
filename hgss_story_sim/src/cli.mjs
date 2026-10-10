@@ -6895,6 +6895,32 @@ async function cmdExpSchedulerV1EvolutionTriggerSmoke() {
         pending: battle.evolutionStateBefore?.[key]?.pending || null,
       }));
 
+    const evolvedBattleIndex = schedule.battles.findIndex(
+      battle => battle.speciesBefore?.[key] === spec.terminal
+    );
+    let materializerSpecies = null;
+    if (evolvedBattleIndex >= 0) {
+      const evolvedBattle = schedule.battles[evolvedBattleIndex];
+      const evolvedBoss = route[evolvedBattleIndex];
+      const mon = materializeCandidateTeam(
+        [candidate],
+        evolvedBoss.stage,
+        evolvedBoss.aceLevel,
+        {
+          levelsByCandidate: evolvedBattle.levelsBefore,
+          speciesByCandidate: evolvedBattle.speciesBefore,
+          boss: evolvedBoss,
+        },
+      )[0];
+      materializerSpecies = mon?.species || null;
+      if (materializerSpecies !== spec.terminal) {
+        throw new Error(
+          'Battle materializer ignored scheduler species snapshot for ' +
+          spec.terminal + ': ' + materializerSpecies
+        );
+      }
+    }
+
     schedules.push({
       origin: spec.origin,
       terminal: spec.terminal,
@@ -6902,6 +6928,7 @@ async function cmdExpSchedulerV1EvolutionTriggerSmoke() {
       transition,
       targetEvent,
       finalSpecies: schedule.finalSpecies?.[key] || null,
+      materializerSpecies,
       snapshots: materializedSnapshots.filter((row, index, rows) =>
         index === 0 ||
         row.species !== rows[index - 1].species ||
@@ -6961,6 +6988,22 @@ async function cmdExpSchedulerV1ParetoSmoke() {
       red50: 1806,
     },
     {
+      name: 'quagsire-lt-surge-rhyperior-misty',
+      feasible: true,
+      schedule: { Quagsire: 'Lt. Surge', Rhyperior: 'Misty' },
+      story50: 751,
+      red25: 1512,
+      red50: 1838,
+    },
+    {
+      name: 'magneton-red-rhyperior-misty',
+      feasible: true,
+      schedule: { Quagsire: 'Lance', Rhyperior: 'Misty', Magneton: 'Red' },
+      story50: 720,
+      red25: 1651,
+      red50: 1836,
+    },
+    {
       name: 'dominated-regression-control',
       feasible: true,
       schedule: { Quagsire: 'Lance', Gengar: 'Red' },
@@ -6984,6 +7027,8 @@ async function cmdExpSchedulerV1ParetoSmoke() {
     'control',
     'gengar-rhyperior-lance',
     'rhyperior-misty',
+    'quagsire-lt-surge-rhyperior-misty',
+    'magneton-red-rhyperior-misty',
   ].sort();
   if (JSON.stringify(frontierNames) !== JSON.stringify(expectedFrontier)) {
     throw new Error(
@@ -7066,6 +7111,8 @@ async function cmdExpSchedulerV1FrontierExpand() {
       { Quagsire: 'Lance' },
       { Quagsire: 'Lance', Gengar: 'Lance', Rhyperior: 'Lance' },
       { Quagsire: 'Lance', Rhyperior: 'Misty' },
+      { Quagsire: 'Lt. Surge', Rhyperior: 'Misty' },
+      { Quagsire: 'Lance', Rhyperior: 'Misty', Magneton: 'Red' },
     ];
   }
 
@@ -7171,6 +7218,8 @@ async function cmdExpSchedulerV1FrontierScreen() {
     { Quagsire: 'Lance' },
     { Quagsire: 'Lance', Gengar: 'Lance', Rhyperior: 'Lance' },
     { Quagsire: 'Lance', Rhyperior: 'Misty' },
+    { Quagsire: 'Lt. Surge', Rhyperior: 'Misty' },
+    { Quagsire: 'Lance', Rhyperior: 'Misty', Magneton: 'Red' },
   ];
   const expandable = team.filter(candidate => candidate.exclusiveGroup !== 'starter');
   const states = new Map();
