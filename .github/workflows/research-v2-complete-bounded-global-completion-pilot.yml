@@ -52,7 +52,7 @@ jobs:
           jq '{candidateCap,scannedCandidates,screenedCandidates,screenedCandidateFamilies,timings}' results/checkpoint.json
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-complete-global-screen-cap60
+          name: research-v2-complete-global-screen-cap100
           path: hgss_story_sim/results/checkpoint.json
           if-no-files-found: error
 
@@ -78,7 +78,7 @@ jobs:
       - run: npm install
       - uses: actions/download-artifact@v4
         with:
-          name: research-v2-complete-global-screen-cap60
+          name: research-v2-complete-global-screen-cap100
           path: hgss_story_sim/results/input
       - name: Expand beam 2
         run: |
@@ -114,7 +114,7 @@ jobs:
       - run: npm install
       - uses: actions/download-artifact@v4
         with:
-          name: research-v2-complete-global-screen-cap60
+          name: research-v2-complete-global-screen-cap100
           path: hgss_story_sim/results/input
       - uses: actions/download-artifact@v4
         with:
