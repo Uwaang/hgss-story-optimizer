@@ -4051,6 +4051,76 @@ async function cmdRouteExpStoryCompletionRollout() {
 }
 
 
+function syntheticCompletionMetrics(rank) {
+  return {
+    retry: Number(rank),
+    geometric: 1 / (Number(rank) + 1),
+    mean: 1 / (Number(rank) + 1),
+    progress: 1 / (Number(rank) + 1),
+  };
+}
+
+async function cmdCompletionAwareSelectorSmoke() {
+  const pairs = [
+    [1, 1],
+    [3, 2],
+    [4, 3],
+    [2, 4],
+    [7, 5],
+    [6, 6],
+    [10, 7],
+    [5, 8],
+    [8, 9],
+    [9, 10],
+    [11, 11],
+    [12, 12],
+  ];
+  const rows = pairs.map(([currentRank, completionRank], index) => ({
+    key: 'synthetic-' + String(index + 1).padStart(2, '0'),
+    teamKeys: ['synthetic-' + String(index + 1).padStart(2, '0')],
+    currentMetrics: syntheticCompletionMetrics(currentRank),
+    completionMetrics: syntheticCompletionMetrics(completionRank),
+    expectedCurrentRank: currentRank,
+    expectedCompletionRank: completionRank,
+  }));
+  const result = selectCompletionAwareParents(rows, 6);
+  const rescued = result.rows.find(row =>
+    row.expectedCurrentRank === 7 && row.expectedCompletionRank === 5
+  );
+  const currentElite = result.rows.find(row => row.expectedCurrentRank === 1);
+  const completionElite = result.rows.find(row => row.expectedCompletionRank === 1);
+  if (!rescued?.selected) {
+    throw new Error('completion-aware selector failed to retain 7->5 boundary rescue');
+  }
+  if (!currentElite?.selected || !completionElite?.selected) {
+    throw new Error('completion-aware selector failed structural elite retention');
+  }
+  if (result.selectedCount !== 6) {
+    throw new Error('completion-aware selector returned unexpected width');
+  }
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-418 completion-aware rank-pareto selector smoke',
+    width: result.width,
+    selectedKeys: result.selectedKeys,
+    rescued: {
+      key: rescued.key,
+      currentRank: rescued.currentRank,
+      completionRank: rescued.completionRank,
+      selectionLayer: rescued.selectionLayer,
+      selected: rescued.selected,
+    },
+    rows: result.rows.map(row => ({
+      key: row.key,
+      currentRank: row.currentRank,
+      completionRank: row.completionRank,
+      selectionLayer: row.selectionLayer,
+      selected: row.selected,
+    })),
+  }, null, 2));
+}
+
+
 async function cmdRouteExpStoryCompletionSelect() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -15200,6 +15270,7 @@ const commands = {
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
   'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
+  'completion-aware-selector-smoke': cmdCompletionAwareSelectorSmoke,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
