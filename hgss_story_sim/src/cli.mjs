@@ -3825,6 +3825,7 @@ async function cmdCompletionAwareArtifactRank() {
 async function cmdCompletionAwarePrefixProbe() {
   const ctx = await loadStagedRouteContext();
   const encoded = String(arg('prefix-base64', '')).trim();
+  const addedKey = String(arg('added-key', '')).trim();
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   if (!encoded) {
     throw new Error('completion-aware-prefix-probe requires --prefix-base64');
@@ -3841,6 +3842,9 @@ async function cmdCompletionAwarePrefixProbe() {
   }
 
   const byKey = stagedCandidateMap(ctx);
+  if (addedKey && !byKey.has(addedKey)) {
+    throw new Error('completion-aware --added-key missing from current candidate pool: ' + addedKey);
+  }
   const missing = prefixKeys.filter(key => !byKey.has(String(key)));
   if (missing.length) {
     throw new Error(
@@ -3860,6 +3864,7 @@ async function cmdCompletionAwarePrefixProbe() {
   const childMap = new Map();
   for (const candidate of ctx.pool.candidates) {
     const key = candidateIdentity(candidate);
+    if (addedKey && key !== addedKey) continue;
     if (prefixKeys.includes(key)) continue;
     const childTeam = [...prefixTeam, candidate];
     if (!validateCandidateTeam(childTeam) || !teamRespectsExclusiveGroups(childTeam)) {
@@ -3888,6 +3893,7 @@ async function cmdCompletionAwarePrefixProbe() {
     config: stagedConfigSnapshot(ctx),
     runs,
     prefixKeys,
+    requestedAddedKey: addedKey || null,
     parentMetrics: row?.currentMetrics || null,
     legalChildCount: row?.childCount || 0,
     bestChild: row?.bestChild || null,
