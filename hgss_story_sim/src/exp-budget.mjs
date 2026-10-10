@@ -523,6 +523,20 @@ function createCandidateState(candidate, entryLevelPolicy = 'midpoint') {
     exp: initialExp,
     level,
     unknown: level === null || initialExp === null,
+    currentSpecies: candidate.species,
+    evolutionCursor: 0,
+    pendingEvolution: null,
+    evolutionHistory: [],
+    evolutionTransitions: [...(candidate.speciesByStage || [])].sort((a, b) => {
+      if (Number.isFinite(Number(a.order)) || Number.isFinite(Number(b.order))) {
+        return Number(a.order || 0) - Number(b.order || 0);
+      }
+      return (
+        Number(a.level || Infinity) - Number(b.level || Infinity) ||
+        Number(a.checkpointIndex || Infinity) - Number(b.checkpointIndex || Infinity) ||
+        Number(a.stage || 0) - Number(b.stage || 0)
+      );
+    }),
   };
 }
 
@@ -1051,6 +1065,33 @@ function snapshotLevels(states) {
   );
 }
 
+function snapshotSpecies(states) {
+  return Object.fromEntries(
+    [...states]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(state => [state.key, state.currentSpecies || state.species])
+  );
+}
+
+function snapshotEvolutionStates(states) {
+  return Object.fromEntries(
+    [...states]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(state => [state.key, {
+        species: state.currentSpecies || state.species,
+        cursor: Number(state.evolutionCursor || 0),
+        pending: state.pendingEvolution
+          ? {
+              transitionIndex: Number(state.pendingEvolution.transitionIndex),
+              activationLevel: Number(state.pendingEvolution.activationLevel),
+              activationCheckpointIndex: Number(state.pendingEvolution.activationCheckpointIndex),
+              condition: state.pendingEvolution.condition || null,
+            }
+          : null,
+      }])
+  );
+}
+
 function snapshotExp(states) {
   return Object.fromEntries(
     [...states]
@@ -1269,6 +1310,107 @@ export function buildTeamExpSchedule({
     return added;
   }
 
+  function evolutionCheckpointReached(transition, boss, checkpointIndex) {
+    if (Number.isFinite(Number(transition?.checkpointIndex))) {
+      return Number(checkpointIndex) >= Number(transition.checkpointIndex);
+    }
+    return Number(transition?.stage || 0) <= Number(boss?.stage || 0);
+  }
+
+  function recordEvolution(state, transition, boss, checkpointIndex, trigger) {
+    const fromSpecies = state.currentSpecies || state.species;
+    state.currentSpecies = transition.species;
+    state.evolutionCursor = Number(state.evolutionCursor || 0) + 1;
+    state.pendingEvolution = null;
+    state.evolutionHistory.push({
+      fromSpecies,
+      species: transition.species,
+      evolutionMethod: transition.evolutionMethod || null,
+      evolutionCondition: transition.evolutionCondition || null,
+      requiredItem: transition.requiredItem || null,
+      requiredMove: transition.requiredMove || null,
+      trigger,
+      checkpointIndex: Number(checkpointIndex),
+      boss: boss?.label || null,
+      level: Number(state.level),
+    });
+  }
+
+  function refreshEvolutionState(state, boss, checkpointIndex) {
+    if (!state || state.unknown) return;
+    for (;;) {
+      const cursor = Number(state.evolutionCursor || 0);
+      const transition = state.evolutionTransitions?.[cursor];
+      if (!transition) return;
+      if (
+        transition.fromSpecies &&
+        String(transition.fromSpecies) !== String(state.currentSpecies || state.species)
+      ) {
+        return;
+      }
+
+      if (transition.requiresLevelUpAfterCheckpoint) {
+        if (!evolutionCheckpointReached(transition, boss, checkpointIndex)) return;
+        if (!state.pendingEvolution || state.pendingEvolution.transitionIndex !== cursor) {
+          state.pendingEvolution = {
+            transitionIndex: cursor,
+            activationLevel: Number(state.level),
+            activationCheckpointIndex: Number(checkpointIndex),
+            condition: transition.evolutionCondition || null,
+          };
+        }
+        return;
+      }
+
+      const isLevelEvolution =
+        transition.derived === 'level-evolution' ||
+        /^level\s+\d+/i.test(String(transition.reason || ''));
+      if (isLevelEvolution && Number.isFinite(Number(transition.level))) {
+        if (Number(state.level) < Number(transition.level)) return;
+        recordEvolution(state, transition, boss, checkpointIndex, 'level-threshold');
+        continue;
+      }
+
+      if (!evolutionCheckpointReached(transition, boss, checkpointIndex)) return;
+      recordEvolution(state, transition, boss, checkpointIndex, 'checkpoint');
+    }
+  }
+
+  function refreshEvolutionStates(boss, checkpointIndex) {
+    for (const state of states) refreshEvolutionState(state, boss, checkpointIndex);
+  }
+
+  function applyEvolutionAfterLevelChanges(beforeLevels, boss, checkpointIndex) {
+    for (const state of states) {
+      if (state.unknown) continue;
+      const beforeLevel = Number(beforeLevels.get(state.key));
+      const currentLevel = Number(state.level);
+      if (!Number.isFinite(beforeLevel) || currentLevel <= beforeLevel) {
+        refreshEvolutionState(state, boss, checkpointIndex);
+        continue;
+      }
+
+      const pendingEvolution = state.pendingEvolution;
+      if (
+        pendingEvolution &&
+        Number(pendingEvolution.transitionIndex) === Number(state.evolutionCursor || 0) &&
+        currentLevel > Number(pendingEvolution.activationLevel)
+      ) {
+        const transition = state.evolutionTransitions?.[state.evolutionCursor];
+        if (transition) {
+          recordEvolution(
+            state,
+            transition,
+            boss,
+            checkpointIndex,
+            'level-up-after-condition',
+          );
+        }
+      }
+      refreshEvolutionState(state, boss, checkpointIndex);
+    }
+  }
+
   function configuredRecipientKeys(targetBoss, targetIndex) {
     const lookup = [
       String(targetIndex),
@@ -1326,7 +1468,17 @@ export function buildTeamExpSchedule({
     return { allocated, unallocated: remaining };
   }
 
-  function allocate(amount, targetBoss, targetIndex) {
+  function allocate(
+    amount,
+    targetBoss,
+    targetIndex,
+    evolutionBoss = targetBoss,
+    evolutionCheckpointIndex = targetIndex,
+  ) {
+    refreshEvolutionStates(evolutionBoss, evolutionCheckpointIndex);
+    const beforeLevels = new Map(
+      states.map(state => [state.key, Number(state.level)])
+    );
     const eligibleStates = activeRecipientStates(targetBoss, targetIndex);
     const activation = allocateActivationExp(amount, eligibleStates);
     totalActivationExp += activation.allocated;
@@ -1379,6 +1531,11 @@ export function buildTeamExpSchedule({
     } else {
       base = allocateBalancedExp(eligibleStates, remaining);
     }
+    applyEvolutionAfterLevelChanges(
+      beforeLevels,
+      evolutionBoss,
+      evolutionCheckpointIndex,
+    );
     return {
       allocated: activation.allocated + Number(base?.allocated || 0),
       unallocated: Number(base?.unallocated || 0),
@@ -1598,6 +1755,8 @@ export function buildTeamExpSchedule({
       mapTrainerCount += trainerWindowRows.length;
     }
 
+    refreshEvolutionStates(boss, battleIndex);
+
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const activeRecipientsForBoss = activeRecipientStates(boss, battleIndex);
     const aceGapBefore = aceGapForStates(activeRecipientsForBoss, Number(boss.aceLevel));
@@ -1609,8 +1768,11 @@ export function buildTeamExpSchedule({
     let grindAllocatedThisCheckpoint = {};
     let expectedGrindBattles = 0;
     if (grindPolicy === 'ace-paid' && aceGapBefore.total > 0) {
+      refreshEvolutionStates(boss, battleIndex);
+      const beforeLevels = new Map(states.map(state => [state.key, Number(state.level)]));
       const before = new Map(states.map(state => [state.key, Number(state.exp || 0)]));
       const applied = applyAcePaidGrind(activeRecipientsForBoss, Number(boss.aceLevel));
+      applyEvolutionAfterLevelChanges(beforeLevels, boss, battleIndex);
       grindExpBefore = applied.total;
       for (const state of states) {
         const delta = Math.max(0, Number(state.exp || 0) - Number(before.get(state.key) || 0));
@@ -1678,6 +1840,8 @@ export function buildTeamExpSchedule({
     }
 
     const levelsBefore = snapshotLevels(states);
+    const speciesBefore = snapshotSpecies(states);
+    const evolutionStateBefore = snapshotEvolutionStates(states);
     const expBefore = snapshotExp(states);
     const routeAllocatedExpBefore = snapshotRouteAllocatedExp(states);
     const recipientState = recipientSnapshot(boss, battleIndex);
@@ -1719,6 +1883,8 @@ export function buildTeamExpSchedule({
       grindAllocatedByKeyBefore: snapshotGrindAllocatedByKey(),
       expectedGrindBattles,
       levelsBefore,
+      speciesBefore,
+      evolutionStateBefore,
       expBefore,
       routeAllocatedExpBefore,
       activeRecipientKeysBefore: recipientState.activeRecipientKeys,
@@ -1732,6 +1898,8 @@ export function buildTeamExpSchedule({
       majorReward.total,
       routeBosses[nextAllocationIndex] || boss,
       nextAllocationIndex,
+      boss,
+      battleIndex,
     );
     totalMajorExp += majorReward.total;
     totalMajorMoney += majorPrizeMoney;
@@ -1809,5 +1977,11 @@ export function buildTeamExpSchedule({
     unknownEntryLevels: states.filter(state => state.unknown).map(state => state.species),
     battles,
     finalLevels: snapshotLevels(states),
+    finalSpecies: snapshotSpecies(states),
+    evolutionHistory: Object.fromEntries(
+      [...states]
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(state => [state.key, [...(state.evolutionHistory || [])]])
+    ),
   };
 }
