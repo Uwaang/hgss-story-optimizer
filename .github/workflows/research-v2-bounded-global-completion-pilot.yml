@@ -1,0 +1,534 @@
+name: research-v2-bounded-global-completion-pilot
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SEARCH_ARGS: >-
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  screen_merge:
+    if: contains(github.event.head_commit.message, '[research-v2-global-completion-pilot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-screen-recall-shard-*
+          path: hgss_story_sim/results/screen
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38064415521
+          github-token: ${{ github.token }}
+      - name: Merge current screen evidence at recall-safe pilot cap
+        run: |
+          SHARDS="$(find results/screen -name 'screen-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-screen-merge \
+            --inputs="$SHARDS" --candidate-cap=60 \
+            $SEARCH_ARGS \
+            > results/checkpoint.json
+          jq '{candidateCap,scannedCandidates,screenedCandidates,screenedCandidateFamilies,timings}' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-screen-cap60
+          path: hgss_story_sim/results/checkpoint.json
+          if-no-files-found: error
+
+  beam2_shard:
+    needs: screen_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-2-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-screen-cap60
+          path: hgss_story_sim/results/input
+      - name: Expand beam 2
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=2 --runs=2 \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/beam-2-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam2-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-2-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam2_merge:
+    needs: beam2_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-screen-cap60
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-beam2-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge beam 2
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/battle-cache-merged.json
+          SHARDS="$(find results/shards -name 'beam-2-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=2 --runs=2 --beam-width=6 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            $SEARCH_ARGS \
+            > results/checkpoint.json
+          jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam2-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam3_shard:
+    needs: beam2_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-3-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam2-merge
+          path: hgss_story_sim/results/input
+      - name: Expand beam 3
+        run: |
+          cp results/input/battle-cache-merged.json "results/battle-cache-3-${{ matrix.shard }}.json"
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=3 --runs=2 \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/beam-3-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam3-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-3-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam3_merge:
+    needs: beam3_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam2-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge beam 3
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-3-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/battle-cache-merged.json
+          SHARDS="$(find results/shards -name 'beam-3-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=3 --runs=2 --beam-width=6 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            $SEARCH_ARGS \
+            > results/checkpoint.json
+          jq '.timings[-1]' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam3-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  beam4_shard:
+    needs: beam3_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-4-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam3-merge
+          path: hgss_story_sim/results/input
+      - name: Expand beam 4
+        run: |
+          cp results/input/battle-cache-merged.json "results/battle-cache-4-${{ matrix.shard }}.json"
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=4 --runs=2 \
+            --shard-count=6 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/beam-4-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam4-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-4-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/battle-cache-4-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam4_merge:
+    needs: beam4_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/battle-cache-merged.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam3-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-beam4-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge beam 4 into wider parent challenger pool
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-4-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/battle-cache-merged.json
+          SHARDS="$(find results/shards -name 'beam-4-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=4 --runs=2 --beam-width=12 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 \
+            --adaptive-challenger-cap=12 \
+            $SEARCH_ARGS \
+            > results/checkpoint.json
+          jq '{stage,beamCount:(.beam|length),timing:.timings[-1],beam:[.beam[]|{teamKeys,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}]}' results/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-beam4-merge
+          path: |
+            hgss_story_sim/results/checkpoint.json
+            hgss_story_sim/results/battle-cache-merged.json
+          if-no-files-found: error
+
+  completion5_shard:
+    needs: beam4_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/completion-cache-5-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam4-merge
+          path: hgss_story_sim/results/input
+      - name: Exhaustive one-step completion rollout shard
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint.json \
+            --target-size=5 --runs=1 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/completion-5-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-completion5-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/completion-5-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  completion_rank:
+    needs: completion5_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      confirm_matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam4-merge
+          path: hgss_story_sim/results/parents
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-completion5-shard-*
+          path: hgss_story_sim/results/children
+          merge-multiple: true
+      - name: Rank beam4 parents by best one-step completion
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/parents/checkpoint.json','utf8'));
+          const parents=(d.beam||[]).map((row,index)=>({
+            name:'global-beam4-'+index,
+            kind:'global',
+            teamKeys:row.teamKeys,
+            evaluation:row.evaluation
+          }));
+          fs.writeFileSync('results/parents/parent-info.json',JSON.stringify({parents},null,2));
+          NODE
+          CHILDREN="$(find results/children -name 'completion-5-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs completion-aware-artifact-rank \
+            --parents=results/parents/parent-info.json \
+            --inputs="$CHILDREN" --top-k=12 \
+            > results/completion-rank.json
+          jq '{parentCount,uniqueChildren,rows:[.rows[]|{currentRank,completionRank,teamKeys,currentMetrics,bestChild}]}' results/completion-rank.json
+      - name: Build confirmation matrix for all beam4 parents
+        id: matrix
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/completion-rank.json','utf8'));
+          const include=(d.rows||[]).filter(r=>r.bestChild?.addedKey).map((r,index)=>({
+            label:'p'+String(index+1).padStart(2,'0'),
+            prefix:Buffer.from(JSON.stringify(r.teamKeys),'utf8').toString('base64'),
+            added_key:r.bestChild.addedKey,
+            parent_key:[...r.teamKeys].sort().join('|')
+          }));
+          if(!include.length) throw new Error('completion rank produced no confirmable parent/child pairs');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\n');
+          fs.writeFileSync('results/confirm-matrix.json',JSON.stringify({include},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-completion-rank
+          path: |
+            hgss_story_sim/results/completion-rank.json
+            hgss_story_sim/results/confirm-matrix.json
+            hgss_story_sim/results/parents/parent-info.json
+          if-no-files-found: error
+
+  confirm16:
+    needs: completion_rank
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.completion_rank.outputs.confirm_matrix) }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      HGSS_BATTLE_CACHE_PATH: results/global-confirm-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Confirm selected parent/best-child pair at 16 runs
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64="${{ matrix.prefix }}" \
+            --added-key="${{ matrix.added_key }}" \
+            --runs=16 \
+            --route-profile=complete \
+            $SEARCH_ARGS \
+            > "results/research-v2/confirm-${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-global-confirm-${{ matrix.label }}
+          path: hgss_story_sim/results/research-v2/confirm-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: confirm16
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-completion-rank
+          path: hgss_story_sim/results/rank
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-confirm-*
+          path: hgss_story_sim/results/confirms
+          merge-multiple: true
+      - name: Compare confirmed current and completion ranks
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rank=JSON.parse(fs.readFileSync('results/rank/completion-rank.json','utf8'));
+          const files=fs.readdirSync('results/confirms').filter(x=>/^confirm-p\d+\.json$/.test(x)).sort();
+          const confirms=files.map(file=>JSON.parse(fs.readFileSync('results/confirms/'+file,'utf8')));
+          const key=keys=>[...(keys||[])].sort().join('|');
+          const byParent=new Map(confirms.map(r=>[key(r.prefixKeys),r]));
+          const cmp=(a,b)=>
+            Number(a?.retry??Infinity)-Number(b?.retry??Infinity) ||
+            Number(b?.geometric??0)-Number(a?.geometric??0) ||
+            Number(b?.mean??0)-Number(a?.mean??0) ||
+            Number(b?.progress??0)-Number(a?.progress??0);
+          const rows=(rank.rows||[]).map(r=>{
+            const c=byParent.get(key(r.teamKeys));
+            if(!c) throw new Error('missing 16-run confirmation for '+key(r.teamKeys));
+            return {
+              teamKeys:r.teamKeys,
+              lowSampleCurrentRank:r.currentRank,
+              lowSampleCompletionRank:r.completionRank,
+              selectedAddedKey:c.requestedAddedKey,
+              parentMetrics:c.parentMetrics,
+              childMetrics:c.bestChild?.metrics||null,
+              improvement:c.improvement
+            };
+          });
+          const parentOrder=[...rows].sort((a,b)=>cmp(a.parentMetrics,b.parentMetrics)||key(a.teamKeys).localeCompare(key(b.teamKeys)));
+          parentOrder.forEach((r,i)=>r.confirmedCurrentRank=i+1);
+          const childOrder=[...rows].sort((a,b)=>cmp(a.childMetrics,b.childMetrics)||key(a.teamKeys).localeCompare(key(b.teamKeys)));
+          childOrder.forEach((r,i)=>r.confirmedCompletionRank=i+1);
+          for(const r of rows){
+            r.confirmedRankShift=r.confirmedCurrentRank-r.confirmedCompletionRank;
+            r.positiveCompletion=
+              Number(r.improvement?.retry||0)>0 &&
+              Number(r.improvement?.geometric||0)>0 &&
+              Number(r.improvement?.mean||0)>0;
+          }
+          rows.sort((a,b)=>a.confirmedCompletionRank-b.confirmedCompletionRank);
+          const out={
+            schemaVersion:1,
+            candidateFamilyCap:60,
+            beamWidthThrough3:6,
+            beam4ParentWidth:12,
+            rolloutRuns:1,
+            confirmRuns:16,
+            parentCount:rows.length,
+            positiveCompletionCount:rows.filter(r=>r.positiveCompletion).length,
+            rankShiftCount:rows.filter(r=>r.confirmedRankShift!==0).length,
+            maxPositiveRankShift:Math.max(0,...rows.map(r=>r.confirmedRankShift)),
+            rows
+          };
+          fs.writeFileSync('results/global-completion-pilot-summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-bounded-global-completion-pilot-summary
+          path: hgss_story_sim/results/global-completion-pilot-summary.json
+          if-no-files-found: error
