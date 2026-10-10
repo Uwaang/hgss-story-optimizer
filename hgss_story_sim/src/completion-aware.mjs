@@ -159,3 +159,148 @@ export function completionRecallSummary(
     rows: ranked.rows,
   };
 }
+
+
+function completionRankLayers(items) {
+  const remaining = [...items];
+  const layers = [];
+  const dominates = (a, b) => {
+    const atLeastAsGood =
+      Number(a.currentRank) <= Number(b.currentRank) &&
+      Number(a.completionRank) <= Number(b.completionRank);
+    const strictlyBetter =
+      Number(a.currentRank) < Number(b.currentRank) ||
+      Number(a.completionRank) < Number(b.completionRank);
+    return atLeastAsGood && strictlyBetter;
+  };
+  while (remaining.length) {
+    const front = remaining.filter((item, index) =>
+      !remaining.some((other, otherIndex) =>
+        index !== otherIndex && dominates(other, item)
+      )
+    );
+    if (!front.length) {
+      layers.push([...remaining]);
+      break;
+    }
+    layers.push(front);
+    const set = new Set(front);
+    for (let i = remaining.length - 1; i >= 0; i -= 1) {
+      if (set.has(remaining[i])) remaining.splice(i, 1);
+    }
+  }
+  return layers;
+}
+
+function completionRankCrowdingOrder(items) {
+  const distance = new Map(items.map(item => [item, 0]));
+  for (const field of ['currentRank', 'completionRank']) {
+    const ordered = [...items].sort((a, b) =>
+      Number(a[field]) - Number(b[field]) ||
+      a.key.localeCompare(b.key)
+    );
+    if (ordered.length < 2) continue;
+    const lo = Number(ordered[0][field]);
+    const hi = Number(ordered[ordered.length - 1][field]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) continue;
+    distance.set(ordered[0], Number.POSITIVE_INFINITY);
+    distance.set(ordered[ordered.length - 1], Number.POSITIVE_INFINITY);
+    for (let i = 1; i < ordered.length - 1; i += 1) {
+      if (!Number.isFinite(distance.get(ordered[i]))) continue;
+      distance.set(
+        ordered[i],
+        Number(distance.get(ordered[i]) || 0) +
+          (Number(ordered[i + 1][field]) - Number(ordered[i - 1][field])) / (hi - lo),
+      );
+    }
+  }
+  return [...items].sort((a, b) =>
+    Number(distance.get(b) || 0) - Number(distance.get(a) || 0) ||
+    Math.min(a.currentRank, a.completionRank) - Math.min(b.currentRank, b.completionRank) ||
+    a.key.localeCompare(b.key)
+  );
+}
+
+export function selectCompletionAwareParents(rows = [], width = 6) {
+  const normalizedWidth = Math.max(1, Math.floor(Number(width || 1)));
+  const normalized = rows.map(row => ({
+    ...row,
+    key: row.key || completionTeamKey(row.teamKeys || []),
+    currentMetrics: row.currentMetrics || null,
+    completionMetrics: row.completionMetrics || row.childMetrics || null,
+  }));
+
+  const currentOrder = [...normalized].sort((a, b) =>
+    compareCompletionMetrics(a.currentMetrics, b.currentMetrics) ||
+    a.key.localeCompare(b.key)
+  );
+  currentOrder.forEach((row, index) => {
+    row.currentRank = index + 1;
+  });
+
+  const completionOrder = [...normalized].sort((a, b) =>
+    compareCompletionMetrics(a.completionMetrics, b.completionMetrics) ||
+    a.key.localeCompare(b.key)
+  );
+  completionOrder.forEach((row, index) => {
+    row.completionRank = index + 1;
+  });
+
+  const layers = completionRankLayers(normalized);
+  const selected = [];
+  const selectedKeys = new Set();
+  for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+    const layer = layers[layerIndex];
+    for (const row of layer) row.selectionLayer = layerIndex + 1;
+    const remaining = normalizedWidth - selected.length;
+    if (remaining <= 0) break;
+    const ordered = layer.length <= remaining
+      ? [...layer].sort((a, b) =>
+          Math.min(a.currentRank, a.completionRank) - Math.min(b.currentRank, b.completionRank) ||
+          a.currentRank - b.currentRank ||
+          a.completionRank - b.completionRank ||
+          a.key.localeCompare(b.key)
+        )
+      : completionRankCrowdingOrder(layer);
+    for (const row of ordered) {
+      if (selected.length >= normalizedWidth) break;
+      if (selectedKeys.has(row.key)) continue;
+      selectedKeys.add(row.key);
+      selected.push(row);
+    }
+  }
+
+  if (selected.length < normalizedWidth) {
+    const fallback = [...normalized].sort((a, b) =>
+      Math.min(a.currentRank, a.completionRank) - Math.min(b.currentRank, b.completionRank) ||
+      a.currentRank + a.completionRank - b.currentRank - b.completionRank ||
+      a.key.localeCompare(b.key)
+    );
+    for (const row of fallback) {
+      if (selected.length >= normalizedWidth) break;
+      if (selectedKeys.has(row.key)) continue;
+      selectedKeys.add(row.key);
+      selected.push(row);
+    }
+  }
+
+  const selectedSet = new Set(selected.map(row => row.key));
+  const rankedRows = [...normalized]
+    .map(row => ({ ...row, selected: selectedSet.has(row.key) }))
+    .sort((a, b) =>
+      Number(a.selectionLayer || Number.POSITIVE_INFINITY) -
+        Number(b.selectionLayer || Number.POSITIVE_INFINITY) ||
+      a.currentRank - b.currentRank ||
+      a.completionRank - b.completionRank ||
+      a.key.localeCompare(b.key)
+    );
+
+  return {
+    width: normalizedWidth,
+    parentCount: normalized.length,
+    selectedCount: selected.length,
+    selectedKeys: selected.map(row => row.key),
+    selected,
+    rows: rankedRows,
+  };
+}
