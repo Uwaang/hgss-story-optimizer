@@ -1,0 +1,72 @@
+name: research-v2-exp-scheduler-coordinate-scan
+# SCRUM-417 multi-member recipient schedule coordinate screen
+
+on:
+  push:
+    branches:
+      - research/v2-exp-scheduler-v1
+
+permissions:
+  contents: read
+
+jobs:
+  coordinate-scan:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-coordinate]')
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - Typhlosion
+          - Magneton
+          - Gyarados
+          - Gengar
+          - Rhyperior
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Recipient-state regression smoke
+        run: node src/cli.mjs exp-scheduler-v1-smoke
+      - name: Coordinate scan with Quagsire fixed at Lance
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs exp-scheduler-v1-activation-scan \
+            --runs=2 \
+            --target="${{ matrix.target }}" \
+            --route-grind-proxy-target=0.5 \
+            --base-recipient-schedule-base64="eyJRdWFnc2lyZSI6IkxhbmNlIn0=" \
+            > "results/research-v2/coordinate-${{ matrix.target }}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const target='${{ matrix.target }}';
+          const r=JSON.parse(fs.readFileSync(`results/research-v2/coordinate-${target}.json`,'utf8'));
+          const slim=row=>({
+            label:row.label,
+            activationBoss:row.activationBoss,
+            retry:row.expectedRetryFailures,
+            geometric:row.geometricScore,
+            mean:row.meanWinRate,
+            progress:row.battleProgressScore,
+            grindProxyBattles:row.grindProxyBattles,
+            targetFinalLevel:row.targetFinalLevel
+          });
+          console.log(JSON.stringify({
+            target,
+            assumptions:r.assumptions,
+            firstEligibleBoss:r.firstEligibleBoss,
+            pareto:r.pareto.map(slim),
+            top10:r.top10.map(slim)
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-exp-scheduler-coordinate-${{ matrix.target }}
+          path: hgss_story_sim/results/research-v2/coordinate-${{ matrix.target }}.json
+          if-no-files-found: error
