@@ -1550,11 +1550,22 @@ export function buildTeamExpSchedule({
     );
   }
 
-  function allocateTrackedGrind(amount, boss, battleIndex) {
+  function allocateTrackedGrind(
+    amount,
+    boss,
+    battleIndex,
+    evolutionCheckpointIndex = battleIndex,
+  ) {
     const requested = Math.max(0, Math.floor(Number(amount || 0)));
     if (!requested) return { allocated: 0, unallocated: 0, byKey: {} };
     const before = new Map(states.map(state => [state.key, Number(state.exp || 0)]));
-    const result = allocate(requested, boss, battleIndex);
+    const result = allocate(
+      requested,
+      boss,
+      battleIndex,
+      boss,
+      evolutionCheckpointIndex,
+    );
     const byKey = {};
     for (const state of states) {
       const delta = Math.max(0, Number(state.exp || 0) - Number(before.get(state.key) || 0));
@@ -1638,6 +1649,9 @@ export function buildTeamExpSchedule({
 
   for (const [battleIndex, boss] of routeBosses.entries()) {
     const stage = Number(boss.stage);
+    const evolutionCheckpointIndex = Number.isFinite(Number(boss?._routeIndex))
+      ? Number(boss._routeIndex)
+      : battleIndex;
     const firstBattleInStage = !stageStarted.has(stage);
     const nextBoss = routeBosses[battleIndex + 1] || null;
     const lastBattleInStage = !nextBoss || Number(nextBoss.stage) !== stage;
@@ -1685,7 +1699,13 @@ export function buildTeamExpSchedule({
         mapExpBefore += source.totalExp;
         mapMoneyBefore += source.totalMoney;
         mapTrainerCount += source.trainers.length;
-        const allocation = allocate(source.totalExp, boss, battleIndex);
+        const allocation = allocate(
+          source.totalExp,
+          boss,
+          battleIndex,
+          boss,
+          evolutionCheckpointIndex,
+        );
         totalAllocatedExp += allocation.allocated;
         totalUnallocatedExp += allocation.unallocated;
         processedMaps.add(map);
@@ -1726,7 +1746,13 @@ export function buildTeamExpSchedule({
         mapExpBefore = source.totalExp;
         mapMoneyBefore = source.totalMoney;
         mapTrainerCount = source.trainers.length;
-        const allocation = allocate(mapExpBefore, boss, battleIndex);
+        const allocation = allocate(
+          mapExpBefore,
+          boss,
+          battleIndex,
+          boss,
+          evolutionCheckpointIndex,
+        );
         totalAllocatedExp += allocation.allocated;
         totalUnallocatedExp += allocation.unallocated;
         totalMapExp += mapExpBefore;
@@ -1744,7 +1770,13 @@ export function buildTeamExpSchedule({
       ? 0
       : trainerWindowRows.reduce((sum, row) => sum + Number(row.prizeMoney || 0), 0);
     if (trainerWindowExp > 0 || trainerWindowMoney > 0) {
-      const allocation = allocate(trainerWindowExp, boss, battleIndex);
+      const allocation = allocate(
+        trainerWindowExp,
+        boss,
+        battleIndex,
+        boss,
+        evolutionCheckpointIndex,
+      );
       totalAllocatedExp += allocation.allocated;
       totalUnallocatedExp += allocation.unallocated;
       totalMapExp += trainerWindowExp;
@@ -1755,7 +1787,7 @@ export function buildTeamExpSchedule({
       mapTrainerCount += trainerWindowRows.length;
     }
 
-    refreshEvolutionStates(boss, battleIndex);
+    refreshEvolutionStates(boss, evolutionCheckpointIndex);
 
     const wild = expWorld.bestWildByStage?.get(stage)?.best || null;
     const activeRecipientsForBoss = activeRecipientStates(boss, battleIndex);
@@ -1768,11 +1800,15 @@ export function buildTeamExpSchedule({
     let grindAllocatedThisCheckpoint = {};
     let expectedGrindBattles = 0;
     if (grindPolicy === 'ace-paid' && aceGapBefore.total > 0) {
-      refreshEvolutionStates(boss, battleIndex);
+      refreshEvolutionStates(boss, evolutionCheckpointIndex);
       const beforeLevels = new Map(states.map(state => [state.key, Number(state.level)]));
       const before = new Map(states.map(state => [state.key, Number(state.exp || 0)]));
       const applied = applyAcePaidGrind(activeRecipientsForBoss, Number(boss.aceLevel));
-      applyEvolutionAfterLevelChanges(beforeLevels, boss, battleIndex);
+      applyEvolutionAfterLevelChanges(
+        beforeLevels,
+        boss,
+        evolutionCheckpointIndex,
+      );
       grindExpBefore = applied.total;
       for (const state of states) {
         const delta = Math.max(0, Number(state.exp || 0) - Number(before.get(state.key) || 0));
@@ -1806,7 +1842,12 @@ export function buildTeamExpSchedule({
           0,
           Math.floor(plannedBattles * Number(wild.expectedExpPerBattle))
         );
-        const applied = allocateTrackedGrind(requestedExp, boss, battleIndex);
+        const applied = allocateTrackedGrind(
+          requestedExp,
+          boss,
+          battleIndex,
+          evolutionCheckpointIndex,
+        );
         grindExpBefore = Number(applied.allocated || 0);
         grindAllocatedThisCheckpoint = applied.byKey || {};
         totalReleasedGrindBudget += grindExpBefore;
@@ -1827,7 +1868,12 @@ export function buildTeamExpSchedule({
         Math.min(normalizedGrindBudget, targetReleased) - totalReleasedGrindBudget,
       );
       if (newlyReleased > 0) {
-        const applied = allocateTrackedGrind(newlyReleased, boss, battleIndex);
+        const applied = allocateTrackedGrind(
+          newlyReleased,
+          boss,
+          battleIndex,
+          evolutionCheckpointIndex,
+        );
         grindExpBefore = Number(applied.allocated || 0);
         grindAllocatedThisCheckpoint = applied.byKey || {};
         totalReleasedGrindBudget += newlyReleased;
@@ -1899,7 +1945,7 @@ export function buildTeamExpSchedule({
       routeBosses[nextAllocationIndex] || boss,
       nextAllocationIndex,
       boss,
-      battleIndex,
+      evolutionCheckpointIndex,
     );
     totalMajorExp += majorReward.total;
     totalMajorMoney += majorPrizeMoney;
