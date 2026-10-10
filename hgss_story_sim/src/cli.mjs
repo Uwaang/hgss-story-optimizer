@@ -426,9 +426,10 @@ async function loadEqualLevelStory() {
 
 async function loadCanonicalPool(version, story = null, evolutionPolicy = 'level-only') {
   const context = story || await loadStory();
-  const [access, evolutionAccess] = await Promise.all([
+  const [access, evolutionAccess, moveAccess] = await Promise.all([
     readJson('config/story-access.canonical.json'),
     readJson('config/evolution-access.hgss.json'),
+    readJson('config/move-access.json'),
   ]);
   return buildCanonicalCandidatePool({
     commit: context.config.sourceCommit,
@@ -437,6 +438,7 @@ async function loadCanonicalPool(version, story = null, evolutionPolicy = 'level
     version,
     evolutionPolicy,
     evolutionAccess,
+    moveAccess,
   });
 }
 
