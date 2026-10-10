@@ -7186,6 +7186,12 @@ async function cmdExpSchedulerV1FrontierScreen() {
     0.01,
     Math.min(1, Number(arg('route-grind-proxy-target', '0.5'))),
   );
+  const expandSeedIndices = String(arg('expand-seed-indices', ''))
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => Number(value))
+    .filter(value => Number.isInteger(value) && value >= 0);
 
   const story = await loadStory();
   const [pool, moveAccess, baseExpContext] = await Promise.all([
@@ -7226,6 +7232,17 @@ async function cmdExpSchedulerV1FrontierScreen() {
 
   for (const seed of seeds) {
     states.set(recipientScheduleStateKey(seed), seed);
+  }
+
+  const expansionSeeds = expandSeedIndices.length
+    ? expandSeedIndices.map(index => {
+        const seed = seeds[index];
+        if (!seed) throw new Error('Unknown frontier seed index: ' + index);
+        return seed;
+      })
+    : seeds;
+
+  for (const seed of expansionSeeds) {
     for (const candidate of expandable) {
       const member = candidate.terminalSpecies || candidate.species;
       const firstEligibleIndex = routeBosses.findIndex(
@@ -7311,6 +7328,10 @@ async function cmdExpSchedulerV1FrontierScreen() {
       runsPerBoss: runs,
       routeGrindProxyTarget,
       seedCount: seeds.length,
+      expansionSeedIndices: expandSeedIndices.length
+        ? expandSeedIndices
+        : seeds.map((_seed, index) => index),
+      expansionSeedCount: expansionSeeds.length,
       stateCount: rows.length,
       objectives,
     },
