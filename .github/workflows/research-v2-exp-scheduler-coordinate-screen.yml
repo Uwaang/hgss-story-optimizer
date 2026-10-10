@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-screen
-# SCRUM-417 high-sample proxy-frontier finalists
+# SCRUM-417 practical screen for second-wave proxy frontier
 
 on:
   push:
@@ -10,20 +10,26 @@ permissions:
   contents: read
 
 jobs:
-  finalist-validation:
-    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-proxy-finalists]')
+  second-wave-practical:
+    if: contains(github.event.head_commit.message, '[research-v2-exp-scheduler-second-wave]')
     strategy:
       fail-fast: false
       matrix:
         include:
-          - state: rhyperior-misty
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkifQ==
-          - state: quagsire-lt-surge-rhyperior-misty
+          - state: base-lt-surge-rhyperior-misty
             schedule_b64: eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0=
-          - state: magneton-red-rhyperior-misty
-            schedule_b64: eyJRdWFnc2lyZSI6IkxhbmNlIiwiUmh5cGVyaW9yIjoiTWlzdHkiLCJNYWduZXRvbiI6IlJlZCJ9
+          - state: gengar-whitney
+            schedule_b64: eyJHZW5nYXIiOiJXaGl0bmV5IiwiUXVhZ3NpcmUiOiJMdC4gU3VyZ2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
+          - state: gyarados-whitney
+            schedule_b64: eyJHeWFyYWRvcyI6IldoaXRuZXkiLCJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0=
+          - state: magneton-morty
+            schedule_b64: eyJNYWduZXRvbiI6Ik1vcnR5IiwiUXVhZ3NpcmUiOiJMdC4gU3VyZ2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9
+          - state: gyarados-will
+            schedule_b64: eyJHeWFyYWRvcyI6IldpbGwiLCJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0=
+          - state: gyarados-blaine-magneton-red
+            schedule_b64: eyJHeWFyYWRvcyI6IkJsYWluZSIsIk1hZ25ldG9uIjoiUmVkIiwiUXVhZ3NpcmUiOiJMYW5jZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0=
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -33,27 +39,29 @@ jobs:
         with:
           node-version: '22'
       - run: npm install
-      - name: Recipient-state regression smoke
-        run: node src/cli.mjs exp-scheduler-v1-smoke
-      - name: Story50 and Red25 Red50 high-sample validation
+      - name: Recipient/evolution regression smoke
+        run: |
+          node src/cli.mjs exp-scheduler-v1-smoke
+          node src/cli.mjs exp-scheduler-v1-evolution-trigger-smoke
+      - name: Story50 practical second-wave screen
         run: |
           mkdir -p results/research-v2
           node src/cli.mjs route-exp-practical-grind \
             --team-preset=d-quagsire \
             --recipient-schedule-base64="${{ matrix.schedule_b64 }}" \
             --story-targets=0.5 \
-            --red-targets=0.25,0.5 \
-            --screen-runs=2 \
-            --verify-runs=8 \
-            --repair-runs=32 \
-            --final-runs=64 \
-            --max-repair-rounds=16 \
+            --skip-red=true \
+            --screen-runs=1 \
+            --verify-runs=4 \
+            --repair-runs=8 \
+            --final-runs=16 \
+            --max-repair-rounds=10 \
             --repair-mode=global-only \
             --lean-repair=true \
-            > results/research-v2/proxy-finalist-${{ matrix.state }}.json
+            > results/research-v2/second-wave-${{ matrix.state }}.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const file='results/research-v2/proxy-finalist-${{ matrix.state }}.json';
+          const file='results/research-v2/second-wave-${{ matrix.state }}.json';
           const r=JSON.parse(fs.readFileSync(file,'utf8'));
           console.log(JSON.stringify({
             state:'${{ matrix.state }}',
@@ -65,23 +73,12 @@ jobs:
               storyWorstBossWinRate:x.storyWorstBossWinRate,
               repairConverged:x.repairConverged,
               repairRounds:x.repairRounds,
-              storyPlan:x.storyPlan,
-              redBaseline:x.redBaseline,
-              redFrontier:x.redFrontier.map(y=>({
-                targetWinRate:y.targetWinRate,
-                additionalRedGrindBattles:y.additionalRedGrindBattles,
-                totalGrindBattles:y.totalGrindBattles,
-                totalGrindExp:y.totalGrindExp,
-                achievedWinRate:y.achievedWinRate,
-                averageOpponentFaints:y.averageOpponentFaints,
-                finalLevels:y.finalLevels,
-                plan:y.plan
-              }))
+              storyPlan:x.storyPlan
             }))
           },null,2));
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: research-v2-exp-scheduler-proxy-finalist-${{ matrix.state }}
-          path: hgss_story_sim/results/research-v2/proxy-finalist-${{ matrix.state }}.json
+          name: research-v2-exp-scheduler-second-wave-${{ matrix.state }}
+          path: hgss_story_sim/results/research-v2/second-wave-${{ matrix.state }}.json
           if-no-files-found: error
