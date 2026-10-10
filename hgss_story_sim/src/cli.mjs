@@ -6875,6 +6875,105 @@ async function cmdExpSchedulerV1ParetoSmoke() {
 }
 
 
+async function cmdExpSchedulerV1FrontierExpand() {
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story, 'trade-aware');
+  const team = [
+    canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+    canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+    canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+    canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+    canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+    canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+  ];
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Scheduler-v1 frontier expansion control team violates constraints');
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const encodedSeeds = String(arg('seed-schedules-base64', '')).trim();
+  let seeds;
+  if (encodedSeeds) {
+    try {
+      seeds = JSON.parse(Buffer.from(encodedSeeds, 'base64').toString('utf8'));
+    } catch (error) {
+      throw new Error('Invalid --seed-schedules-base64 JSON: ' + error.message);
+    }
+    if (!Array.isArray(seeds) || seeds.some(row => !row || typeof row !== 'object' || Array.isArray(row))) {
+      throw new Error('--seed-schedules-base64 must decode to an array of schedule objects');
+    }
+  } else {
+    seeds = [
+      { Quagsire: 'Lance' },
+      { Quagsire: 'Lance', Gengar: 'Lance', Rhyperior: 'Lance' },
+      { Quagsire: 'Lance', Rhyperior: 'Misty' },
+    ];
+  }
+
+  const expandable = team.filter(candidate => candidate.exclusiveGroup !== 'starter');
+  const seen = new Set(seeds.map(recipientScheduleStateKey));
+  const expansions = [];
+  const bySeed = [];
+  const byMember = {};
+
+  for (const seed of seeds) {
+    const seedKey = recipientScheduleStateKey(seed);
+    let seedCount = 0;
+    for (const candidate of expandable) {
+      const member = candidate.terminalSpecies || candidate.species;
+      const firstEligibleIndex = routeBosses.findIndex(
+        boss => Number(boss.stage) >= Number(candidate.availableFrom || 0)
+      );
+      if (firstEligibleIndex < 0) continue;
+      const checkpoints = routeBosses
+        .slice(firstEligibleIndex)
+        .map(boss => String(boss.label));
+
+      const neighbors = expandRecipientScheduleCoordinates({
+        schedule: seed,
+        members: [member],
+        checkpoints,
+      });
+      for (const neighbor of neighbors) {
+        if (seen.has(neighbor.stateKey)) continue;
+        seen.add(neighbor.stateKey);
+        expansions.push({
+          seedKey,
+          member,
+          from: neighbor.from,
+          to: neighbor.to,
+          stateKey: neighbor.stateKey,
+          schedule: neighbor.schedule,
+        });
+        seedCount += 1;
+        byMember[member] = Number(byMember[member] || 0) + 1;
+      }
+    }
+    bySeed.push({ seedKey, expansionCount: seedCount });
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-417 bounded one-coordinate expansion from validated recipient-schedule Pareto seeds',
+    team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    seedSchedules: seeds.map(schedule => ({
+      stateKey: recipientScheduleStateKey(schedule),
+      schedule: JSON.parse(recipientScheduleStateKey(schedule)),
+    })),
+    expandableMembers: expandable.map(candidate => ({
+      member: candidate.terminalSpecies || candidate.species,
+      key: candidateIdentity(candidate),
+      availableFrom: candidate.availableFrom,
+    })),
+    routeCheckpointCount: routeBosses.length,
+    uniqueExpansionCount: expansions.length,
+    bySeed,
+    byMember,
+    expansions,
+  }, null, 2));
+}
+
+
 async function cmdExpAllocatorSmoke() {
   const story = await loadStory();
   const pool = await loadCanonicalPool('HEARTGOLD', story);
@@ -14303,6 +14402,7 @@ const commands = {
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
+  'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,
   'exp-scheduler-v1-activation-scan': cmdExpSchedulerV1ActivationScan,
   'exp-allocator-smoke': cmdExpAllocatorSmoke,
   'team-order-smoke': cmdTeamOrderSmoke,
