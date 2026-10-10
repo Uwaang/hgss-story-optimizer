@@ -3822,6 +3822,88 @@ async function cmdCompletionAwareArtifactRank() {
 }
 
 
+async function cmdCompletionAwarePrefixProbe() {
+  const ctx = await loadStagedRouteContext();
+  const encoded = String(arg('prefix-base64', '')).trim();
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  if (!encoded) {
+    throw new Error('completion-aware-prefix-probe requires --prefix-base64');
+  }
+
+  let prefixKeys;
+  try {
+    prefixKeys = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('Invalid --prefix-base64 JSON: ' + error.message);
+  }
+  if (!Array.isArray(prefixKeys) || !prefixKeys.length) {
+    throw new Error('--prefix-base64 must decode to a non-empty team-key array');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const missing = prefixKeys.filter(key => !byKey.has(String(key)));
+  if (missing.length) {
+    throw new Error(
+      'completion-aware prefix references missing current candidate key(s): ' +
+      missing.join(', ')
+    );
+  }
+  const prefixTeam = stagedTeamFromKeys(prefixKeys, byKey);
+  if (!validateCandidateTeam(prefixTeam) || !teamRespectsExclusiveGroups(prefixTeam)) {
+    throw new Error('completion-aware prefix violates team constraints');
+  }
+  if (prefixTeam.length >= 6) {
+    throw new Error('completion-aware prefix probe requires team size < 6');
+  }
+
+  const parentEvaluation = await stagedEvaluateTeam(ctx, prefixTeam, runs);
+  const childMap = new Map();
+  for (const candidate of ctx.pool.candidates) {
+    const key = candidateIdentity(candidate);
+    if (prefixKeys.includes(key)) continue;
+    const childTeam = [...prefixTeam, candidate];
+    if (!validateCandidateTeam(childTeam) || !teamRespectsExclusiveGroups(childTeam)) {
+      continue;
+    }
+    const childKey = childTeam.map(candidateIdentity).sort().join('|');
+    if (childMap.has(childKey)) continue;
+    const evaluation = await stagedEvaluateTeam(ctx, childTeam, runs);
+    childMap.set(childKey, {
+      teamKeys: childTeam.map(candidateIdentity),
+      evaluation,
+    });
+  }
+
+  const ranked = rankParentCompletions(
+    [{ name: 'probe', kind: 'control', teamKeys: prefixKeys, evaluation: parentEvaluation }],
+    [...childMap.values()],
+  );
+  const row = ranked.rows[0];
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-418 current-evaluator one-step completion potential probe',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+    runs,
+    prefixKeys,
+    parentMetrics: row?.currentMetrics || null,
+    legalChildCount: row?.childCount || 0,
+    bestChild: row?.bestChild || null,
+    improvement: row?.bestChild && row?.currentMetrics
+      ? {
+          retry: Number(row.currentMetrics.retry) - Number(row.bestChild.metrics.retry),
+          geometric: Number(row.bestChild.metrics.geometric) - Number(row.currentMetrics.geometric),
+          mean: Number(row.bestChild.metrics.mean) - Number(row.currentMetrics.mean),
+          progress: Number(row.bestChild.metrics.progress) - Number(row.currentMetrics.progress || 0),
+        }
+      : null,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdRouteExpStoryCompletionRollout() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -14961,6 +15043,7 @@ const commands = {
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
+  'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
