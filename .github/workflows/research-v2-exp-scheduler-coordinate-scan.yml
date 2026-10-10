@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-coordinate-scan
-# SCRUM-417 bounded frontier proxy screen
+# SCRUM-417 incremental frontier proxy screen from newly validated Pareto seeds
 
 on:
   push:
@@ -31,6 +31,7 @@ jobs:
           node src/cli.mjs exp-scheduler-v1-frontier-screen \
             --runs=1 \
             --route-grind-proxy-target=0.5 \
+            --expand-seed-indices=3,4 \
             > results/research-v2/frontier-screen.json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
