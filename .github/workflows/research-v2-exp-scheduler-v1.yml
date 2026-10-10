@@ -29,16 +29,20 @@ jobs:
           node src/cli.mjs exp-allocator-smoke
       - name: Scheduler v1 recipient-state smoke
         run: |
+          set -o pipefail
           mkdir -p results/research-v2
           node src/cli.mjs exp-scheduler-v1-smoke | tee results/research-v2/exp-scheduler-v1-smoke.json
       - name: Scheduler v1 evolution-trigger smoke
         run: |
+          set -o pipefail
           node src/cli.mjs exp-scheduler-v1-evolution-trigger-smoke | tee results/research-v2/exp-scheduler-v1-evolution-trigger-smoke.json
       - name: Scheduler v1 Pareto/state smoke
         run: |
+          set -o pipefail
           node src/cli.mjs exp-scheduler-v1-pareto-smoke | tee results/research-v2/exp-scheduler-v1-pareto-smoke.json
       - name: Scheduler v1 frontier expansion
         run: |
+          set -o pipefail
           node src/cli.mjs exp-scheduler-v1-frontier-expand | tee results/research-v2/exp-scheduler-v1-frontier-expand.json
       - uses: actions/upload-artifact@v4
         with:
