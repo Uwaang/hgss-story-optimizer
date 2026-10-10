@@ -22,7 +22,9 @@ import {
 import {
   completionEvaluationMetrics,
   completionRecallSummary,
+  completionTeamKey,
   rankParentCompletions,
+  selectCompletionAwareParents,
 } from './completion-aware.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -4045,6 +4047,124 @@ async function cmdRouteExpStoryCompletionRollout() {
     battleCache: battleCacheStats(),
     rows: ranked.rows,
     confirmedRows,
+  }, null, 2));
+}
+
+
+async function cmdRouteExpStoryCompletionSelect() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const confirmInputs = stagedInputPaths(arg('confirm-inputs', ''));
+  const beamWidth = Math.max(1, Math.floor(Number(arg('beam-width', '6'))));
+  if (!confirmInputs.length) {
+    throw new Error('route-exp-story-completion-select requires --confirm-inputs');
+  }
+  const sourceBeam = checkpoint.beam || [];
+  if (!sourceBeam.length) {
+    throw new Error('completion-select checkpoint beam is empty');
+  }
+
+  const confirmations = new Map();
+  for (const input of confirmInputs) {
+    const doc = await readJsonPath(input);
+    const key = completionTeamKey(doc.prefixKeys || []);
+    if (!key) throw new Error('completion confirmation missing prefixKeys: ' + input);
+    if (!doc.parentMetrics || !doc.bestChild?.metrics) {
+      throw new Error('completion confirmation missing metrics: ' + input);
+    }
+    confirmations.set(key, {
+      source: input,
+      prefixKeys: doc.prefixKeys,
+      requestedAddedKey: doc.requestedAddedKey || doc.bestChild?.addedKey || null,
+      parentMetrics: doc.parentMetrics,
+      completionMetrics: doc.bestChild.metrics,
+      improvement: doc.improvement || null,
+    });
+  }
+
+  const sourceByKey = new Map(
+    sourceBeam.map(row => [completionTeamKey(row.teamKeys || []), row])
+  );
+  const missing = [...sourceByKey.keys()].filter(key => !confirmations.has(key));
+  if (missing.length) {
+    throw new Error(
+      'completion-select missing confirmation for parent(s): ' + missing.join(', ')
+    );
+  }
+
+  const selection = selectCompletionAwareParents(
+    [...sourceByKey.entries()].map(([key, row]) => {
+      const confirmation = confirmations.get(key);
+      return {
+        key,
+        teamKeys: row.teamKeys,
+        currentMetrics: confirmation.parentMetrics,
+        completionMetrics: confirmation.completionMetrics,
+        requestedAddedKey: confirmation.requestedAddedKey,
+        improvement: confirmation.improvement,
+        confirmationSource: confirmation.source,
+      };
+    }),
+    beamWidth,
+  );
+
+  const selectionByKey = new Map(selection.rows.map(row => [row.key, row]));
+  const beam = selection.selectedKeys.map(key => {
+    const original = sourceByKey.get(key);
+    const selected = selectionByKey.get(key);
+    return {
+      ...original,
+      completionSelection: {
+        currentRank: selected.currentRank,
+        completionRank: selected.completionRank,
+        selectionLayer: selected.selectionLayer,
+        requestedAddedKey: selected.requestedAddedKey,
+        currentMetrics: selected.currentMetrics,
+        completionMetrics: selected.completionMetrics,
+        improvement: selected.improvement,
+      },
+    };
+  });
+
+  const timings = [
+    ...(checkpoint.timings || []),
+    {
+      stage: 'completion-select',
+      wallMs: Date.now() - startedAt,
+      sourceParents: sourceBeam.length,
+      confirmedParents: confirmations.size,
+      selectedParents: beam.length,
+      beamWidth,
+    },
+  ];
+
+  console.log(JSON.stringify({
+    ...checkpoint,
+    type: 'route-search-checkpoint',
+    stage: String(checkpoint.stage || 'beam') + '-completion-select',
+    beam,
+    timings,
+    completionAwareSelection: {
+      policy: 'current-rank-x-confirmed-one-step-completion-rank-pareto-v1',
+      beamWidth,
+      sourceParentCount: sourceBeam.length,
+      confirmationCount: confirmations.size,
+      selectedKeys: selection.selectedKeys,
+      rows: selection.rows.map(row => ({
+        key: row.key,
+        teamKeys: row.teamKeys,
+        currentRank: row.currentRank,
+        completionRank: row.completionRank,
+        selectionLayer: row.selectionLayer,
+        selected: row.selected,
+        requestedAddedKey: row.requestedAddedKey,
+        currentMetrics: row.currentMetrics,
+        completionMetrics: row.completionMetrics,
+        improvement: row.improvement,
+      })),
+    },
   }, null, 2));
 }
 
@@ -15081,6 +15201,7 @@ const commands = {
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
   'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
+  'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
