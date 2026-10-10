@@ -1,0 +1,83 @@
+name: research-v2-completion-select-integration-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-completion-select-integration]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-global-beam4-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38064993964
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-global-confirm-*
+          path: hgss_story_sim/results/confirms
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38064993964
+          github-token: ${{ github.token }}
+      - name: Select parent beam from confirmed current/completion ranks
+        run: |
+          CONFIRMS="$(find results/confirms -name 'confirm-p*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-completion-select \
+            --input=results/input/checkpoint.json \
+            --confirm-inputs="$CONFIRMS" --beam-width=6 \
+            --route-profile=standard \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/completion-selected-checkpoint.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/completion-selected-checkpoint.json','utf8'));
+          const target=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Krabby::Kingler->Kingler#1',
+            'Sneasel::Sneasel->Weavile#1',
+            'Seel::Dewgong->Dewgong#1'
+          ].sort().join('|');
+          const selected=new Set((d.beam||[]).map(r=>[...(r.teamKeys||[])].sort().join('|')));
+          if((d.beam||[]).length!==6) throw new Error('selector did not return width 6');
+          if(!selected.has(target)) throw new Error('standard-pilot 7->5 regression parent was not rescued');
+          const row=(d.completionAwareSelection?.rows||[]).find(r=>r.key===target);
+          if(!row || row.currentRank!==7 || row.completionRank!==5 || !row.selected){
+            throw new Error('unexpected confirmed rank metadata for rescued parent');
+          }
+          console.log(JSON.stringify({
+            routeProfile:d.config?.routeProfile,
+            policy:d.completionAwareSelection?.policy,
+            selectedCount:d.beam.length,
+            rescued:{key:target,currentRank:row.currentRank,completionRank:row.completionRank,selectionLayer:row.selectionLayer}
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-completion-select-integration-smoke
+          path: hgss_story_sim/results/completion-selected-checkpoint.json
+          if-no-files-found: error
