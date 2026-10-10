@@ -1,0 +1,58 @@
+name: research-v2-completion-aware-current-probe
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  n04-prefix-probe:
+    if: contains(github.event.head_commit.message, '[research-v2-completion-current-probe]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/completion-current-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Current-evaluator N04-compatible 4->5 completion probe
+        run: |
+          mkdir -p results/research-v2
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64=WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIkNoaW5jaG91OjpMYW50dXJuLT5MYW50dXJuIzEiLCJSaHlob3JuOjpSaHlob3JuLT5SaHlwZXJpb3IjMSJd \
+            --runs=1 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/research-v2/current-prefix-probe.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('results/research-v2/current-prefix-probe.json','utf8'));
+          if (!r.bestChild) throw new Error('current completion probe found no legal child');
+          console.log(JSON.stringify({
+            runs:r.runs,
+            prefixKeys:r.prefixKeys,
+            parentMetrics:r.parentMetrics,
+            legalChildCount:r.legalChildCount,
+            bestChild:r.bestChild,
+            improvement:r.improvement,
+            battleCache:r.battleCache
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-completion-aware-current-probe
+          path: hgss_story_sim/results/research-v2/current-prefix-probe.json
+          if-no-files-found: error
