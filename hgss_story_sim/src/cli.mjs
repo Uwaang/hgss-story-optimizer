@@ -869,6 +869,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const levelsByBattle = expSchedule
     ? expSchedule.battles.map(battle => battle.levelsBefore || {})
     : null;
+  const speciesByBattle = expSchedule
+    ? expSchedule.battles.map(battle => battle.speciesBefore || {})
+    : null;
   const singleUsePlan = planSingleUseMachines(
     candidates,
     routeBosses,
@@ -907,6 +910,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         singleUsePlan,
         purchasablePlan,
         levelsByBattle,
+        speciesByBattle,
       )
     : {};
   const candidatesByKey = new Map(
@@ -923,12 +927,20 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   for (const [battleIndex, boss] of routeBosses.entries()) {
     if (requestedBossLabels && !requestedBossLabels.has(String(boss.label))) continue;
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
+    const speciesByCandidate = expSchedule?.battles?.[battleIndex]?.speciesBefore || null;
     const orderedCandidates = orderCandidatesForBoss(candidates, boss, levelsByCandidate);
     let playerTeam = materializeCandidateTeam(
       orderedCandidates,
       boss.stage,
       boss.aceLevel,
-      { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate, boss },
+      {
+        moveAccess,
+        singleUsePlan,
+        purchasablePlan,
+        levelsByCandidate,
+        speciesByCandidate,
+        boss,
+      },
     );
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
     let heldItemPolicy = null;
@@ -941,6 +953,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             singleUsePlan,
             purchasablePlan,
             [levelsByCandidate || {}],
+            [speciesByCandidate || {}],
           )
         : routeBuildPlan;
       playerTeam = playerTeam.map(mon => {
@@ -1035,12 +1048,19 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   const storyGeometric = storyClearGeometricScore(rows);
   const finalBattle = routeBosses[routeBosses.length - 1] || null;
   const finalLevelSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.levelsBefore || null;
+  const finalSpeciesSnapshot = expSchedule?.battles?.[routeBosses.length - 1]?.speciesBefore || null;
   const finalMaterialized = finalBattle
     ? materializeCandidateTeam(
         orderCandidatesForBoss(candidates, finalBattle, finalLevelSnapshot),
         finalBattle.stage,
         finalBattle.aceLevel,
-        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: finalLevelSnapshot },
+        {
+          moveAccess,
+          singleUsePlan,
+          purchasablePlan,
+          levelsByCandidate: finalLevelSnapshot,
+          speciesByCandidate: finalSpeciesSnapshot,
+        },
       )
     : [];
   const finalTeam = finalMaterialized.map(mon => mon.species);
@@ -10412,6 +10432,7 @@ function buildRouteExpRouteBuildPlan(
   singleUsePlan,
   purchasablePlan,
   levelsByBattle,
+  speciesByBattle = null,
 ) {
   const plan = {};
   for (const candidate of candidates) {
@@ -10425,7 +10446,14 @@ function buildRouteExpRouteBuildPlan(
         [candidate],
         boss.stage,
         boss.aceLevel,
-        { moveAccess, singleUsePlan, purchasablePlan, levelsByCandidate: levels, boss },
+        {
+          moveAccess,
+          singleUsePlan,
+          purchasablePlan,
+          levelsByCandidate: levels,
+          speciesByCandidate: speciesByBattle?.[bossIndex] || null,
+          boss,
+        },
       )[0];
       if (!mon) continue;
       samples.push({
