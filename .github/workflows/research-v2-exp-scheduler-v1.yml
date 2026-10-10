@@ -1,5 +1,5 @@
 name: research-v2-exp-scheduler-v1
-# SCRUM-417 progression-state EXP scheduler v1 validation
+# SCRUM-417 progression-state EXP scheduler v1 validation; five-state Pareto + pending evolution
 
 on:
   push:
