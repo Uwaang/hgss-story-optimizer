@@ -4394,6 +4394,98 @@ async function cmdRouteExpStoryRescoreShard() {
   }, null, 2));
 }
 
+async function cmdRouteExpStoryRescoreMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '16'))));
+  if (!inputs.length) {
+    throw new Error('route-exp-story-rescore-merge requires --inputs');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const rescoredByKey = new Map();
+  const shardDocs = [];
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'rescore shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    if (Number(doc?.runs || 0) !== runs) {
+      throw new Error(
+        'rescore shard runs mismatch for ' + input +
+        ': expected ' + runs + ', got ' + String(doc?.runs)
+      );
+    }
+    shardDocs.push(doc);
+    for (const row of doc.rescored || []) {
+      const key = completionTeamKey(row.teamKeys || []);
+      rescoredByKey.set(key, row);
+    }
+  }
+
+  const sourceKeys = new Set(
+    (checkpoint.beam || []).map(row => completionTeamKey(row.teamKeys || []))
+  );
+  const missing = [...sourceKeys].filter(key => !rescoredByKey.has(key));
+  if (missing.length) {
+    throw new Error('rescore merge missing source team(s): ' + missing.join(', '));
+  }
+
+  const finalStates = [...sourceKeys].map(key => {
+    const row = rescoredByKey.get(key);
+    return {
+      team: stagedTeamFromKeys(row.teamKeys, byKey),
+      evaluation: row.evaluation,
+    };
+  });
+  finalStates.sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, ctx.objective) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const top = finalStates.map(state => searchResultRow(state.team, state.evaluation));
+  await flushBattleCache();
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-search-final',
+    purpose: 'sharded final rescore merge',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    assumptions: {
+      finalRuns: runs,
+      beamWidth: finalStates.length,
+      candidateCap: checkpoint.candidateCap,
+    },
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'final-sharded',
+        finalRuns: runs,
+        shardCount: shardDocs.length,
+        wallMs: Date.now() - startedAt,
+        finalists: finalStates.length,
+      },
+    ],
+    finalRescoredTeams: finalStates.length,
+    paretoFront: routeRiskParetoFront(top),
+    top,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdBattleCacheMerge() {
   const inputs = stagedInputPaths(arg('inputs', ''));
   const output = String(arg('output', 'results/battle-cache-merged.json'));
@@ -15462,6 +15554,7 @@ const commands = {
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
+  'route-exp-story-rescore-merge': cmdRouteExpStoryRescoreMerge,
   'route-exp-story-beam-recall-audit': cmdRouteExpStoryBeamRecallAudit,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
   'route-exp-story-final-stage': cmdRouteExpStoryFinalStage,
