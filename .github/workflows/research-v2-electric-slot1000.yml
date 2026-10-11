@@ -1,0 +1,153 @@
+name: research-v2-electric-slot1000
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-electric-slot1000]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: electivire
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJFbGVraWQ6OkVsZWN0YWJ1enotPkVsZWN0aXZpcmUjMSJd
+          - label: ampharos
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJNYXJlZXA6Ok1hcmVlcC0+QW1waGFyb3MjMSJd
+          - label: magneton
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJNYWduZW1pdGU6Ok1hZ25lbWl0ZS0+TWFnbmV0b24jMSJd
+          - label: wobbuffet-control
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJXeW5hdXQ6OldvYmJ1ZmZldC0+V29iYnVmZmV0IzEiXQ==
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/electric-slot1000-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate sixth-slot candidate at 1000 runs per boss
+        run: |
+          mkdir -p results/electric-slot1000
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=1000 \
+            $SEARCH_ARGS \
+            > "results/electric-slot1000/${{ matrix.label }}.json"
+          jq '{
+            runs,
+            teamKeys,
+            metrics,
+            grindBattles:.evaluation.routeGrindProxy.expectedBattles,
+            grindExp:.evaluation.routeGrindProxy.cumulativeGrindExp,
+            red:(.evaluation.rows[]|select(.boss=="Red")|{wins,runs,winRate,progress:(.battleProgressScore//.winRate)})
+          }' "results/electric-slot1000/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-electric-slot1000-${{ matrix.label }}
+          path: hgss_story_sim/results/electric-slot1000/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-electric-slot1000]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-electric-slot1000-*
+          path: hgss_story_sim/results/electric-slot1000
+          merge-multiple: true
+      - name: Summarize full-route and pre-Red metrics
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/electric-slot1000';
+          const summarizeRows=rows=>{
+            const active=rows.filter(r=>!r.skipped);
+            const ps=active.map(r=>(Number(r.wins||0)+1)/(Number(r.wins||0)+Number(r.losses||0)+Number(r.ties||0)+2));
+            return {
+              retry:ps.reduce((s,p)=>s+(1-p)/p,0),
+              geometric:Math.exp(ps.reduce((s,p)=>s+Math.log(p),0)/ps.length),
+              mean:active.reduce((s,r)=>s+Number(r.winRate||0),0)/active.length,
+              progress:active.reduce((s,r)=>s+Number(r.battleProgressScore??r.winRate??0),0)/active.length,
+              bossCount:active.length
+            };
+          };
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            const e=d.evaluation||{};
+            const bossRows=(e.rows||[]).filter(r=>!r.skipped);
+            const preRed=bossRows.filter(r=>r.boss!=='Red');
+            const red=bossRows.find(r=>r.boss==='Red')||null;
+            return {
+              label:file.replace(/\.json$/,''),
+              teamKeys:d.teamKeys,
+              runs:d.runs,
+              full:summarizeRows(bossRows),
+              preRed:summarizeRows(preRed),
+              grindBattles:e.routeGrindProxy?.expectedBattles??null,
+              grindExp:e.routeGrindProxy?.cumulativeGrindExp??null,
+              red:red?{
+                wins:red.wins,runs:red.runs,winRate:red.winRate,
+                progress:red.battleProgressScore??red.winRate
+              }:null,
+              bosses:bossRows.map(r=>({
+                boss:r.boss,wins:r.wins,runs:r.runs,winRate:r.winRate,
+                progress:r.battleProgressScore??r.winRate
+              }))
+            };
+          });
+          const dominates=(a,b)=>{
+            const weak=a.preRed.retry<=b.preRed.retry &&
+              a.preRed.geometric>=b.preRed.geometric &&
+              a.preRed.mean>=b.preRed.mean &&
+              a.grindBattles<=b.grindBattles;
+            const strict=a.preRed.retry<b.preRed.retry ||
+              a.preRed.geometric>b.preRed.geometric ||
+              a.preRed.mean>b.preRed.mean ||
+              a.grindBattles<b.grindBattles;
+            return weak&&strict;
+          };
+          const pareto=rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b)));
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-418 electric sixth-slot sanity check',
+            runsPerBoss:1000,
+            seedPolicy:'matched deterministic per-boss seeds from evaluateCandidates/simulateMatchup',
+            interpretation:'preRed is diagnostic only; Red remains a separate required route endpoint',
+            rows,
+            preRedCombatGrindParetoLabels:pareto.map(r=>r.label)
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-electric-slot1000-summary
+          path: hgss_story_sim/results/electric-slot1000/summary.json
+          if-no-files-found: error
