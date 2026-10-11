@@ -4660,7 +4660,17 @@ async function cmdRouteExpStorySelectiveRescoreMerge() {
     team: stagedTeamFromKeys(row.teamKeys, byKey),
     evaluation: row.evaluation,
   }));
-  const beam = selectRouteRiskBeam(states, beamWidth);
+  const selection = String(arg('selection', 'beam')).toLowerCase();
+  if (!['beam', 'objective'].includes(selection)) {
+    throw new Error('Unknown selective rescore selection policy: ' + selection);
+  }
+  const objectiveOrder = [...states].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const beam = selection === 'objective'
+    ? objectiveOrder.slice(0, beamWidth)
+    : selectRouteRiskBeam(states, beamWidth);
   const totalResampledBossRows = shardDocs.reduce(
     (sum, doc) => sum + Number(doc.resampledBossRows || 0),
     0,
@@ -4670,10 +4680,6 @@ async function cmdRouteExpStorySelectiveRescoreMerge() {
   const targetKey = targetKeyRaw
     ? completionTeamKey(targetKeyRaw.split(',').map(x => x.trim()).filter(Boolean))
     : null;
-  const objectiveOrder = [...states].sort((a, b) =>
-    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-    stateTieKey(a).localeCompare(stateTieKey(b))
-  );
   const targetState = targetKey
     ? states.find(state => completionTeamKey(state.team.map(candidateIdentity)) === targetKey)
     : null;
@@ -4710,6 +4716,7 @@ async function cmdRouteExpStorySelectiveRescoreMerge() {
     selectiveRescore: {
       runs,
       maxLowWins,
+      selection,
       sourceStates: states.length,
       resampledBossRows: totalResampledBossRows,
       selectedCount: beam.length,
