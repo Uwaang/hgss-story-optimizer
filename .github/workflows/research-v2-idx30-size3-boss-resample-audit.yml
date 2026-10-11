@@ -1,0 +1,86 @@
+name: research-v2-idx30-size3-boss-resample-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-idx30-size3-boss-resample-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/low
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size3-rescore16-shard-12
+          path: hgss_story_sim/results/high
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38112553290
+          github-token: ${{ github.token }}
+      - name: Compare target boss rows at 2 vs 16 runs
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const target=key([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1'
+          ]);
+          let low=null;
+          for(const file of fs.readdirSync('results/low').filter(x=>x.startsWith('beam-3-wide-shard-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/low/'+file,'utf8'));
+            for(const row of d.expanded||[]){
+              if(key(row.teamKeys)===target) low=row;
+            }
+          }
+          if(!low) throw new Error('low-run target missing');
+          const highFile=fs.readdirSync('results/high').find(x=>x.endsWith('.json'));
+          const highDoc=JSON.parse(fs.readFileSync('results/high/'+highFile,'utf8'));
+          const highRow=(highDoc.rescored||[]).find(r=>key(r.teamKeys)===target);
+          if(!highRow) throw new Error('high-run target missing');
+
+          const hmap=new Map((highRow.evaluation?.rows||[]).map(r=>[String(r.boss),r]));
+          const rows=(low.evaluation?.rows||[]).filter(r=>!r.skipped).map(l=>{
+            const h=hmap.get(String(l.boss))||{};
+            const lp=(Number(l.wins||0)+1)/(Number(l.wins||0)+Number(l.losses||0)+Number(l.ties||0)+2);
+            const hp=(Number(h.wins||0)+1)/(Number(h.wins||0)+Number(h.losses||0)+Number(h.ties||0)+2);
+            return {
+              boss:l.boss,
+              low:{
+                wins:Number(l.wins||0),runs:Number(l.runs||0),progress:Number(l.battleProgressScore??l.winRate??0),
+                retry:(1-lp)/lp
+              },
+              high:{
+                wins:Number(h.wins||0),runs:Number(h.runs||0),winRate:Number(h.winRate||0),progress:Number(h.battleProgressScore??h.winRate??0),
+                retry:(1-hp)/hp
+              },
+              retryChange:((1-hp)/hp)-((1-lp)/lp)
+            };
+          }).sort((a,b)=>Math.abs(b.retryChange)-Math.abs(a.retryChange));
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            target,
+            lowRetry:rows.reduce((s,r)=>s+r.low.retry,0),
+            highRetry:rows.reduce((s,r)=>s+r.high.retry,0),
+            zeroWinAt2:rows.filter(r=>r.low.wins===0),
+            largestChanges:rows.slice(0,15)
+          },null,2));
+          NODE
