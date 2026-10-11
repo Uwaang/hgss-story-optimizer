@@ -4674,11 +4674,15 @@ async function cmdRouteExpStoryBeamMerge() {
   const inputs = stagedInputPaths(arg('inputs', ''));
   const targetSize = Math.max(2, Math.floor(Number(arg('target-size', '2'))));
   const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '6'))));
+  const adaptivePreselectWidth = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('adaptive-preselect-width', String(beamWidth)))),
+  );
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const adaptiveRuns = Math.max(runs, Math.floor(Number(arg('adaptive-runs', '4'))));
   const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
   const adaptiveChallengerCap = Math.max(
-    beamWidth,
+    0,
     Math.floor(Number(arg('adaptive-challenger-cap', String(beamWidth)))),
   );
   if (!inputs.length) throw new Error('route-exp-story-beam-merge requires --inputs');
@@ -4707,7 +4711,11 @@ async function cmdRouteExpStoryBeamMerge() {
   }));
   if (!expanded.length) throw new Error('beam merge has no expanded states');
 
-  const preliminaryBeam = selectRouteStoryBeam(expanded, beamWidth, ctx.objective);
+  const preliminaryBeam = selectRouteStoryBeam(
+    expanded,
+    adaptivePreselectWidth,
+    ctx.objective,
+  );
   const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
   let challengers = [];
   if (ctx.objective === 'route-risk' && adaptiveRuns > runs && preliminaryBeam.length) {
@@ -4757,6 +4765,7 @@ async function cmdRouteExpStoryBeamMerge() {
       mergeMs: Date.now() - startedAt,
       expandedCount: expanded.length,
       preliminaryCount: preliminaryBeam.length,
+      adaptivePreselectWidth,
       challengerCount: challengers.length,
       adaptiveChallengerCap,
       adaptivePoolCount: adaptivePool.length,
