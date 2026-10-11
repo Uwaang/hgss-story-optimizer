@@ -187,7 +187,120 @@ function routeRiskMeanRetryFailures(evaluation) {
   return routeRiskExpectedRetryFailures(evaluation) / rows.length;
 }
 
-function routeRiskRetryBounds(evaluation, z = 1.96) {
+function logGammaLanczos(z) {
+  const coefficients = [
+    0.9999999999998099,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.3234287776531,
+    -176.6150291621406,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.984369578019572e-6,
+    1.5056327351493116e-7,
+  ];
+  if (z < 0.5) {
+    return Math.log(Math.PI) -
+      Math.log(Math.sin(Math.PI * z)) -
+      logGammaLanczos(1 - z);
+  }
+  const shifted = z - 1;
+  let x = coefficients[0];
+  for (let index = 1; index < coefficients.length; index += 1) {
+    x += coefficients[index] / (shifted + index);
+  }
+  const t = shifted + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) +
+    (shifted + 0.5) * Math.log(t) -
+    t +
+    Math.log(x);
+}
+
+function betaContinuedFraction(a, b, x) {
+  const maxIterations = 240;
+  const epsilon = 3e-14;
+  const fpMin = 1e-300;
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1;
+  let d = 1 - qab * x / qap;
+  if (Math.abs(d) < fpMin) d = fpMin;
+  d = 1 / d;
+  let h = d;
+
+  for (let m = 1; m <= maxIterations; m += 1) {
+    const m2 = 2 * m;
+    let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < fpMin) d = fpMin;
+    c = 1 + aa / c;
+    if (Math.abs(c) < fpMin) c = fpMin;
+    d = 1 / d;
+    h *= d * c;
+
+    aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+    d = 1 + aa * d;
+    if (Math.abs(d) < fpMin) d = fpMin;
+    c = 1 + aa / c;
+    if (Math.abs(c) < fpMin) c = fpMin;
+    d = 1 / d;
+    const delta = d * c;
+    h *= delta;
+    if (Math.abs(delta - 1) <= epsilon) break;
+  }
+  return h;
+}
+
+function regularizedIncompleteBeta(x, a, b) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const logBt =
+    logGammaLanczos(a + b) -
+    logGammaLanczos(a) -
+    logGammaLanczos(b) +
+    a * Math.log(x) +
+    b * Math.log1p(-x);
+  const bt = Math.exp(logBt);
+  if (x < (a + 1) / (a + b + 2)) {
+    return bt * betaContinuedFraction(a, b, x) / a;
+  }
+  return 1 - bt * betaContinuedFraction(b, a, 1 - x) / b;
+}
+
+function betaPosteriorQuantile(probability, a, b) {
+  const q = Math.max(1e-12, Math.min(1 - 1e-12, Number(probability)));
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < 64; iteration += 1) {
+    const mid = (low + high) / 2;
+    if (regularizedIncompleteBeta(mid, a, b) < q) low = mid;
+    else high = mid;
+  }
+  return (low + high) / 2;
+}
+
+function normalCdfApprox(value) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const erf = sign * (
+    1 -
+    (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
+      0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)
+  );
+  return 0.5 * (1 + erf);
+}
+
+function routeRiskRetryBounds(evaluation, z = 1.96, method = 'normal') {
+  const normalizedMethod = String(method || 'normal').toLowerCase();
+  if (!['normal', 'beta'].includes(normalizedMethod)) {
+    throw new Error('Unknown route-risk bound method: ' + method);
+  }
+  const tailProbability = Math.max(
+    1e-6,
+    Math.min(0.499999, 1 - normalCdfApprox(Math.max(0, Number(z) || 0))),
+  );
   let optimistic = 0;
   let pessimistic = 0;
   for (const row of routeRiskActiveRows(evaluation)) {
@@ -196,14 +309,23 @@ function routeRiskRetryBounds(evaluation, z = 1.96) {
     const ties = Math.max(0, Number(row?.ties || 0));
     const a = wins + 1;
     const b = losses + ties + 1;
-    const total = a + b;
-    const mean = a / total;
-    const variance = (a * b) / (total * total * (total + 1));
-    const sd = Math.sqrt(Math.max(0, variance));
-    const pLow = Math.max(1e-6, mean - z * sd);
-    const pHigh = Math.min(1 - 1e-6, mean + z * sd);
-    optimistic += (1 - pHigh) / pHigh;
-    pessimistic += (1 - pLow) / pLow;
+    let pLow;
+    let pHigh;
+    if (normalizedMethod === 'beta') {
+      pLow = betaPosteriorQuantile(tailProbability, a, b);
+      pHigh = betaPosteriorQuantile(1 - tailProbability, a, b);
+    } else {
+      const total = a + b;
+      const mean = a / total;
+      const variance = (a * b) / (total * total * (total + 1));
+      const sd = Math.sqrt(Math.max(0, variance));
+      pLow = Math.max(1e-6, mean - z * sd);
+      pHigh = Math.min(1 - 1e-6, mean + z * sd);
+    }
+    const safeLow = Math.max(1e-12, Math.min(1 - 1e-12, pLow));
+    const safeHigh = Math.max(1e-12, Math.min(1 - 1e-12, pHigh));
+    optimistic += (1 - safeHigh) / safeHigh;
+    pessimistic += (1 - safeLow) / safeLow;
   }
   return { optimistic, pessimistic };
 }
@@ -4521,6 +4643,10 @@ async function cmdRouteExpStoryBeamRecallAudit() {
   const inputs = stagedInputPaths(arg('inputs', ''));
   const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '6'))));
   const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
+  const adaptiveBoundMethod = String(arg('adaptive-bound-method', 'normal')).toLowerCase();
+  if (!['normal', 'beta'].includes(adaptiveBoundMethod)) {
+    throw new Error('Unknown adaptive bound method: ' + adaptiveBoundMethod);
+  }
   const adaptiveChallengerCap = Math.max(
     beamWidth,
     Math.floor(Number(arg('adaptive-challenger-cap', String(beamWidth)))),
@@ -4565,7 +4691,7 @@ async function cmdRouteExpStoryBeamRecallAudit() {
   const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
   const boundary = preliminaryBeam.length
     ? preliminaryBeam
-        .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ).pessimistic)
+        .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ, adaptiveBoundMethod).pessimistic)
         .sort((a, b) => a - b)
         .at(-1)
     : Number.POSITIVE_INFINITY;
@@ -4574,7 +4700,7 @@ async function cmdRouteExpStoryBeamRecallAudit() {
     .filter(state => !selectedKeys.has(stateTieKey(state)))
     .map(state => ({
       state,
-      bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ),
+      bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ, adaptiveBoundMethod),
     }))
     .filter(row => row.bounds.optimistic <= boundary + 1e-12)
     .sort((a, b) =>
@@ -4604,7 +4730,7 @@ async function cmdRouteExpStoryBeamRecallAudit() {
       return terminals.some(name => targetTerminals.includes(String(name)));
     })
     .map(state => {
-      const bounds = routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ);
+      const bounds = routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ, adaptiveBoundMethod);
       const terminals = state.team.map(candidate => candidate.terminalSpecies || candidate.species);
       return {
         key: stateTieKey(state),
@@ -4654,6 +4780,7 @@ async function cmdRouteExpStoryBeamRecallAudit() {
     expandedCount: expanded.length,
     beamWidth,
     adaptiveConfidenceZ,
+    adaptiveBoundMethod,
     adaptiveChallengerCap,
     preliminaryCount: preliminaryBeam.length,
     confidenceBoundaryPessimistic: boundary,
@@ -4681,6 +4808,10 @@ async function cmdRouteExpStoryBeamMerge() {
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const adaptiveRuns = Math.max(runs, Math.floor(Number(arg('adaptive-runs', '4'))));
   const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
+  const adaptiveBoundMethod = String(arg('adaptive-bound-method', 'normal')).toLowerCase();
+  if (!['normal', 'beta'].includes(adaptiveBoundMethod)) {
+    throw new Error('Unknown adaptive bound method: ' + adaptiveBoundMethod);
+  }
   const adaptiveChallengerCap = Math.max(
     0,
     Math.floor(Number(arg('adaptive-challenger-cap', String(beamWidth)))),
@@ -4720,14 +4851,14 @@ async function cmdRouteExpStoryBeamMerge() {
   let challengers = [];
   if (ctx.objective === 'route-risk' && adaptiveRuns > runs && preliminaryBeam.length) {
     const boundary = preliminaryBeam
-      .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ).pessimistic)
+      .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ, adaptiveBoundMethod).pessimistic)
       .sort((a, b) => a - b)
       .at(-1);
     challengers = expanded
       .filter(state => !selectedKeys.has(stateTieKey(state)))
       .map(state => ({
         state,
-        bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ),
+        bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ, adaptiveBoundMethod),
       }))
       .filter(row => row.bounds.optimistic <= boundary + 1e-12)
       .sort((a, b) =>
@@ -4766,6 +4897,7 @@ async function cmdRouteExpStoryBeamMerge() {
       expandedCount: expanded.length,
       preliminaryCount: preliminaryBeam.length,
       adaptivePreselectWidth,
+      adaptiveBoundMethod,
       challengerCount: challengers.length,
       adaptiveChallengerCap,
       adaptivePoolCount: adaptivePool.length,
