@@ -4583,6 +4583,17 @@ async function cmdRouteExpStoryBeamRecallAudit() {
         routeRiskExpectedRetryFailures(b.state.evaluation) ||
       stateTieKey(a.state).localeCompare(stateTieKey(b.state))
     );
+  const challengerRankByKey = new Map(
+    challengerRows.map((row, index) => [stateTieKey(row.state), index + 1])
+  );
+  const objectiveRankByKey = new Map(
+    [...expanded]
+      .sort((a, b) =>
+        evaluationObjectiveCompare(a.evaluation, b.evaluation, ctx.objective) ||
+        stateTieKey(a).localeCompare(stateTieKey(b))
+      )
+      .map((state, index) => [stateTieKey(state), index + 1])
+  );
   const challengerKeys = new Set(
     challengerRows.slice(0, adaptiveChallengerCap).map(row => stateTieKey(row.state))
   );
@@ -4605,7 +4616,9 @@ async function cmdRouteExpStoryBeamRecallAudit() {
         progress: routeRiskBattleProgressScore(state.evaluation),
         bounds,
         preliminarySelected: selectedKeys.has(stateTieKey(state)),
+        objectiveRank: objectiveRankByKey.get(stateTieKey(state)) || null,
         withinConfidenceBoundary: bounds.optimistic <= boundary + 1e-12,
+        challengerRank: challengerRankByKey.get(stateTieKey(state)) || null,
         challengerSelected: challengerKeys.has(stateTieKey(state)),
       };
     })
