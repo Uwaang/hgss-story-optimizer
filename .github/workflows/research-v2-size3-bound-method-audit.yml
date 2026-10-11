@@ -1,0 +1,90 @@
+name: research-v2-size3-bound-method-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-size3-bound-method-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - name: Compare normal vs exact Beta posterior bounds
+        run: |
+          INPUTS="$(find results/shards -name 'beam-3-wide-shard-*.json' -type f | sort | paste -sd, -)"
+          for M in normal beta; do
+            node src/cli.mjs route-exp-story-beam-recall-audit \
+              --inputs="$INPUTS" \
+              --beam-width=12 --adaptive-confidence-z=1.96 \
+              --adaptive-challenger-cap=12 --max-width=12 \
+              --target-terminals=Rhyperior --adaptive-bound-method="$M" \
+              $SEARCH_ARGS \
+              > "results/audit-$M.json"
+          done
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const target=[...[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1'
+          ]].sort().join('|');
+          function slim(method){
+            const d=JSON.parse(fs.readFileSync('results/audit-'+method+'.json','utf8'));
+            const row=(d.targetRows||[]).find(r=>[...(r.teamKeys||[])].sort().join('|')===target);
+            return {
+              method,
+              expandedCount:d.expandedCount,
+              boundary:d.confidenceBoundaryPessimistic,
+              eligibleChallengerCount:d.eligibleChallengerCount,
+              selectedChallengerCount:d.selectedChallengerCount,
+              target:row ? {
+                retry:row.retry,
+                geometric:row.geometric,
+                mean:row.mean,
+                progress:row.progress,
+                bounds:row.bounds,
+                objectiveRank:row.objectiveRank,
+                withinConfidenceBoundary:row.withinConfidenceBoundary,
+                challengerRank:row.challengerRank,
+                challengerSelected:row.challengerSelected
+              } : null
+            };
+          }
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            comparison:[slim('normal'),slim('beta')]
+          },null,2));
+          NODE
