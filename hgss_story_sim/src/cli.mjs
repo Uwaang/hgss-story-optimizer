@@ -4770,6 +4770,118 @@ async function cmdRouteExpStoryRescoreShard() {
   }, null, 2));
 }
 
+async function cmdRouteExpStoryRescoreSelectMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('checkpoint', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '16'))));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '12'))));
+  if (!inputs.length) {
+    throw new Error('route-exp-story-rescore-select-merge requires --inputs');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const rescoredByKey = new Map();
+  const shardDocs = [];
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'rescore select shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    if (Number(doc?.runs || 0) !== runs) {
+      throw new Error(
+        'rescore select shard runs mismatch for ' + input +
+        ': expected ' + runs + ', got ' + String(doc?.runs)
+      );
+    }
+    shardDocs.push(doc);
+    for (const row of doc.rescored || []) {
+      rescoredByKey.set(completionTeamKey(row.teamKeys || []), row);
+    }
+  }
+
+  const sourceRows = checkpoint.beam || [];
+  const sourceKeys = new Set(sourceRows.map(row => completionTeamKey(row.teamKeys || [])));
+  const missing = [...sourceKeys].filter(key => !rescoredByKey.has(key));
+  if (missing.length) {
+    throw new Error('rescore select merge missing source team(s): ' + missing.join(', '));
+  }
+
+  const states = [...sourceKeys].map(key => {
+    const row = rescoredByKey.get(key);
+    return {
+      team: stagedTeamFromKeys(row.teamKeys, byKey),
+      evaluation: row.evaluation,
+    };
+  });
+  const beam = selectRouteRiskBeam(states, beamWidth);
+  const objectiveOrder = [...states].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+
+  const targetKeyRaw = String(arg('target-keys', '')).trim();
+  const targetKey = targetKeyRaw
+    ? completionTeamKey(targetKeyRaw.split(',').map(x => x.trim()).filter(Boolean))
+    : null;
+  const targetState = targetKey
+    ? states.find(state => completionTeamKey(state.team.map(candidateIdentity)) === targetKey)
+    : null;
+
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-search-checkpoint',
+    stage: String(checkpoint.stage || 'beam') + '-full-rescore-select',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    candidateCap: checkpoint.candidateCap,
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    beam: beam.map(state => ({
+      teamKeys: state.team.map(candidateIdentity),
+      evaluation: state.evaluation,
+    })),
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'full-rescore-select',
+        runs,
+        sourceStates: states.length,
+        beamWidth,
+        shardCount: shardDocs.length,
+        wallMs: Date.now() - startedAt,
+      },
+    ],
+    fullRescoreSelect: {
+      runs,
+      sourceStates: states.length,
+      beamWidth,
+      selectedCount: beam.length,
+      target: targetState ? {
+        teamKeys: targetState.team.map(candidateIdentity),
+        objectiveRank:
+          objectiveOrder.findIndex(state => stateTieKey(state) === stateTieKey(targetState)) + 1,
+        selected: beam.some(state => stateTieKey(state) === stateTieKey(targetState)),
+        metrics: {
+          retry: routeRiskExpectedRetryFailures(targetState.evaluation),
+          geometric: routeRiskGeometricScore(targetState.evaluation),
+          mean: routeRiskMeanWinRate(targetState.evaluation),
+        },
+      } : null,
+    },
+  }, null, 2));
+}
+
+
 async function cmdRouteExpStoryRescoreMerge() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -15964,6 +16076,7 @@ const commands = {
   'route-exp-story-selective-rescore-shard': cmdRouteExpStorySelectiveRescoreShard,
   'route-exp-story-selective-rescore-merge': cmdRouteExpStorySelectiveRescoreMerge,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
+  'route-exp-story-rescore-select-merge': cmdRouteExpStoryRescoreSelectMerge,
   'route-exp-story-rescore-merge': cmdRouteExpStoryRescoreMerge,
   'route-exp-story-beam-recall-audit': cmdRouteExpStoryBeamRecallAudit,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
