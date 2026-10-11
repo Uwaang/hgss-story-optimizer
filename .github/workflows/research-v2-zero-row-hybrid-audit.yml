@@ -1,0 +1,89 @@
+name: research-v2-zero-row-hybrid-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-zero-row-hybrid-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size3-rescore16-input
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38112553290
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size3-rescore16-shard-*
+          path: hgss_story_sim/results/high
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38112553290
+          github-token: ${{ github.token }}
+      - name: Rank hybrid zero-row rescoring
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const input=JSON.parse(fs.readFileSync('results/input/size3-rescore16-checkpoint.json','utf8'));
+          const high=new Map();
+          for(const file of fs.readdirSync('results/high').filter(x=>x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/high/'+file,'utf8'));
+            for(const r of d.rescored||[]) high.set(key(r.teamKeys),r);
+          }
+          function metrics(rows){
+            const active=(rows||[]).filter(r=>!r.skipped);
+            let retry=0, log=0, wins=0, runs=0;
+            for(const r of active){
+              const w=Number(r.wins||0),l=Number(r.losses||0),t=Number(r.ties||0);
+              const p=(w+1)/(w+l+t+2);
+              retry+=(1-p)/p; log+=Math.log(p);
+              wins+=w; runs+=Number(r.runs||w+l+t);
+            }
+            return {retry,geometric:active.length?Math.exp(log/active.length):0,mean:runs?wins/runs:0};
+          }
+          function hybrid(low,hi,threshold){
+            const hm=new Map((hi||[]).map(r=>[String(r.boss),r]));
+            return (low||[]).map(r=>{
+              if(r.skipped) return r;
+              return Number(r.wins||0)<=threshold ? (hm.get(String(r.boss))||r) : r;
+            });
+          }
+          const rows=(input.beam||[]).map(low=>{
+            const k=key(low.teamKeys);
+            const hi=high.get(k);
+            if(!hi) throw new Error('missing high '+k);
+            return {
+              teamKeys:low.teamKeys,
+              low:metrics(low.evaluation?.rows),
+              zeroOnly:metrics(hybrid(low.evaluation?.rows,hi.evaluation?.rows,0)),
+              zeroOrOne:metrics(hybrid(low.evaluation?.rows,hi.evaluation?.rows,1)),
+              full16:metrics(hi.evaluation?.rows)
+            };
+          });
+          for(const field of ['low','zeroOnly','zeroOrOne','full16']){
+            [...rows].sort((a,b)=>a[field].retry-b[field].retry || b[field].geometric-a[field].geometric || b[field].mean-a[field].mean)
+              .forEach((r,i)=>r[field].rank=i+1);
+          }
+          const target='Abra::Abra->Alakazam#1|Cyndaquil::Cyndaquil->Typhlosion#1|Rhyhorn::Rhyhorn->Rhyperior#1';
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            target:rows.find(r=>key(r.teamKeys)===target),
+            zeroOnlyOrder:[...rows].sort((a,b)=>a.zeroOnly.retry-b.zeroOnly.retry).map(r=>({teamKeys:r.teamKeys,...r.zeroOnly})),
+            full16Order:[...rows].sort((a,b)=>a.full16.retry-b.full16.retry).map(r=>({teamKeys:r.teamKeys,...r.full16}))
+          },null,2));
+          NODE
