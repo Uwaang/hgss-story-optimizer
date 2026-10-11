@@ -1,0 +1,132 @@
+name: research-v2-complete-control-depth-profile
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-control-depth-profile]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: D2-M-plus-G
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiXQ==
+            added_key: Gastly::Gastly->Gengar#1
+          - label: D2-G-plus-R
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiR2FzdGx5OjpHYXN0bHktPkdlbmdhciMxIl0=
+            added_key: Rhyhorn::Rhyhorn->Rhyperior#1
+          - label: D2-R-plus-M
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUmh5aG9ybjo6Umh5aG9ybi0+Umh5cGVyaW9yIzEiXQ==
+            added_key: Magnemite::Magnemite->Magneton#1
+          - label: D3-MG-plus-R
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHYXN0bHk6Okdhc3RseS0+R2VuZ2FyIzEiXQ==
+            added_key: Rhyhorn::Rhyhorn->Rhyperior#1
+          - label: D3-GR-plus-M
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiR2FzdGx5OjpHYXN0bHktPkdlbmdhciMxIiwiUmh5aG9ybjo6Umh5aG9ybi0+Umh5cGVyaW9yIzEiXQ==
+            added_key: Magnemite::Magnemite->Magneton#1
+          - label: D3-RM-plus-G
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUmh5aG9ybjo6Umh5aG9ybi0+Umh5cGVyaW9yIzEiLCJNYWduZW1pdGU6Ok1hZ25lbWl0ZS0+TWFnbmV0b24jMSJd
+            added_key: Gastly::Gastly->Gengar#1
+          - label: D4-plus-Gyarados
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHYXN0bHk6Okdhc3RseS0+R2VuZ2FyIzEiLCJSaHlob3JuOjpSaHlob3JuLT5SaHlwZXJpb3IjMSJd
+            added_key: Magikarp::Gyarados->Gyarados#1
+          - label: B2-M-plus-O
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiXQ==
+            added_key: Geodude::Geodude->Golem#1
+          - label: B2-O-plus-A
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiR2VvZHVkZTo6R2VvZHVkZS0+R29sZW0jMSJd
+            added_key: Abra::Abra->Alakazam#1
+          - label: B2-A-plus-M
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd
+            added_key: Magnemite::Magnemite->Magneton#1
+          - label: B3-MO-plus-A
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHZW9kdWRlOjpHZW9kdWRlLT5Hb2xlbSMxIl0=
+            added_key: Abra::Abra->Alakazam#1
+          - label: B3-OA-plus-M
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiR2VvZHVkZTo6R2VvZHVkZS0+R29sZW0jMSIsIkFicmE6OkFicmEtPkFsYWthemFtIzEiXQ==
+            added_key: Magnemite::Magnemite->Magneton#1
+          - label: B3-AM-plus-O
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIk1hZ25lbWl0ZTo6TWFnbmVtaXRlLT5NYWduZXRvbiMxIl0=
+            added_key: Geodude::Geodude->Golem#1
+          - label: B4-plus-Blissey
+            prefix: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHZW9kdWRlOjpHZW9kdWRlLT5Hb2xlbSMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd
+            added_key: Happiny::Chansey->Blissey#1
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate control depth edge at 16 runs
+        run: |
+          mkdir -p results/research-v2/depth
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64="${{ matrix.prefix }}" \
+            --added-key="${{ matrix.added_key }}" \
+            --runs=16 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/research-v2/depth/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-control-depth-${{ matrix.label }}
+          path: hgss_story_sim/results/research-v2/depth/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-control-depth-profile]')
+    needs: profile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-control-depth-*
+          path: hgss_story_sim/results/research-v2/depth
+          merge-multiple: true
+      - name: Summarize depth profile
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/research-v2/depth';
+          const files=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort();
+          const rows=files.map(file=>{
+            const r=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            return {
+              label:file.replace(/\.json$/,''),
+              parentSize:r.prefixKeys?.length||0,
+              prefixKeys:r.prefixKeys,
+              addedKey:r.requestedAddedKey,
+              parentMetrics:r.parentMetrics,
+              childMetrics:r.bestChild?.metrics||null,
+              improvement:r.improvement
+            };
+          });
+          rows.sort((a,b)=>a.label.localeCompare(b.label));
+          const out={schemaVersion:1,routeProfile:'complete',runsPerBoss:16,rows};
+          fs.writeFileSync('results/research-v2/control-depth-profile-summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-control-depth-profile-summary
+          path: hgss_story_sim/results/research-v2/control-depth-profile-summary.json
+          if-no-files-found: error
