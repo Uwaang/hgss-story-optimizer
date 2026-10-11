@@ -268,8 +268,14 @@ function regularizedIncompleteBeta(x, a, b) {
   return 1 - bt * betaContinuedFraction(b, a, 1 - x) / b;
 }
 
+const BETA_POSTERIOR_QUANTILE_CACHE = new Map();
+
 function betaPosteriorQuantile(probability, a, b) {
   const q = Math.max(1e-12, Math.min(1 - 1e-12, Number(probability)));
+  const cacheKey = a + '|' + b + '|' + q.toPrecision(15);
+  if (BETA_POSTERIOR_QUANTILE_CACHE.has(cacheKey)) {
+    return BETA_POSTERIOR_QUANTILE_CACHE.get(cacheKey);
+  }
   let low = 0;
   let high = 1;
   for (let iteration = 0; iteration < 64; iteration += 1) {
@@ -277,7 +283,9 @@ function betaPosteriorQuantile(probability, a, b) {
     if (regularizedIncompleteBeta(mid, a, b) < q) low = mid;
     else high = mid;
   }
-  return (low + high) / 2;
+  const value = (low + high) / 2;
+  BETA_POSTERIOR_QUANTILE_CACHE.set(cacheKey, value);
+  return value;
 }
 
 function normalCdfApprox(value) {
