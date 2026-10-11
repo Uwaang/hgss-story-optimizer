@@ -1,0 +1,102 @@
+name: research-v2-size3-uncertainty-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-size3-uncertainty-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - name: Audit low-sample hard-wall workload
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const target=key([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1'
+          ]);
+          const map=new Map();
+          for(const file of fs.readdirSync('results/shards').filter(x=>x.startsWith('beam-3-wide-shard-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/shards/'+file,'utf8'));
+            for(const row of d.expanded||[]) map.set(key(row.teamKeys),row);
+          }
+          const states=[...map.values()];
+          const counts=states.map(s=>{
+            const active=(s.evaluation?.rows||[]).filter(r=>!r.skipped);
+            const z=active.filter(r=>Number(r.wins||0)===0);
+            const one=active.filter(r=>Number(r.wins||0)===1);
+            return {zero:z.length,one:one.length,active:active.length};
+          });
+          const percentile=(arr,p)=>{
+            const a=[...arr].sort((x,y)=>x-y);
+            return a[Math.min(a.length-1,Math.floor((a.length-1)*p))];
+          };
+          const t=map.get(target);
+          const targetRows=(t?.evaluation?.rows||[]).filter(r=>!r.skipped).map(r=>({
+            boss:r.boss,
+            wins:Number(r.wins||0),
+            losses:Number(r.losses||0),
+            runs:Number(r.runs||0),
+            winRate:Number(r.winRate||0),
+            progress:Number(r.battleProgressScore??r.winRate??0),
+            averageOpponentFaints:Number(r.averageOpponentFaints||0)
+          })).sort((a,b)=>a.wins-b.wins || b.progress-a.progress || String(a.boss).localeCompare(String(b.boss)));
+          const zeroCounts=counts.map(x=>x.zero), oneCounts=counts.map(x=>x.one);
+          const extraRuns=14;
+          const totals={};
+          for(const k of [1,2,3,4,5]){
+            const rows=counts.reduce((sum,x)=>sum+Math.min(k,x.zero),0);
+            totals['top'+k+'ZeroRows']={
+              selectedBossRows:rows,
+              extraBattleRuns:rows*extraRuns,
+              relativeToInitialBeam3Battles:(rows*extraRuns)/(states.length*35*2)
+            };
+          }
+          const allZero=zeroCounts.reduce((a,b)=>a+b,0);
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            states:states.length,
+            zeroWinRows:{
+              total:allZero,
+              mean:allZero/states.length,
+              p25:percentile(zeroCounts,.25),
+              p50:percentile(zeroCounts,.5),
+              p75:percentile(zeroCounts,.75),
+              p90:percentile(zeroCounts,.9),
+              max:Math.max(...zeroCounts)
+            },
+            oneWinRows:{
+              mean:oneCounts.reduce((a,b)=>a+b,0)/states.length,
+              p50:percentile(oneCounts,.5),
+              p90:percentile(oneCounts,.9)
+            },
+            workloadTo16:totals,
+            target:{
+              zeroWinCount:targetRows.filter(r=>r.wins===0).length,
+              oneWinCount:targetRows.filter(r=>r.wins===1).length,
+              rows:targetRows
+            }
+          },null,2));
+          NODE
