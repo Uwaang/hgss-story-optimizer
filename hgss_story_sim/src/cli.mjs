@@ -3704,7 +3704,7 @@ async function loadStagedRouteContext() {
   }
 
   const story = await loadStory(routeProfile);
-  const [pool, moveAccess, expContext] = await Promise.all([
+  const [rawPool, moveAccess, expContext] = await Promise.all([
     loadCanonicalPool(version, story, evolutionPolicy),
     loadMoveAccess(resourceProfile, spendPolicy),
     loadExpContext(
@@ -3717,6 +3717,18 @@ async function loadStagedRouteContext() {
       expAllocator,
     ),
   ]);
+  const excludedOrigins = [...new Set(stagedInputPaths(arg('exclude-origins', '')))].sort();
+  if (excludedOrigins.includes(starterName)) {
+    throw new Error('staged route search cannot exclude required starter origin: ' + starterName);
+  }
+  const pool = excludedOrigins.length
+    ? {
+        ...rawPool,
+        candidates: rawPool.candidates.filter(candidate =>
+          !excludedOrigins.includes(String(candidate.species))
+        ),
+      }
+    : rawPool;
   const requiredCandidate = findStarterCandidate(pool.candidates, starterName);
   const battleOptions = {
     p1AiMode: 'smart',
@@ -3739,6 +3751,7 @@ async function loadStagedRouteContext() {
     objective,
     routeGrindProxy,
     routeGrindProxyTarget,
+    excludedOrigins,
     story,
     pool,
     moveAccess,
@@ -3770,6 +3783,9 @@ function stagedConfigSnapshot(ctx) {
     objective: ctx.objective,
     routeGrindProxy: ctx.routeGrindProxy,
     routeGrindProxyTarget: ctx.routeGrindProxyTarget,
+    ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
+      ? { excludedOrigins: ctx.excludedOrigins }
+      : {}),
   };
 }
 
