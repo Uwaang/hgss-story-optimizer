@@ -1,0 +1,219 @@
+name: research-v2-early-wide-beam3-pilot
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  beam2_wide_merge:
+    if: contains(github.event.head_commit.message, '[research-v2-early-wide-beam3-pilot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam2-wide-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-global-screen-cap100
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38072025480
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-global-beam2-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38072025480
+          github-token: ${{ github.token }}
+      - name: Re-merge beam2 at width 12
+        run: |
+          CACHES="$(find results/shards -name 'battle-cache-2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/beam2-wide-cache.json
+          SHARDS="$(find results/shards -name 'beam-2-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/checkpoint.json --inputs="$SHARDS" \
+            --target-size=2 --runs=2 --beam-width=12 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=12 \
+            $SEARCH_ARGS \
+            > results/beam2-wide-checkpoint.json
+          jq '{
+            stage,
+            beamCount:(.beam|length),
+            timing:.timings[-1],
+            hasIdx30AlakazamPair:any(.beam[]; ((.teamKeys|sort)==(["Cyndaquil::Cyndaquil->Typhlosion#1","Abra::Abra->Alakazam#1"]|sort))),
+            beam:[.beam[]|{teamKeys,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}]
+          }' results/beam2-wide-checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-early-wide-beam2-merge
+          path: |
+            hgss_story_sim/results/beam2-wide-checkpoint.json
+            hgss_story_sim/results/beam2-wide-cache.json
+          if-no-files-found: error
+
+  beam3_shard:
+    needs: beam2_wide_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam3-wide-cache-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-early-wide-beam2-merge
+          path: hgss_story_sim/results/input
+      - name: Expand width12 beam2 to size3
+        run: |
+          cp results/input/beam2-wide-cache.json "results/beam3-wide-cache-${{ matrix.shard }}.json"
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/beam2-wide-checkpoint.json \
+            --target-size=3 --runs=2 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/beam-3-wide-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-early-wide-beam3-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-3-wide-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/beam3-wide-cache-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam3_compare:
+    needs: beam3_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam3-wide-merge-cache.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-early-wide-beam2-merge
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge size3 at widths 12 and 6
+        run: |
+          CACHES="$(find results/shards -name 'beam3-wide-cache-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/beam3-wide-merge-cache.json
+          SHARDS="$(find results/shards -name 'beam-3-wide-shard-*.json' -type f | sort | paste -sd, -)"
+
+          cp results/beam3-wide-merge-cache.json results/beam3-w12-cache.json
+          HGSS_BATTLE_CACHE_PATH=results/beam3-w12-cache.json node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/beam2-wide-checkpoint.json --inputs="$SHARDS" \
+            --target-size=3 --runs=2 --beam-width=12 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=12 \
+            $SEARCH_ARGS \
+            > results/beam3-w12.json
+
+          cp results/beam3-wide-merge-cache.json results/beam3-w6-cache.json
+          HGSS_BATTLE_CACHE_PATH=results/beam3-w6-cache.json node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/beam2-wide-checkpoint.json --inputs="$SHARDS" \
+            --target-size=3 --runs=2 --beam-width=6 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=6 \
+            $SEARCH_ARGS \
+            > results/beam3-w6.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const target=[...[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1'
+          ]].sort().join('|');
+          function slim(file){
+            const d=JSON.parse(fs.readFileSync(file,'utf8'));
+            const rows=(d.beam||[]).map((r,i)=>({
+              rank:i+1,
+              key:[...(r.teamKeys||[])].sort().join('|'),
+              teamKeys:r.teamKeys,
+              retry:r.routeExpectedRetryFailures,
+              geometric:r.routeRiskGeometricScore,
+              mean:r.routeRiskMeanWinRate
+            }));
+            return {
+              width:rows.length,
+              idx30Chain3Selected:rows.some(r=>r.key===target),
+              idx30Chain3Rank:rows.find(r=>r.key===target)?.rank??null,
+              timing:d.timings?.at(-1)??null,
+              beam:rows
+            };
+          }
+          const shards=fs.readdirSync('results/shards').filter(x=>x.startsWith('beam-3-wide-shard-')&&x.endsWith('.json'));
+          let generated=null;
+          for(const file of shards){
+            const d=JSON.parse(fs.readFileSync('results/shards/'+file,'utf8'));
+            for(const r of d.expanded||[]){
+              if([...(r.teamKeys||[])].sort().join('|')===target){
+                generated={
+                  teamKeys:r.teamKeys,
+                  retry:r.routeExpectedRetryFailures,
+                  geometric:r.routeRiskGeometricScore,
+                  mean:r.routeRiskMeanWinRate
+                };
+              }
+            }
+          }
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            targetGenerated:generated!==null,
+            generatedTarget:generated,
+            width12:slim('results/beam3-w12.json'),
+            width6:slim('results/beam3-w6.json')
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-early-wide-beam3-compare
+          path: |
+            hgss_story_sim/results/beam3-w12.json
+            hgss_story_sim/results/beam3-w6.json
+          if-no-files-found: error
