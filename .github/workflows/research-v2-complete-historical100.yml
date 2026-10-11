@@ -1,0 +1,92 @@
+name: research-v2-complete-historical100
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-historical100]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: seed-D
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJNYWdpa2FycDo6TWFnaWthcnAtPkd5YXJhZG9zIzEiLCJHYXN0bHk6Okdhc3RseS0+R2VuZ2FyIzEiLCJSaHlob3JuOjpSaHlob3JuLT5SaHlwZXJpb3IjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSJd
+          - label: seed-B
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWFnbmVtaXRlOjpNYWduZW1pdGUtPk1hZ25ldG9uIzEiLCJHZW9kdWRlOjpHZW9kdWRlLT5Hb2xlbSMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIldvb3Blcjo6UXVhZ3NpcmUtPlF1YWdzaXJlIzEiLCJSaHlob3JuOjpSaHlob3JuLT5SaHlwZXJpb3IjMSJd
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/historical-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate exact historical full team at 100 runs per boss
+        run: |
+          mkdir -p results/historical
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" \
+            --runs=100 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/historical/${{ matrix.label }}.json"
+          jq '{runs,teamKeys,metrics,battleCache}' "results/historical/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-historical100-${{ matrix.label }}
+          path: hgss_story_sim/results/historical/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-historical100]')
+    needs: evaluate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-historical100-*
+          path: hgss_story_sim/results/historical
+          merge-multiple: true
+      - name: Summarize controls
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rows=fs.readdirSync('results/historical')
+            .filter(x=>x.endsWith('.json'))
+            .sort()
+            .map(file=>{
+              const d=JSON.parse(fs.readFileSync('results/historical/'+file,'utf8'));
+              return {
+                label:file.replace(/\.json$/,''),
+                teamKeys:d.teamKeys,
+                metrics:d.metrics
+              };
+            });
+          const out={schemaVersion:1,routeProfile:'complete',runsPerBoss:100,rows};
+          fs.writeFileSync('results/historical100-summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-historical100-summary
+          path: hgss_story_sim/results/historical100-summary.json
+          if-no-files-found: error
