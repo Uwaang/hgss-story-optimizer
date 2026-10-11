@@ -1,0 +1,147 @@
+name: research-v2-complete-beam6-final-resume
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  beam6_shard:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-beam6-final-resume]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam6-cache-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-global-beam5-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38105960960
+          github-token: ${{ github.token }}
+      - name: Expand beam6 shard
+        run: |
+          cp results/input/beam5-cache.json "results/beam6-cache-${{ matrix.shard }}.json"
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/beam5/checkpoint.json \
+            --target-size=6 --runs=2 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/beam-6-shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/beam-6-shard-${{ matrix.shard }}.json
+            hgss_story_sim/results/beam6-cache-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  beam6_merge:
+    needs: beam6_shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/beam6-cache-merged.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-global-beam5-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38105960960
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-resume-beam6-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge beam6
+        run: |
+          CACHES="$(find results/shards -name 'beam6-cache-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs battle-cache-merge --inputs="$CACHES" --output=results/beam6-cache-merged.json
+          INPUTS="$(find results/shards -name 'beam-6-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-merge \
+            --input=results/input/beam5/checkpoint.json --inputs="$INPUTS" \
+            --target-size=6 --runs=2 --beam-width=12 \
+            --adaptive-runs=4 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=12 \
+            $SEARCH_ARGS \
+            > results/beam6-checkpoint.json
+          jq '{stage,beamCount:(.beam|length),timing:.timings[-1]}' results/beam6-checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-merge
+          path: |
+            hgss_story_sim/results/beam6-checkpoint.json
+            hgss_story_sim/results/beam6-cache-merged.json
+          if-no-files-found: error
+
+  final100:
+    needs: beam6_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/final100-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-merge
+          path: hgss_story_sim/results/input
+      - name: Rescore 12 finalists at 100 runs per boss
+        run: |
+          cp results/input/beam6-cache-merged.json results/final100-cache.json
+          node src/cli.mjs route-exp-story-final-stage \
+            --input=results/input/beam6-checkpoint.json \
+            --final-runs=100 \
+            $SEARCH_ARGS \
+            > results/global-final100.json
+          jq '{finalRescoredTeams,paretoFront,top:[.top[]|{team,teamKeys,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}]}' results/global-final100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-resume-global-final100
+          path: |
+            hgss_story_sim/results/global-final100.json
+            hgss_story_sim/results/final100-cache.json
+          if-no-files-found: error
