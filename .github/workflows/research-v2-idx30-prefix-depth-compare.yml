@@ -1,0 +1,107 @@
+name: research-v2-idx30-prefix-depth-compare
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[research-v2-idx30-prefix-depth]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: idx30-pair-alakazam
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd
+          - label: idx30-pair-rhyperior
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUmh5aG9ybjo6Umh5aG9ybi0+Umh5cGVyaW9yIzEiXQ==
+          - label: idx30-pair-lapras
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIl0=
+          - label: idx30-pair-lanturn
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQ2hpbmNob3U6OkxhbnR1cm4tPkxhbnR1cm4jMSJd
+          - label: idx30-pair-tyranitar
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIl0=
+          - label: idx30-chain3
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIl0=
+          - label: idx30-chain4
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIl0=
+          - label: idx30-chain5
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiQ2hpbmNob3U6OkxhbnR1cm4tPkxhbnR1cm4jMSJd
+          - label: idx30-chain6
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiQ2hpbmNob3U6OkxhbnR1cm4tPkxhbnR1cm4jMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSJd
+          - label: global-chain2
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiRHJhdGluaTo6RHJhZ29uYWlyLT5EcmFnb25pdGUjMSJd
+          - label: global-chain3
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiRHJhdGluaTo6RHJhZ29uYWlyLT5EcmFnb25pdGUjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSJd
+          - label: global-chain4
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiRHJhdGluaTo6RHJhZ29uYWlyLT5EcmFnb25pdGUjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSIsIk5hdHU6Ok5hdHUtPlhhdHUjMSJd
+          - label: global-chain5
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiRHJhdGluaTo6RHJhZ29uYWlyLT5EcmFnb25pdGUjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSIsIk5hdHU6Ok5hdHUtPlhhdHUjMSIsIk1pc2RyZWF2dXM6Ok1pc2RyZWF2dXMtPk1pc21hZ2l1cyMxIl0=
+          - label: global-chain6
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiRHJhdGluaTo6RHJhZ29uYWlyLT5EcmFnb25pdGUjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSIsIk5hdHU6Ok5hdHUtPlhhdHUjMSIsIk1pc2RyZWF2dXM6Ok1pc2RyZWF2dXMtPk1pc21hZ2l1cyMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/depth-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate prefix at 16 runs per boss
+        run: |
+          mkdir -p results/depth
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=16 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/depth/${{ matrix.label }}.json"
+          jq '{teamKeys,metrics}' "results/depth/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-idx30-depth-${{ matrix.label }}
+          path: hgss_story_sim/results/depth/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-idx30-prefix-depth]')
+    needs: evaluate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-idx30-depth-*
+          path: hgss_story_sim/results/depth
+          merge-multiple: true
+      - name: Summarize prefix depth comparison
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rows=fs.readdirSync('results/depth')
+            .filter(x=>x.endsWith('.json')).sort().map(file=>{
+              const d=JSON.parse(fs.readFileSync('results/depth/'+file,'utf8'));
+              return {
+                label:file.replace(/\.json$/,''),
+                size:d.teamKeys.length,
+                teamKeys:d.teamKeys,
+                metrics:d.metrics
+              };
+            });
+          console.log(JSON.stringify({schemaVersion:1,routeProfile:'complete',runsPerBoss:16,rows},null,2));
+          NODE
