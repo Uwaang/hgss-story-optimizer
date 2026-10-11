@@ -1,0 +1,184 @@
+name: research-v2-size5-prefix100-diagnostic
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[research-v2-size5-prefix100-diagnostic]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-selective12-shard-*
+          path: hgss_story_sim/results/selective12
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38128596933
+          github-token: ${{ github.token }}
+      - name: Build top4 projected64 plus idx30 diagnostic5
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const target=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1'
+          ];
+          function rr(r){
+            const w=Number(r.wins||0),l=Number(r.losses||0),t=Number(r.ties||0);
+            const p=(w+1)/(w+l+t+2); return (1-p)/p;
+          }
+          function metrics(e){
+            let current=0,projected64=0,zeros=0;
+            for(const r of (e?.rows||[]).filter(x=>!x.skipped)){
+              const x=rr(r); current+=x;
+              if(Number(r.wins||0)===0){projected64+=65; zeros++;}
+              else projected64+=x;
+            }
+            return {current,projected64,zeros};
+          }
+          const by=new Map(); let fingerprint=null,config=null,schemaVersion=1;
+          for(const file of fs.readdirSync('results/selective12').filter(x=>x.startsWith('selective5-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/selective12/'+file,'utf8'));
+            fingerprint??=d.fingerprint; config??=d.config; schemaVersion=d.schemaVersion??schemaVersion;
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const ranked=[...by.values()].map(r=>({r,m:metrics(r.evaluation)}))
+            .sort((a,b)=>a.m.projected64-b.m.projected64||a.m.current-b.m.current||key(a.r.teamKeys).localeCompare(key(b.r.teamKeys)));
+          const targetKey=key(target);
+          const targetRow=by.get(targetKey);
+          if(!targetRow) throw new Error('idx30 size5 target missing');
+          const picked=[...ranked.slice(0,4).map(x=>x.r)];
+          if(!picked.some(r=>key(r.teamKeys)===targetKey)) picked.push(targetRow);
+          const out={
+            schemaVersion,type:'route-search-checkpoint',fingerprint,config,
+            stage:'size5-prefix100-diagnostic5',
+            beam:picked.map(r=>({teamKeys:r.teamKeys,evaluation:r.evaluation}))
+          };
+          fs.writeFileSync('results/diagnostic5.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            targetProjectedRank:ranked.findIndex(x=>key(x.r.teamKeys)===targetKey)+1,
+            teams:picked.map((r,i)=>({slot:i+1,teamKeys:r.teamKeys,...metrics(r.evaluation)}))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-prefix100-input
+          path: hgss_story_sim/results/diagnostic5.json
+          if-no-files-found: error
+
+  rescore100:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size5-prefix100-input
+          path: hgss_story_sim/results/input
+      - name: Full100 diagnostic
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/diagnostic5.json \
+            --runs=100 --shard-count=5 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/prefix100-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-prefix100-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/prefix100-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: rescore100
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size5-prefix100-input
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-prefix100-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Summarize size5 100-run ranking
+        run: |
+          INPUTS="$(find results/shards -name 'prefix100-*.json' -type f | sort | paste -sd, -)"
+          TARGET="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1"
+          node src/cli.mjs route-exp-story-rescore-select-merge \
+            --checkpoint=results/input/diagnostic5.json \
+            --inputs="$INPUTS" --runs=100 --beam-width=5 \
+            --target-keys="$TARGET" \
+            $SEARCH_ARGS > results/summary.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/summary.json','utf8'));
+          function metrics(r){
+            const rows=(r?.evaluation?.rows||[]).filter(x=>!x.skipped);
+            let retry=0,wins=0,runs=0;
+            for(const x of rows){
+              const w=Number(x.wins||0),l=Number(x.losses||0),t=Number(x.ties||0);
+              const p=(w+1)/(w+l+t+2); retry+=(1-p)/p; wins+=w; runs+=Number(x.runs||0);
+            }
+            const geometric=rows.length?Math.exp(rows.reduce((s,x)=>{
+              const w=Number(x.wins||0),l=Number(x.losses||0),t=Number(x.ties||0);
+              return s+Math.log((w+1)/(w+l+t+2));
+            },0)/rows.length):0;
+            return {retry,geometric,mean:runs?wins/runs:0};
+          }
+          console.log(JSON.stringify({
+            target:d.fullRescoreSelect?.target,
+            ranking:(d.beam||[]).map((r,i)=>({rank:i+1,teamKeys:r.teamKeys,...metrics(r)}))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-prefix100-summary
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
