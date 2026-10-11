@@ -1,0 +1,54 @@
+name: research-v2-selective-rescore-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-selective-rescore-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - name: Smoke selective hard-wall rescore on ~1% of states
+        run: |
+          INPUTS="$(find results/source -name 'beam-3-wide-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=4 --max-low-wins=1 \
+            --shard-count=100 --shard-index=0 \
+            $SEARCH_ARGS \
+            > results/smoke.json
+          jq '{type,runs,maxLowWins,sourceStateCount,rescoredCount,resampledBossRows,wallMs,
+               sample:[.rescored[:2][]|{teamKeys,resampleBosses,
+                 retryBefore:(.sourceEvaluation.rows|map(select(.skipped|not)|((1-((.wins+1)/(.wins+.losses+(.ties//0)+2)))/((.wins+1)/(.wins+.losses+(.ties//0)+2))))|add),
+                 retryAfter:(.evaluation.rows|map(select(.skipped|not)|((1-((.wins+1)/(.wins+.losses+(.ties//0)+2)))/((.wins+1)/(.wins+.losses+(.ties//0)+2))))|add)}]}' results/smoke.json
