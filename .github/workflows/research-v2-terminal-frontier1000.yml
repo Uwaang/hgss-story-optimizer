@@ -1,0 +1,149 @@
+name: research-v2-terminal-frontier1000
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-terminal-frontier1000]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: kingler
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJLcmFiYnk6OktpbmdsZXItPktpbmdsZXIjMSJd
+          - label: electivire
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJFbGVraWQ6OkVsZWN0YWJ1enotPkVsZWN0aXZpcmUjMSJd
+          - label: wobbuffet
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJXeW5hdXQ6OldvYmJ1ZmZldC0+V29iYnVmZmV0IzEiXQ==
+          - label: weavile
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiWnViYXQ6OkdvbGJhdC0+Q3JvYmF0IzEiLCJTbmVhc2VsOjpTbmVhc2VsLT5XZWF2aWxlIzEiXQ==
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/frontier1000-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate practical finalist at 1000 runs per boss
+        run: |
+          mkdir -p results/frontier1000
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=1000 \
+            $SEARCH_ARGS \
+            > "results/frontier1000/${{ matrix.label }}.json"
+          jq '{
+            runs,
+            teamKeys,
+            metrics,
+            grindBattles:.evaluation.routeGrindProxy.expectedBattles,
+            grindExp:.evaluation.routeGrindProxy.cumulativeGrindExp,
+            worstBoss:.evaluation.worstBossWinRate
+          }' "results/frontier1000/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-terminal-frontier1000-${{ matrix.label }}
+          path: hgss_story_sim/results/frontier1000/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-terminal-frontier1000]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-terminal-frontier1000-*
+          path: hgss_story_sim/results/frontier1000
+          merge-multiple: true
+      - name: Summarize high-sample practical frontier
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/frontier1000';
+          const rows=fs.readdirSync(dir)
+            .filter(x=>x.endsWith('.json'))
+            .sort()
+            .map(file=>{
+              const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+              const e=d.evaluation||{};
+              return {
+                label:file.replace(/\.json$/,''),
+                teamKeys:d.teamKeys,
+                runs:d.runs,
+                retry:d.metrics?.retry??null,
+                geometric:d.metrics?.geometric??null,
+                mean:d.metrics?.mean??null,
+                progress:d.metrics?.progress??null,
+                grindBattles:e.routeGrindProxy?.expectedBattles??null,
+                grindExp:e.routeGrindProxy?.cumulativeGrindExp??null,
+                worstBossWinRate:e.worstBossWinRate??null,
+                bosses:(e.rows||[]).filter(r=>!r.skipped).map(r=>({
+                  boss:r.boss,
+                  wins:r.wins,
+                  runs:r.runs,
+                  winRate:r.winRate,
+                  progress:r.battleProgressScore??r.winRate
+                }))
+              };
+            });
+          const dominates=(a,b)=>{
+            const weak=
+              a.retry<=b.retry &&
+              a.geometric>=b.geometric &&
+              a.mean>=b.mean &&
+              a.grindBattles<=b.grindBattles;
+            const strict=
+              a.retry<b.retry ||
+              a.geometric>b.geometric ||
+              a.mean>b.mean ||
+              a.grindBattles<b.grindBattles;
+            return weak&&strict;
+          };
+          const pareto=rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b)));
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-418 practical frontier high-sample validation',
+            runsPerBoss:1000,
+            seedPolicy:'matched deterministic per-boss seeds from evaluateCandidates/simulateMatchup',
+            objectives:{
+              minimize:['retry','grindBattles'],
+              maximize:['geometric','mean']
+            },
+            rows,
+            paretoLabels:pareto.map(r=>r.label)
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-terminal-frontier1000-summary
+          path: hgss_story_sim/results/frontier1000/summary.json
+          if-no-files-found: error
