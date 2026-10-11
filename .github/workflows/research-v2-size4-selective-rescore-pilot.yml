@@ -1,0 +1,110 @@
+name: research-v2-size4-selective-rescore-pilot
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  rescore:
+    if: contains(github.event.head_commit.message, '[research-v2-size4-selective-rescore]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-idx30-beam4-shard-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38116884808
+          github-token: ${{ github.token }}
+      - name: Selectively rescore size4 hard-wall rows to 12 runs
+        run: |
+          INPUTS="$(find results/source -name 'beam4-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/selective4-${{ matrix.shard }}.json"
+          jq '{runs,maxLowWins,sourceStateCount,rescoredCount,resampledBossRows,wallMs}' "results/selective4-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size4-selective-rescore-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/selective4-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  promote64:
+    needs: rescore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-idx30-beam3-w16
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38116884808
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size4-selective-rescore-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Build objective promotion64 from selective 12-run evidence
+        run: |
+          INPUTS="$(find results/shards -name 'selective4-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/input/beam3-w16.json \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --beam-width=64 --selection=objective \
+            --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1" \
+            $SEARCH_ARGS \
+            > results/promotion64.json
+          jq '{
+            stage,
+            selectiveRescore,
+            beamCount:(.beam|length),
+            targetSelected:.selectiveRescore.target.selected,
+            targetRank:.selectiveRescore.target.objectiveRank,
+            targetMetrics:.selectiveRescore.target.metrics
+          }' results/promotion64.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size4-promotion64
+          path: hgss_story_sim/results/promotion64.json
+          if-no-files-found: error
