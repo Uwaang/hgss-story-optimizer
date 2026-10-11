@@ -1,0 +1,364 @@
+name: research-v2-size5-projected64-pipeline
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  expand5:
+    if: contains(github.event.head_commit.message, '[research-v2-size5-projected64-pipeline]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size4-projected64-rare64-beam16
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38126960888
+          github-token: ${{ github.token }}
+      - name: Expand corrected size4 beam16 to size5
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/beam4-projected64-rare64.json \
+            --target-size=5 --runs=2 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/beam5-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-expand-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/beam5-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  selective12:
+    needs: expand5
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-expand-shard-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+      - name: Selectively rescore size5 low-win rows to12
+        run: |
+          INPUTS="$(find results/source -name 'beam5-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/selective5-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-selective12-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/selective5-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  promote:
+    needs: selective12
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size4-projected64-rare64-beam16
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38126960888
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-expand-shard-*
+          path: hgss_story_sim/results/expanded
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-selective12-shard-*
+          path: hgss_story_sim/results/selective12
+          merge-multiple: true
+      - name: Build projected64 top64 promotion and audit idx30 size5
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const base=JSON.parse(fs.readFileSync('results/base/beam4-projected64-rare64.json','utf8'));
+          const key=x=>[...(x||[])].sort().join('|');
+          const target=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1'
+          ];
+          const targetKey=key(target);
+          function rr(r){
+            const w=Number(r.wins||0),l=Number(r.losses||0),t=Number(r.ties||0);
+            const p=(w+1)/(w+l+t+2); return (1-p)/p;
+          }
+          function metrics(e){
+            const rows=(e?.rows||[]).filter(r=>!r.skipped);
+            let current=0,projected64=0,zeros=0;
+            for(const r of rows){
+              const x=rr(r); current+=x;
+              if(Number(r.wins||0)===0){projected64+=65; zeros++;}
+              else projected64+=x;
+            }
+            return {current,projected64,zeros};
+          }
+          let generated=null, expandedCount=0;
+          for(const file of fs.readdirSync('results/expanded').filter(x=>x.startsWith('beam5-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/expanded/'+file,'utf8'));
+            expandedCount += (d.expanded||[]).length;
+            for(const r of d.expanded||[]) if(key(r.teamKeys)===targetKey) generated=r;
+          }
+          const by=new Map();
+          for(const file of fs.readdirSync('results/selective12').filter(x=>x.startsWith('selective5-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/selective12/'+file,'utf8'));
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const ranked=[...by.values()].map(r=>({r,m:metrics(r.evaluation)}))
+            .sort((a,b)=>a.m.projected64-b.m.projected64||a.m.current-b.m.current||key(a.r.teamKeys).localeCompare(key(b.r.teamKeys)));
+          const top=ranked.slice(0,64);
+          const targetRank=ranked.findIndex(x=>key(x.r.teamKeys)===targetKey)+1;
+          const out={
+            ...base,
+            stage:'beam-5-projected64-promotion',
+            beam:top.map(x=>({teamKeys:x.r.teamKeys,evaluation:x.r.evaluation})),
+            projectedRareWall:{
+              sourceStates:ranked.length,
+              expandedCount,
+              targetRuns:64,
+              promotionWidth:64,
+              targetGenerated:generated!==null,
+              targetRank,
+              targetSelected:targetRank>0&&targetRank<=64,
+              target:ranked.find(x=>key(x.r.teamKeys)===targetKey)?.m||null
+            }
+          };
+          fs.writeFileSync('results/promotion64-projected-size5.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            projectedRareWall:out.projectedRareWall,
+            targetKeys:target,
+            top10:top.slice(0,10).map((x,i)=>({rank:i+1,teamKeys:x.r.teamKeys,...x.m}))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-projected64-promotion
+          path: hgss_story_sim/results/promotion64-projected-size5.json
+          if-no-files-found: error
+
+  full16:
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size5-projected64-promotion
+          path: hgss_story_sim/results/input
+      - name: Full16 rescore projected size5 promotion64
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/promotion64-projected-size5.json \
+            --runs=16 --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/full16-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-full16-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/full16-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  prepare_rare64:
+    needs: full16
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-full16-shard-*
+          path: hgss_story_sim/results/full16
+          merge-multiple: true
+      - name: Repackage size5 full16 states for zero-win rare-wall racing
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const targetKey=key([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1',
+            'Chinchou::Lanturn->Lanturn#1'
+          ]);
+          function retry(e){
+            let s=0;
+            for(const r of (e?.rows||[]).filter(x=>!x.skipped)){
+              const w=Number(r.wins||0),l=Number(r.losses||0),t=Number(r.ties||0);
+              const p=(w+1)/(w+l+t+2); s+=(1-p)/p;
+            }
+            return s;
+          }
+          const by=new Map(); let fingerprint=null,config=null;
+          for(const file of fs.readdirSync('results/full16').filter(x=>x.startsWith('full16-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/full16/'+file,'utf8'));
+            fingerprint??=d.fingerprint; config??=d.config;
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const states=[...by.values()];
+          const ranked=[...states].sort((a,b)=>retry(a.evaluation)-retry(b.evaluation)||key(a.teamKeys).localeCompare(key(b.teamKeys)));
+          const target=states.find(r=>key(r.teamKeys)===targetKey)||null;
+          const targetZeros=(target?.evaluation?.rows||[]).filter(r=>!r.skipped&&Number(r.wins||0)===0).map(r=>String(r.boss));
+          const totalZeros=states.reduce((s,r)=>s+(r.evaluation?.rows||[]).filter(x=>!x.skipped&&Number(x.wins||0)===0).length,0);
+          fs.writeFileSync('results/expanded64-full16-size5.json',JSON.stringify({
+            schemaVersion:1,type:'route-beam-shard',fingerprint,config,
+            expanded:states.map(r=>({teamKeys:r.teamKeys,evaluation:r.evaluation}))
+          },null,2));
+          console.log(JSON.stringify({
+            states:states.length,totalZeroRows:totalZeros,
+            targetPresent:target!==null,
+            targetFull16Rank:target?ranked.findIndex(r=>key(r.teamKeys)===targetKey)+1:null,
+            targetRetry:target?retry(target.evaluation):null,
+            targetZeroBosses:targetZeros
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-full16-expanded
+          path: hgss_story_sim/results/expanded64-full16-size5.json
+          if-no-files-found: error
+
+  rare64:
+    needs: prepare_rare64
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size5-full16-expanded
+          path: hgss_story_sim/results/input
+      - name: Resample size5 0-of-16 hard walls to64
+        run: |
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs=results/input/expanded64-full16-size5.json \
+            --runs=64 --max-low-wins=0 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rare64-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-rare64-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/rare64-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select:
+    needs: rare64
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size5-projected64-promotion
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size5-rare64-shard-*
+          path: hgss_story_sim/results/rare64
+          merge-multiple: true
+      - name: Select ordinary size5 beam16 after rare-wall racing
+        run: |
+          INPUTS="$(find results/rare64 -name 'rare64-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/input/promotion64-projected-size5.json \
+            --inputs="$INPUTS" --runs=64 --max-low-wins=0 \
+            --beam-width=16 --selection=beam \
+            --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1,Chinchou::Lanturn->Lanturn#1" \
+            $SEARCH_ARGS > results/beam5-projected64-rare64.json
+          jq '{
+            stage,
+            selectiveRescore,
+            target:.selectiveRescore.target,
+            beamCount:(.beam|length),
+            beam:[.beam[]|{teamKeys}]
+          }' results/beam5-projected64-rare64.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size5-projected64-rare64-beam16
+          path: hgss_story_sim/results/beam5-projected64-rare64.json
+          if-no-files-found: error
