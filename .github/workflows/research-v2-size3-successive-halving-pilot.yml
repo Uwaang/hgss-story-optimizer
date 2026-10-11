@@ -1,4 +1,5 @@
 name: research-v2-size3-successive-halving-pilot
+# objective-promotion rerun
 
 on:
   push:
@@ -53,7 +54,7 @@ jobs:
           INPUTS="$(find results/selective -name 'selective-*.json' -type f | sort | paste -sd, -)"
           node src/cli.mjs route-exp-story-selective-rescore-merge \
             --checkpoint=results/input/beam2-wide-checkpoint.json \
-            --inputs="$INPUTS" --runs=12 --max-low-wins=1 --beam-width=48 \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 --beam-width=48 --selection=objective \
             --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1" \
             $SEARCH_ARGS \
             > results/promotion48.json
