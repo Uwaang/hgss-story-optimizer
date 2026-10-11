@@ -215,9 +215,8 @@ jobs:
       - name: Evaluate historical full team at 100 runs
         run: |
           mkdir -p results/historical
-          node src/cli.mjs completion-aware-prefix-probe \
+          node src/cli.mjs completion-aware-explicit-evaluate \
             --prefix-base64="${{ matrix.prefix }}" \
-            --added-key="Cyndaquil::Cyndaquil->Typhlosion#1" \
             --runs=100 \
             --route-profile=complete \
             --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
@@ -226,7 +225,7 @@ jobs:
             --resources=all --spend-policy=natural \
             --objective=route-risk --route-grind-proxy=false \
             > "results/historical/${{ matrix.label }}.json"
-          jq '{prefixKeys,parentMetrics,legalChildCount,battleCache}' "results/historical/${{ matrix.label }}.json"
+          jq '{teamKeys,metrics,battleCache}' "results/historical/${{ matrix.label }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: research-v2-complete-historical100-${{ matrix.label }}
