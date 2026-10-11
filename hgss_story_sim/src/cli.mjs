@@ -4664,6 +4664,147 @@ async function cmdRouteExpStorySelectiveRescoreShard() {
   }, null, 2));
 }
 
+function projectZeroWinEvaluation(evaluation, targetRuns) {
+  const runs = Math.max(2, Math.floor(Number(targetRuns || 64)));
+  return {
+    ...evaluation,
+    rows: (evaluation?.rows || []).map(row => {
+      if (row?.skipped || Number(row?.wins || 0) !== 0) return row;
+      return {
+        ...row,
+        runs,
+        wins: 0,
+        losses: runs,
+        ties: 0,
+        winRate: 0,
+      };
+    }),
+  };
+}
+
+async function cmdRouteExpStoryProjectedZeroSelectMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('checkpoint', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const targetRuns = Math.max(2, Math.floor(Number(arg('target-runs', '64'))));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '64'))));
+  const selection = String(arg('selection', 'beam')).toLowerCase();
+  if (!inputs.length) {
+    throw new Error('route-exp-story-projected-zero-select-merge requires --inputs');
+  }
+  if (!['beam', 'objective'].includes(selection)) {
+    throw new Error('Unknown projected-zero selection policy: ' + selection);
+  }
+
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const byKey = stagedCandidateMap(ctx);
+  const rescoredByKey = new Map();
+  const shardDocs = [];
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'projected-zero shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    shardDocs.push(doc);
+    for (const row of doc.rescored || []) {
+      rescoredByKey.set(completionTeamKey(row.teamKeys || []), row);
+    }
+  }
+  if (!rescoredByKey.size) {
+    throw new Error('projected-zero merge has no rescored states');
+  }
+
+  const originalsByKey = new Map();
+  const projectedStates = [...rescoredByKey.values()].map(row => {
+    const team = stagedTeamFromKeys(row.teamKeys, byKey);
+    const key = stateTieKey({ team });
+    originalsByKey.set(key, { team, evaluation: row.evaluation });
+    return {
+      team,
+      evaluation: projectZeroWinEvaluation(row.evaluation, targetRuns),
+    };
+  });
+
+  const objectiveOrder = [...projectedStates].sort(routeRiskStateCompare);
+  const projectedBeam = selection === 'objective'
+    ? objectiveOrder.slice(0, beamWidth)
+    : selectRouteRiskBeam(projectedStates, beamWidth);
+  const selectedKeys = projectedBeam.map(stateTieKey);
+  const beam = selectedKeys.map(key => {
+    const original = originalsByKey.get(key);
+    if (!original) throw new Error('projected-zero selected state missing original: ' + key);
+    return {
+      teamKeys: original.team.map(candidateIdentity),
+      evaluation: original.evaluation,
+    };
+  });
+  const totalZeroRows = [...rescoredByKey.values()].reduce(
+    (sum, row) => sum + (row.evaluation?.rows || []).filter(
+      bossRow => !bossRow?.skipped && Number(bossRow?.wins || 0) === 0
+    ).length,
+    0,
+  );
+
+  const selectedAudit = projectedBeam.map((state, index) => {
+    const key = stateTieKey(state);
+    const original = originalsByKey.get(key);
+    return {
+      rank: index + 1,
+      teamKeys: original.team.map(candidateIdentity),
+      projectedRetry: routeRiskExpectedRetryFailures(state.evaluation),
+      projectedGeometric: routeRiskGeometricScore(state.evaluation),
+      projectedMean: routeRiskMeanWinRate(state.evaluation),
+      routeGrindProxyBattles: evaluationRouteGrindProxy(original.evaluation),
+      routeGrindProxyUnknown: evaluationRouteGrindProxyUnknown(original.evaluation),
+      zeroRows: (original.evaluation?.rows || []).filter(
+        row => !row?.skipped && Number(row?.wins || 0) === 0
+      ).length,
+    };
+  });
+
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-search-checkpoint',
+    stage: String(checkpoint.stage || 'beam') + '-projected-zero-select',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    candidateCap: checkpoint.candidateCap,
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    beam,
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'projected-zero-select',
+        sourceStates: projectedStates.length,
+        targetRuns,
+        totalZeroRows,
+        beamWidth,
+        selection,
+        wallMs: Date.now() - startedAt,
+      },
+    ],
+    projectedZeroSelect: {
+      policy: 'zero-win-conservative-target-runs-v1',
+      sourceStates: projectedStates.length,
+      targetRuns,
+      totalZeroRows,
+      beamWidth,
+      selection,
+      selectedCount: beam.length,
+      selected: selectedAudit,
+    },
+  }, null, 2));
+}
+
 async function cmdRouteExpStorySelectiveRescoreMerge() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -16194,6 +16335,24 @@ async function cmdRouteRiskGrindSelectorSmoke() {
     throw new Error('selective rescore merge failed to recompute practical grind proxy');
   }
 
+  const projectedZero = projectZeroWinEvaluation({
+    rows: [{
+      boss: 'Red',
+      runs: 12,
+      wins: 0,
+      losses: 12,
+      ties: 0,
+      winRate: 0,
+      battleProgressScore: 0.2,
+    }],
+  }, 64);
+  if (
+    projectedZero.rows[0].runs !== 64 ||
+    Math.abs(routeRiskExpectedRetryFailures(projectedZero) - 65) > 1e-9
+  ) {
+    throw new Error('conservative zero-win projection failed');
+  }
+
   const legacyA = state('a-legacy', makeEvaluation(300, { enabled: false }));
   const legacyB = state('b-legacy', makeEvaluation(100, { enabled: false }));
   const legacyWinner = selectRouteRiskBeam([legacyB, legacyA], 1)[0];
@@ -16222,6 +16381,10 @@ async function cmdRouteRiskGrindSelectorSmoke() {
     selectiveProxyMerge: {
       updatedRuns: selectiveMerged.rows[0].runs,
       recomputedExpectedBattles: selectiveMerged.routeGrindProxy?.expectedBattles,
+    },
+    projectedZero: {
+      targetRuns: projectedZero.rows[0].runs,
+      projectedRetry: routeRiskExpectedRetryFailures(projectedZero),
     },
     proxyDisabledLegacyTie: {
       selected: stateTieKey(legacyWinner),
@@ -16264,6 +16427,7 @@ const commands = {
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-selective-rescore-shard': cmdRouteExpStorySelectiveRescoreShard,
   'route-exp-story-selective-rescore-merge': cmdRouteExpStorySelectiveRescoreMerge,
+  'route-exp-story-projected-zero-select-merge': cmdRouteExpStoryProjectedZeroSelectMerge,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-rescore-select-merge': cmdRouteExpStoryRescoreSelectMerge,
   'route-exp-story-rescore-merge': cmdRouteExpStoryRescoreMerge,
