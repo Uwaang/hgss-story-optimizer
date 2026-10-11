@@ -2127,33 +2127,68 @@ function routeRiskEvaluationDominates(a, b) {
   const bGeometric = routeRiskGeometricScore(b);
   const aMean = routeRiskMeanWinRate(a);
   const bMean = routeRiskMeanWinRate(b);
+  const aProxy = evaluationRouteGrindProxy(a);
+  const bProxy = evaluationRouteGrindProxy(b);
+  const aProxyUnknown = evaluationRouteGrindProxyUnknown(a);
+  const bProxyUnknown = evaluationRouteGrindProxyUnknown(b);
+  const compareProxy = aProxy !== null && bProxy !== null;
   const atLeastAsGood =
     aRetries <= bRetries &&
     aGeometric >= bGeometric &&
     aMean >= bMean &&
-    aUnknown <= bUnknown;
+    aUnknown <= bUnknown &&
+    (!compareProxy || (
+      aProxy <= bProxy &&
+      aProxyUnknown <= bProxyUnknown
+    ));
   const strictlyBetter =
     aRetries < bRetries ||
     aGeometric > bGeometric ||
     aMean > bMean ||
-    aUnknown < bUnknown;
+    aUnknown < bUnknown ||
+    (compareProxy && (
+      aProxy < bProxy ||
+      aProxyUnknown < bProxyUnknown
+    ));
   return atLeastAsGood && strictlyBetter;
+}
+
+function routeRiskGrindTieCompare(a, b) {
+  const aProxy = evaluationRouteGrindProxy(a);
+  const bProxy = evaluationRouteGrindProxy(b);
+  if (aProxy === null || bProxy === null) return 0;
+  const aUnknown = evaluationRouteGrindProxyUnknown(a);
+  const bUnknown = evaluationRouteGrindProxyUnknown(b);
+  if (aUnknown !== bUnknown) return aUnknown - bUnknown;
+  if (aProxy !== bProxy) return aProxy - bProxy;
+  return 0;
+}
+
+function routeRiskStateCompare(a, b) {
+  return (
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+    routeRiskGrindTieCompare(a.evaluation, b.evaluation) ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
 }
 
 function selectRouteRiskBeam(states, width) {
   if (states.length <= width) {
-    return [...states].sort((a, b) =>
-      evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-      stateTieKey(a).localeCompare(stateTieKey(b))
-    );
+    return [...states].sort(routeRiskStateCompare);
   }
   const bossLabels = [...new Set(
     states.flatMap(state => (state.evaluation?.rows || []).map(row => String(row.boss)))
   )].sort();
+  const proxyEnabled = states.some(state =>
+    evaluationRouteGrindProxy(state.evaluation) !== null
+  );
   const dimensions = [
     state => routeRiskExpectedRetryFailures(state.evaluation),
     state => routeRiskGeometricScore(state.evaluation),
     state => routeRiskMeanWinRate(state.evaluation),
+    ...(proxyEnabled ? [
+      state => evaluationRouteGrindProxy(state.evaluation) ?? 0,
+    ] : []),
     ...bossLabels.map(label => state => {
       const row = (state.evaluation?.rows || []).find(item => String(item.boss) === label);
       return Number(row?.battleProgressScore ?? row?.winRate ?? 0);
@@ -2163,10 +2198,7 @@ function selectRouteRiskBeam(states, width) {
   // One aggregate-risk elite is structural elitism, not a quota: the current
   // best solution to the actual search objective can never be deleted merely
   // because crowding prefers an extreme diversity point.
-  const objectiveOrder = [...states].sort((a, b) =>
-    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-    stateTieKey(a).localeCompare(stateTieKey(b))
-  );
+  const objectiveOrder = [...states].sort(routeRiskStateCompare);
   const selected = [objectiveOrder[0]];
   const selectedKeys = new Set([stateTieKey(objectiveOrder[0])]);
 
@@ -2178,10 +2210,7 @@ function selectRouteRiskBeam(states, width) {
     const remaining = width - selected.length;
     if (remaining <= 0) break;
     const ordered = eligible.length <= remaining
-      ? [...eligible].sort((a, b) =>
-          evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
-          stateTieKey(a).localeCompare(stateTieKey(b))
-        )
+      ? [...eligible].sort(routeRiskStateCompare)
       : crowdingSelect(eligible, remaining, dimensions, stateTieKey);
     for (const state of ordered) {
       if (selected.length >= width) break;
@@ -16048,6 +16077,88 @@ async function cmdSmoke() {
   }, null, 2));
 }
 
+async function cmdRouteRiskGrindSelectorSmoke() {
+  const row = {
+    boss: 'Red',
+    runs: 16,
+    wins: 1,
+    losses: 15,
+    ties: 0,
+    winRate: 1 / 16,
+    battleProgressScore: 0.25,
+  };
+  const makeEvaluation = (expectedBattles, { enabled = true, wins = 1 } = {}) => ({
+    rows: [{
+      ...row,
+      wins,
+      losses: 16 - wins,
+      winRate: wins / 16,
+      battleProgressScore: Math.max(0.25, wins / 16),
+    }],
+    routeGrindProxy: enabled ? {
+      enabled: true,
+      version: 2,
+      expectedBattles,
+      unknownCheckpoints: 0,
+    } : null,
+  });
+  const state = (key, evaluation) => ({
+    team: [{ species: key, searchKey: key }],
+    evaluation,
+  });
+
+  const cheap = state('cheap', makeEvaluation(100));
+  const expensive = state('expensive', makeEvaluation(200));
+  const exactTieWinner = selectRouteRiskBeam([expensive, cheap], 1)[0];
+  if (stateTieKey(exactTieWinner) !== 'cheap') {
+    throw new Error('route-risk grind tie-break failed to retain lower-grind exact combat tie');
+  }
+  if (!routeRiskEvaluationDominates(cheap.evaluation, expensive.evaluation)) {
+    throw new Error('lower-grind exact combat state should dominate higher-grind state');
+  }
+  if (routeRiskEvaluationDominates(expensive.evaluation, cheap.evaluation)) {
+    throw new Error('higher-grind exact combat state must not dominate lower-grind state');
+  }
+
+  const betterCombatHigherGrind = state('combat', makeEvaluation(300, { wins: 2 }));
+  if (
+    routeRiskEvaluationDominates(cheap.evaluation, betterCombatHigherGrind.evaluation) ||
+    routeRiskEvaluationDominates(betterCombatHigherGrind.evaluation, cheap.evaluation)
+  ) {
+    throw new Error('combat-vs-grind trade-off should remain Pareto-incomparable');
+  }
+
+  const legacyA = state('a-legacy', makeEvaluation(300, { enabled: false }));
+  const legacyB = state('b-legacy', makeEvaluation(100, { enabled: false }));
+  const legacyWinner = selectRouteRiskBeam([legacyB, legacyA], 1)[0];
+  if (stateTieKey(legacyWinner) !== 'a-legacy') {
+    throw new Error('proxy-disabled legacy tie behavior changed');
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'route-risk grind-aware Pareto selector smoke',
+    exactCombatTie: {
+      selected: stateTieKey(exactTieWinner),
+      cheapProxy: evaluationRouteGrindProxy(cheap.evaluation),
+      expensiveProxy: evaluationRouteGrindProxy(expensive.evaluation),
+      cheapDominatesExpensive: routeRiskEvaluationDominates(
+        cheap.evaluation,
+        expensive.evaluation,
+      ),
+    },
+    tradeoff: {
+      cheapDominatesBetterCombat:
+        routeRiskEvaluationDominates(cheap.evaluation, betterCombatHigherGrind.evaluation),
+      betterCombatDominatesCheap:
+        routeRiskEvaluationDominates(betterCombatHigherGrind.evaluation, cheap.evaluation),
+    },
+    proxyDisabledLegacyTie: {
+      selected: stateTieKey(legacyWinner),
+    },
+  }, null, 2));
+}
+
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
@@ -16077,6 +16188,7 @@ const commands = {
   'completion-aware-explicit-evaluate': cmdCompletionAwareExplicitEvaluate,
   'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
   'completion-aware-selector-smoke': cmdCompletionAwareSelectorSmoke,
+  'route-risk-grind-selector-smoke': cmdRouteRiskGrindSelectorSmoke,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
