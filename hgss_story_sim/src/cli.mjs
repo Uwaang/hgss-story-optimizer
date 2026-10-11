@@ -4375,6 +4375,143 @@ async function cmdBattleCacheMerge() {
   }, null, 2));
 }
 
+async function cmdRouteExpStoryBeamRecallAudit() {
+  const ctx = await loadStagedRouteContext();
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '6'))));
+  const adaptiveConfidenceZ = Math.max(0.1, Number(arg('adaptive-confidence-z', '1.96')));
+  const adaptiveChallengerCap = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('adaptive-challenger-cap', String(beamWidth)))),
+  );
+  const maxWidth = Math.max(
+    beamWidth,
+    Math.floor(Number(arg('max-width', '60'))),
+  );
+  const targetTerminals = String(arg('target-terminals', ''))
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+  if (!inputs.length) throw new Error('route-exp-story-beam-recall-audit requires --inputs');
+  if (!targetTerminals.length) {
+    throw new Error('route-exp-story-beam-recall-audit requires --target-terminals');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const expandedByKey = new Map();
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'beam recall shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    for (const row of doc.expanded || []) {
+      const key = [...row.teamKeys].sort().join('|');
+      expandedByKey.set(key, row);
+    }
+  }
+
+  const expanded = [...expandedByKey.values()].map(row => ({
+    team: stagedTeamFromKeys(row.teamKeys, byKey),
+    evaluation: row.evaluation,
+  }));
+  if (!expanded.length) throw new Error('beam recall audit has no expanded states');
+
+  const preliminaryBeam = selectRouteStoryBeam(expanded, beamWidth, ctx.objective);
+  const selectedKeys = new Set(preliminaryBeam.map(stateTieKey));
+  const boundary = preliminaryBeam.length
+    ? preliminaryBeam
+        .map(state => routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ).pessimistic)
+        .sort((a, b) => a - b)
+        .at(-1)
+    : Number.POSITIVE_INFINITY;
+
+  const challengerRows = expanded
+    .filter(state => !selectedKeys.has(stateTieKey(state)))
+    .map(state => ({
+      state,
+      bounds: routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ),
+    }))
+    .filter(row => row.bounds.optimistic <= boundary + 1e-12)
+    .sort((a, b) =>
+      a.bounds.optimistic - b.bounds.optimistic ||
+      routeRiskExpectedRetryFailures(a.state.evaluation) -
+        routeRiskExpectedRetryFailures(b.state.evaluation) ||
+      stateTieKey(a.state).localeCompare(stateTieKey(b.state))
+    );
+  const challengerKeys = new Set(
+    challengerRows.slice(0, adaptiveChallengerCap).map(row => stateTieKey(row.state))
+  );
+
+  const targetRows = expanded
+    .filter(state => {
+      const terminals = state.team.map(candidate => candidate.terminalSpecies || candidate.species);
+      return terminals.some(name => targetTerminals.includes(String(name)));
+    })
+    .map(state => {
+      const bounds = routeRiskRetryBounds(state.evaluation, adaptiveConfidenceZ);
+      const terminals = state.team.map(candidate => candidate.terminalSpecies || candidate.species);
+      return {
+        key: stateTieKey(state),
+        teamKeys: state.team.map(candidateIdentity),
+        terminals,
+        retry: routeRiskExpectedRetryFailures(state.evaluation),
+        geometric: routeRiskGeometricScore(state.evaluation),
+        mean: routeRiskMeanWinRate(state.evaluation),
+        progress: routeRiskBattleProgressScore(state.evaluation),
+        bounds,
+        preliminarySelected: selectedKeys.has(stateTieKey(state)),
+        withinConfidenceBoundary: bounds.optimistic <= boundary + 1e-12,
+        challengerSelected: challengerKeys.has(stateTieKey(state)),
+      };
+    })
+    .sort((a, b) =>
+      a.retry - b.retry ||
+      b.geometric - a.geometric ||
+      b.mean - a.mean ||
+      a.key.localeCompare(b.key)
+    );
+
+  const firstWidthByTerminal = {};
+  for (const terminal of targetTerminals) {
+    let first = null;
+    for (let width = beamWidth; width <= maxWidth; width += 1) {
+      const selected = selectRouteStoryBeam(expanded, width, ctx.objective);
+      if (selected.some(state =>
+        state.team.some(candidate =>
+          String(candidate.terminalSpecies || candidate.species) === terminal
+        )
+      )) {
+        first = width;
+        break;
+      }
+    }
+    firstWidthByTerminal[terminal] = first;
+  }
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'route-beam-recall-audit',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    expandedCount: expanded.length,
+    beamWidth,
+    adaptiveConfidenceZ,
+    adaptiveChallengerCap,
+    preliminaryCount: preliminaryBeam.length,
+    confidenceBoundaryPessimistic: boundary,
+    eligibleChallengerCount: challengerRows.length,
+    selectedChallengerCount: challengerKeys.size,
+    targetTerminals,
+    targetRows,
+    firstWidthByTerminal,
+  }, null, 2));
+}
+
+
 async function cmdRouteExpStoryBeamMerge() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -15275,6 +15412,7 @@ const commands = {
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
+  'route-exp-story-beam-recall-audit': cmdRouteExpStoryBeamRecallAudit,
   'route-exp-story-beam-merge': cmdRouteExpStoryBeamMerge,
   'route-exp-story-final-stage': cmdRouteExpStoryFinalStage,
   'battle-cache-merge': cmdBattleCacheMerge,
