@@ -1,0 +1,56 @@
+name: research-v2-basin-exclusion-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-basin-exclusion-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Assert excluded origin is absent from staged candidate map
+        run: |
+          set +e
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64='WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSJd' \
+            --runs=1 \
+            --route-profile=complete --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural --objective=route-risk \
+            --route-grind-proxy=false --exclude-origins=Abra \
+            > /tmp/excluded.out 2> /tmp/excluded.err
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q 'missing candidate(s).*Abra::Abra->Alakazam#1' /tmp/excluded.err
+      - name: Assert required starter cannot be excluded
+        run: |
+          set +e
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64='WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIl0=' \
+            --runs=1 \
+            --route-profile=complete --version=HEARTGOLD --starter=Cyndaquil \
+            --evolution-policy=trade-aware --exp-profile=normal-route --grind-policy=none \
+            --exp-allocator=boss-aware-soft --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural --objective=route-risk \
+            --route-grind-proxy=false --exclude-origins=Cyndaquil \
+            > /tmp/starter.out 2> /tmp/starter.err
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q 'cannot exclude required starter origin: Cyndaquil' /tmp/starter.err
