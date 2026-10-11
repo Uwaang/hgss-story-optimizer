@@ -96,7 +96,7 @@ jobs:
         run: |
           cp results/input/beam5-cache.json "results/beam6-cache-${{ matrix.shard }}.json"
           node src/cli.mjs route-exp-story-beam-shard \
-            --input=results/input/checkpoint.json \
+            --input=results/input/beam5/checkpoint.json \
             --target-size=6 --runs=2 \
             --shard-count=12 --shard-index=${{ matrix.shard }} \
             $SEARCH_ARGS \
