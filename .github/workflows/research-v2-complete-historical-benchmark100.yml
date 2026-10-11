@@ -1,0 +1,78 @@
+name: research-v2-complete-historical-benchmark100
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-historical-benchmark100]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: idx30-tyranitar
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiQ2hpbmNob3U6OkxhbnR1cm4tPkxhbnR1cm4jMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSJd
+          - label: idx18-kingdra
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiQ2hpbmNob3U6OkxhbnR1cm4tPkxhbnR1cm4jMSIsIkhvcnNlYTo6SG9yc2VhLT5LaW5nZHJhIzEiXQ==
+          - label: idx95-gyarados-kingdra
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiTWFnaWthcnA6Ok1hZ2lrYXJwLT5HeWFyYWRvcyMxIiwiSG9yc2VhOjpIb3JzZWEtPktpbmdkcmEjMSJd
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/benchmark-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Evaluate historical benchmark at 100 runs per boss
+        run: |
+          mkdir -p results/benchmark
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=100 \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > "results/benchmark/${{ matrix.label }}.json"
+          jq '{teamKeys,metrics}' "results/benchmark/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-benchmark100-${{ matrix.label }}
+          path: hgss_story_sim/results/benchmark/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-historical-benchmark100]')
+    needs: evaluate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-benchmark100-*
+          path: hgss_story_sim/results/benchmark
+          merge-multiple: true
+      - run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rows=fs.readdirSync('results/benchmark').filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync('results/benchmark/'+file,'utf8'));
+            return {label:file.replace(/\.json$/,''),teamKeys:d.teamKeys,metrics:d.metrics};
+          });
+          console.log(JSON.stringify({schemaVersion:1,routeProfile:'complete',runsPerBoss:100,rows},null,2));
+          NODE
