@@ -1,0 +1,109 @@
+name: research-v2-selective-rescore-pilot
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  rescore:
+    if: contains(github.event.head_commit.message, '[research-v2-selective-rescore-pilot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - name: Selectively rescore non-perfect 2-run boss rows to 12 runs
+        run: |
+          INPUTS="$(find results/source -name 'beam-3-wide-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/selective-${{ matrix.shard }}.json"
+          jq '{runs,maxLowWins,sourceStateCount,rescoredCount,resampledBossRows,wallMs}' "results/selective-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-selective-rescore-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/selective-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: rescore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-early-wide-beam2-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-selective-rescore-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge selective rescoring and choose ordinary route-risk beam
+        run: |
+          INPUTS="$(find results/shards -name 'selective-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/input/beam2-wide-checkpoint.json \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 --beam-width=12 \
+            --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1" \
+            $SEARCH_ARGS \
+            > results/selective-beam3-checkpoint.json
+          jq '{
+            stage,
+            selectiveRescore,
+            beam:[.beam[]|{
+              teamKeys,
+              retry:(.evaluation.rows|map(select(.skipped|not)|((1-((.wins+1)/(.wins+.losses+(.ties//0)+2)))/((.wins+1)/(.wins+.losses+(.ties//0)+2))))|add)
+            }]
+          }' results/selective-beam3-checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-selective-rescore-beam3-merge
+          path: hgss_story_sim/results/selective-beam3-checkpoint.json
+          if-no-files-found: error
