@@ -1,0 +1,169 @@
+name: research-v2-size4-full16-diagnostic65
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[research-v2-size4-full16-diagnostic65]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size4-promotion64
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38122401532
+          github-token: ${{ github.token }}
+      - name: Build diagnostic65 checkpoint without changing production64
+        run: |
+          cp results/input/promotion64.json results/production64.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const p='results/input/promotion64.json';
+          const d=JSON.parse(fs.readFileSync(p,'utf8'));
+          const target=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1'
+          ];
+          const key=x=>[...(x||[])].sort().join('|');
+          const tk=key(target);
+          if(!(d.beam||[]).some(r=>key(r.teamKeys)===tk)){
+            d.beam=[...(d.beam||[]),{teamKeys:target,evaluation:null,diagnosticOnly:true}];
+          }
+          fs.writeFileSync('results/diagnostic65.json',JSON.stringify(d,null,2));
+          console.log(JSON.stringify({
+            productionCount:JSON.parse(fs.readFileSync('results/production64.json','utf8')).beam.length,
+            diagnosticCount:d.beam.length,
+            targetPresent:d.beam.some(r=>key(r.teamKeys)===tk)
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size4-full16-inputs
+          path: |
+            hgss_story_sim/results/production64.json
+            hgss_story_sim/results/diagnostic65.json
+          if-no-files-found: error
+
+  full16:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size4-full16-inputs
+          path: hgss_story_sim/results/input
+      - name: Full16 rescore diagnostic65
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/diagnostic65.json \
+            --runs=16 --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/full16-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size4-full16-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/full16-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select:
+    needs: full16
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size4-full16-inputs
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size4-full16-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Compare production64 and diagnostic65 selection
+        run: |
+          INPUTS="$(find results/shards -name 'full16-*.json' -type f | sort | paste -sd, -)"
+          TARGET="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1,Lapras::Lapras->Lapras#1"
+
+          node src/cli.mjs route-exp-story-rescore-select-merge \
+            --checkpoint=results/input/production64.json \
+            --inputs="$INPUTS" --runs=16 --beam-width=16 \
+            --target-keys="$TARGET" \
+            $SEARCH_ARGS > results/production16.json
+
+          node src/cli.mjs route-exp-story-rescore-select-merge \
+            --checkpoint=results/input/diagnostic65.json \
+            --inputs="$INPUTS" --runs=16 --beam-width=16 \
+            --target-keys="$TARGET" \
+            $SEARCH_ARGS > results/diagnostic16.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const p=JSON.parse(fs.readFileSync('results/production16.json','utf8'));
+          const d=JSON.parse(fs.readFileSync('results/diagnostic16.json','utf8'));
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            production64:{
+              sourceStates:p.fullRescoreSelect?.sourceStates,
+              target:p.fullRescoreSelect?.target,
+              beam:(p.beam||[]).map(r=>r.teamKeys)
+            },
+            diagnostic65:{
+              sourceStates:d.fullRescoreSelect?.sourceStates,
+              target:d.fullRescoreSelect?.target,
+              beam:(d.beam||[]).map(r=>r.teamKeys)
+            }
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size4-full16-selection
+          path: |
+            hgss_story_sim/results/production16.json
+            hgss_story_sim/results/diagnostic16.json
+          if-no-files-found: error
