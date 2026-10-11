@@ -3825,6 +3825,55 @@ async function cmdCompletionAwareArtifactRank() {
 }
 
 
+async function cmdCompletionAwareExplicitEvaluate() {
+  const ctx = await loadStagedRouteContext();
+  const encoded = String(arg('prefix-base64', '')).trim();
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '16'))));
+  if (!encoded) {
+    throw new Error('completion-aware-explicit-evaluate requires --prefix-base64');
+  }
+
+  let teamKeys;
+  try {
+    teamKeys = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('invalid completion-aware explicit prefix-base64: ' + error.message);
+  }
+  if (!Array.isArray(teamKeys) || teamKeys.length < 1 || teamKeys.length > 6) {
+    throw new Error('completion-aware explicit evaluate requires team size 1..6');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const missing = teamKeys.filter(key => !byKey.has(String(key)));
+  if (missing.length) {
+    throw new Error(
+      'completion-aware explicit evaluate missing candidate(s): ' + missing.join(', ')
+    );
+  }
+  const team = stagedTeamFromKeys(teamKeys, byKey);
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('completion-aware explicit evaluate received illegal team');
+  }
+
+  const evaluation = await stagedEvaluateTeam(ctx, team, runs);
+  const metrics = completionEvaluationMetrics(evaluation);
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    type: 'completion-aware-explicit-evaluate',
+    purpose: 'SCRUM-418 exact partial/full-team current-evaluator validation',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+    runs,
+    teamKeys,
+    metrics,
+    evaluation,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
+
 async function cmdCompletionAwarePrefixProbe() {
   const ctx = await loadStagedRouteContext();
   const encoded = String(arg('prefix-base64', '')).trim();
@@ -15406,6 +15455,7 @@ const commands = {
   'route-exp-story-screen-shard': cmdRouteExpStoryScreenShard,
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
+  'completion-aware-explicit-evaluate': cmdCompletionAwareExplicitEvaluate,
   'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
   'completion-aware-selector-smoke': cmdCompletionAwareSelectorSmoke,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
