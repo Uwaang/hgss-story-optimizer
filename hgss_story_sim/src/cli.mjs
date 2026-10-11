@@ -4565,12 +4565,24 @@ function mergeSelectiveEvaluationRows(baseEvaluation, partialEvaluation) {
   const replacementByBoss = new Map(
     (partialEvaluation.rows || []).map(row => [String(row.boss), row])
   );
-  return {
+  const merged = {
     ...baseEvaluation,
     rows: (baseEvaluation.rows || []).map(row =>
       replacementByBoss.get(String(row.boss)) || row
     ),
   };
+  const proxyEnabled =
+    Boolean(baseEvaluation?.routeGrindProxy?.enabled) ||
+    Boolean(partialEvaluation?.routeGrindProxy?.enabled);
+  if (proxyEnabled) {
+    const targetWinRate = Number(
+      baseEvaluation?.routeGrindProxy?.targetWinRate ??
+      partialEvaluation?.routeGrindProxy?.targetWinRate ??
+      STORY_CLEAR_TARGET_WIN_RATE
+    );
+    merged.routeGrindProxy = routeGrindProxyMetrics(merged, targetWinRate);
+  }
+  return merged;
 }
 
 async function cmdRouteExpStorySelectiveRescoreShard() {
@@ -16128,6 +16140,60 @@ async function cmdRouteRiskGrindSelectorSmoke() {
     throw new Error('combat-vs-grind trade-off should remain Pareto-incomparable');
   }
 
+  const selectiveBase = {
+    rows: [{
+      boss: 'Red',
+      runs: 2,
+      wins: 0,
+      losses: 2,
+      ties: 0,
+      winRate: 0,
+      battleProgressScore: 0.1,
+    }],
+    expSchedule: {
+      battles: [{
+        label: 'Red',
+        bestWildGrind: { expectedExpPerBattle: 100 },
+        aceGapExpBefore: 1000,
+        expectedAceGapBattles: 10,
+        aceGapExpDetails: [],
+      }],
+    },
+    routeGrindProxy: {
+      enabled: true,
+      version: 2,
+      targetWinRate: 0.5,
+      expectedBattles: 999,
+      unknownCheckpoints: 0,
+    },
+  };
+  const selectivePartial = {
+    rows: [{
+      boss: 'Red',
+      runs: 12,
+      wins: 1,
+      losses: 11,
+      ties: 0,
+      winRate: 1 / 12,
+      battleProgressScore: 0.4,
+    }],
+    routeGrindProxy: {
+      enabled: true,
+      version: 2,
+      targetWinRate: 0.5,
+      expectedBattles: 1,
+      unknownCheckpoints: 0,
+    },
+  };
+  const selectiveMerged = mergeSelectiveEvaluationRows(selectiveBase, selectivePartial);
+  if (
+    selectiveMerged.rows[0].runs !== 12 ||
+    selectiveMerged.routeGrindProxy?.expectedBattles === 999 ||
+    selectiveMerged.routeGrindProxy?.expectedBattles === 1
+  ) {
+    throw new Error('selective rescore merge failed to recompute practical grind proxy');
+  }
+
   const legacyA = state('a-legacy', makeEvaluation(300, { enabled: false }));
   const legacyB = state('b-legacy', makeEvaluation(100, { enabled: false }));
   const legacyWinner = selectRouteRiskBeam([legacyB, legacyA], 1)[0];
@@ -16152,6 +16218,10 @@ async function cmdRouteRiskGrindSelectorSmoke() {
         routeRiskEvaluationDominates(cheap.evaluation, betterCombatHigherGrind.evaluation),
       betterCombatDominatesCheap:
         routeRiskEvaluationDominates(betterCombatHigherGrind.evaluation, cheap.evaluation),
+    },
+    selectiveProxyMerge: {
+      updatedRuns: selectiveMerged.rows[0].runs,
+      recomputedExpectedBattles: selectiveMerged.routeGrindProxy?.expectedBattles,
     },
     proxyDisabledLegacyTie: {
       selected: stateTieKey(legacyWinner),
