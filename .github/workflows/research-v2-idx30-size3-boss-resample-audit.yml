@@ -29,8 +29,9 @@ jobs:
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
-          name: research-v2-size3-rescore16-shard-12
+          pattern: research-v2-size3-rescore16-shard-*
           path: hgss_story_sim/results/high
+          merge-multiple: true
           repository: Uwaang/hgss-story-optimizer
           run-id: 38112553290
           github-token: ${{ github.token }}
@@ -52,10 +53,13 @@ jobs:
             }
           }
           if(!low) throw new Error('low-run target missing');
-          const highFile=fs.readdirSync('results/high').find(x=>x.endsWith('.json'));
-          const highDoc=JSON.parse(fs.readFileSync('results/high/'+highFile,'utf8'));
-          const highRow=(highDoc.rescored||[]).find(r=>key(r.teamKeys)===target);
-          if(!highRow) throw new Error('high-run target missing');
+          let highRow=null;
+          for(const highFile of fs.readdirSync('results/high').filter(x=>x.endsWith('.json'))){
+            const highDoc=JSON.parse(fs.readFileSync('results/high/'+highFile,'utf8'));
+            const found=(highDoc.rescored||[]).find(r=>key(r.teamKeys)===target);
+            if(found){ highRow=found; break; }
+          }
+          if(!highRow) throw new Error('high-run target missing across all rescore shards');
 
           const hmap=new Map((highRow.evaluation?.rows||[]).map(r=>[String(r.boss),r]));
           const rows=(low.evaluation?.rows||[]).filter(r=>!r.skipped).map(l=>{
