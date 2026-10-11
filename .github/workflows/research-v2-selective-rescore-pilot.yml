@@ -1,4 +1,5 @@
 name: research-v2-selective-rescore-pilot
+# 12-run non-perfect-row full size3 pilot
 
 on:
   push:
