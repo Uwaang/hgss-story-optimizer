@@ -1,0 +1,48 @@
+name: research-v2-complete-final100-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-final100-audit]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-global-final100
+          path: hgss_story_sim/results/final
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106243688
+          github-token: ${{ github.token }}
+      - name: Print concise final result
+        run: |
+          jq '{
+            finalRescoredTeams,
+            paretoFront:[.paretoFront[]|{
+              teamKeys,
+              retry:.routeExpectedRetryFailures,
+              geometric:.routeRiskGeometricScore,
+              mean:.routeRiskMeanWinRate,
+              catchUpExp,
+              catchUpLevels
+            }],
+            top:[.top[]|{
+              teamKeys,
+              retry:.routeExpectedRetryFailures,
+              geometric:.routeRiskGeometricScore,
+              mean:.routeRiskMeanWinRate,
+              catchUpExp,
+              catchUpLevels
+            }]
+          }' results/final/global-final100.json
