@@ -1,0 +1,56 @@
+name: research-v2-complete-beam2-recall-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-beam2-recall-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-global-beam2-shard-*
+          path: hgss_story_sim/results/beam2-shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38072025480
+          github-token: ${{ github.token }}
+      - name: Audit validated control families against exact beam2 selection
+        run: |
+          INPUTS="$(find results/beam2-shards -name 'beam-2-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-recall-audit \
+            --inputs="$INPUTS" \
+            --beam-width=6 --adaptive-challenger-cap=6 \
+            --adaptive-confidence-z=1.96 --max-width=80 \
+            --target-terminals=Magneton,Gengar,Rhyperior,Golem,Alakazam \
+            --route-profile=complete \
+            --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware \
+            --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft \
+            --entry-level=expected --same-stage-join=map-order \
+            --resources=all --spend-policy=natural \
+            --objective=route-risk --route-grind-proxy=false \
+            > results/complete-beam2-recall-audit.json
+          cat results/complete-beam2-recall-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-beam2-recall-audit
+          path: hgss_story_sim/results/complete-beam2-recall-audit.json
+          if-no-files-found: error
