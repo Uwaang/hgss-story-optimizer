@@ -1,0 +1,151 @@
+name: research-v2-size3-successive-halving-pilot
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  promote48:
+    if: contains(github.event.head_commit.message, '[research-v2-size3-successive-halving]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-early-wide-beam2-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-selective-rescore-shard-*
+          path: hgss_story_sim/results/selective
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38113711632
+          github-token: ${{ github.token }}
+      - name: Build 4x promotion pool from selective 12-run evidence
+        run: |
+          INPUTS="$(find results/selective -name 'selective-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/input/beam2-wide-checkpoint.json \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 --beam-width=48 \
+            --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1" \
+            $SEARCH_ARGS \
+            > results/promotion48.json
+          jq '{
+            stage,
+            selectiveRescore,
+            beamCount:(.beam|length),
+            targetSelected:.selectiveRescore.target.selected
+          }' results/promotion48.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size3-promotion48
+          path: hgss_story_sim/results/promotion48.json
+          if-no-files-found: error
+
+  full16:
+    needs: promote48
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size3-promotion48
+          path: hgss_story_sim/results/input
+      - name: Full 16-run rescore of promoted size3 states
+        run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/promotion48.json \
+            --runs=16 --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/full16-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size3-full16-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/full16-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select12:
+    needs: full16
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-size3-promotion48
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size3-full16-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Select ordinary route-risk beam12 from full16 evidence
+        run: |
+          INPUTS="$(find results/shards -name 'full16-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-rescore-select-merge \
+            --checkpoint=results/input/promotion48.json \
+            --inputs="$INPUTS" --runs=16 --beam-width=12 \
+            --target-keys="Cyndaquil::Cyndaquil->Typhlosion#1,Abra::Abra->Alakazam#1,Rhyhorn::Rhyhorn->Rhyperior#1" \
+            $SEARCH_ARGS \
+            > results/beam3-full16-select12.json
+          jq '{
+            stage,
+            fullRescoreSelect,
+            beam:[.beam[]|{
+              teamKeys,
+              retry:(.evaluation.rows|map(select(.skipped|not)|((1-((.wins+1)/(.wins+.losses+(.ties//0)+2)))/((.wins+1)/(.wins+.losses+(.ties//0)+2))))|add),
+              geometric:(.evaluation.rows|map(select(.skipped|not)|((.wins+1)/(.wins+.losses+(.ties//0)+2)))|map(log)|add/length|exp),
+              mean:(.evaluation.rows|map(select(.skipped|not))|((map(.wins)|add)/(map(.runs)|add)))
+            }]
+          }' results/beam3-full16-select12.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-size3-full16-select12
+          path: hgss_story_sim/results/beam3-full16-select12.json
+          if-no-files-found: error
