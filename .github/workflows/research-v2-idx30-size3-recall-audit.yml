@@ -1,0 +1,77 @@
+name: research-v2-idx30-size3-recall-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-idx30-size3-recall-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-early-wide-beam3-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38109472963
+          github-token: ${{ github.token }}
+      - name: Audit Rhyperior-containing size3 candidates
+        run: |
+          INPUTS="$(find results/shards -name 'beam-3-wide-shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-beam-recall-audit \
+            --inputs="$INPUTS" \
+            --beam-width=12 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=12 \
+            --max-width=200 --target-terminals=Rhyperior \
+            $SEARCH_ARGS \
+            > results/audit.json
+
+          jq '{
+            expandedCount,
+            beamWidth,
+            confidenceBoundaryPessimistic,
+            eligibleChallengerCount,
+            selectedChallengerCount,
+            firstWidthByTerminal,
+            idx30Chain3: [
+              .targetRows[]
+              | select(
+                  ((.teamKeys|sort) ==
+                    ([
+                      "Cyndaquil::Cyndaquil->Typhlosion#1",
+                      "Abra::Abra->Alakazam#1",
+                      "Rhyhorn::Rhyhorn->Rhyperior#1"
+                    ]|sort))
+                )
+            ][0],
+            bestRhyperiorRows:(.targetRows[:10] | map({
+              teamKeys,retry,geometric,mean,progress,bounds,
+              objectiveRank,preliminarySelected,withinConfidenceBoundary,
+              challengerRank,challengerSelected
+            }))
+          }' results/audit.json
