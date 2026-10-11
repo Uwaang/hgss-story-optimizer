@@ -4482,6 +4482,215 @@ async function cmdRouteExpStoryBeamShard() {
 }
 
 
+async function stagedEvaluateTeamForBossLabels(ctx, team, runs, bossLabels) {
+  const labels = [...new Set((bossLabels || []).map(String))];
+  if (!labels.length) return null;
+  return evaluateCandidates(
+    team,
+    ctx.story.bosses,
+    runs,
+    ctx.moveAccess,
+    ctx.expContext,
+    ctx.grindPolicy,
+    ctx.objective,
+    {
+      ...ctx.battleOptions,
+      bossLabels: labels,
+    },
+  );
+}
+
+function mergeSelectiveEvaluationRows(baseEvaluation, partialEvaluation) {
+  if (!partialEvaluation) return baseEvaluation;
+  const replacementByBoss = new Map(
+    (partialEvaluation.rows || []).map(row => [String(row.boss), row])
+  );
+  return {
+    ...baseEvaluation,
+    rows: (baseEvaluation.rows || []).map(row =>
+      replacementByBoss.get(String(row.boss)) || row
+    ),
+  };
+}
+
+async function cmdRouteExpStorySelectiveRescoreShard() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const runs = Math.max(2, Math.floor(Number(arg('runs', '8'))));
+  const maxLowWins = Math.max(0, Math.floor(Number(arg('max-low-wins', '1'))));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const shardIndex = Math.max(0, Math.floor(Number(arg('shard-index', '0'))));
+  if (!inputs.length) throw new Error('route-exp-story-selective-rescore-shard requires --inputs');
+  if (shardIndex >= shardCount) throw new Error('shard-index must be < shard-count');
+
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const byKey = stagedCandidateMap(ctx);
+  const expandedByKey = new Map();
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'selective rescore shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    for (const row of doc.expanded || []) {
+      const key = completionTeamKey(row.teamKeys || []);
+      expandedByKey.set(key, row);
+    }
+  }
+
+  const rescored = [];
+  let resampledBossRows = 0;
+  for (const row of expandedByKey.values()) {
+    const team = stagedTeamFromKeys(row.teamKeys, byKey);
+    const teamKey = stateTieKey({ team });
+    if (stagedShardIndex(teamKey, shardCount) !== shardIndex) continue;
+
+    const resampleBosses = (row.evaluation?.rows || [])
+      .filter(bossRow =>
+        !bossRow?.skipped &&
+        Math.max(0, Number(bossRow?.wins || 0)) <= maxLowWins
+      )
+      .map(bossRow => String(bossRow.boss));
+    const partialEvaluation = resampleBosses.length
+      ? await stagedEvaluateTeamForBossLabels(ctx, team, runs, resampleBosses)
+      : null;
+    const evaluation = mergeSelectiveEvaluationRows(row.evaluation, partialEvaluation);
+    resampledBossRows += resampleBosses.length;
+    rescored.push({
+      teamKeys: row.teamKeys,
+      sourceEvaluation: row.evaluation,
+      evaluation,
+      resampleBosses,
+    });
+  }
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-selective-rescore-shard',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    runs,
+    maxLowWins,
+    shardCount,
+    shardIndex,
+    sourceStateCount: expandedByKey.size,
+    rescoredCount: rescored.length,
+    resampledBossRows,
+    wallMs: Date.now() - startedAt,
+    battleCache: battleCacheStats(),
+    rescored,
+  }, null, 2));
+}
+
+async function cmdRouteExpStorySelectiveRescoreMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('checkpoint', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const beamWidth = Math.max(2, Math.floor(Number(arg('beam-width', '12'))));
+  const runs = Math.max(2, Math.floor(Number(arg('runs', '8'))));
+  const maxLowWins = Math.max(0, Math.floor(Number(arg('max-low-wins', '1'))));
+  if (!inputs.length) throw new Error('route-exp-story-selective-rescore-merge requires --inputs');
+
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const byKey = stagedCandidateMap(ctx);
+  const rescoredByKey = new Map();
+  const shardDocs = [];
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'selective rescore merge fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' + String(doc?.fingerprint || 'missing')
+      );
+    }
+    if (Number(doc?.runs || 0) !== runs || Number(doc?.maxLowWins ?? -1) !== maxLowWins) {
+      throw new Error('selective rescore merge policy mismatch for ' + input);
+    }
+    shardDocs.push(doc);
+    for (const row of doc.rescored || []) {
+      rescoredByKey.set(completionTeamKey(row.teamKeys || []), row);
+    }
+  }
+  if (!rescoredByKey.size) throw new Error('selective rescore merge has no states');
+
+  const states = [...rescoredByKey.values()].map(row => ({
+    team: stagedTeamFromKeys(row.teamKeys, byKey),
+    evaluation: row.evaluation,
+  }));
+  const beam = selectRouteRiskBeam(states, beamWidth);
+  const totalResampledBossRows = shardDocs.reduce(
+    (sum, doc) => sum + Number(doc.resampledBossRows || 0),
+    0,
+  );
+
+  const targetKeyRaw = String(arg('target-keys', '')).trim();
+  const targetKey = targetKeyRaw
+    ? completionTeamKey(targetKeyRaw.split(',').map(x => x.trim()).filter(Boolean))
+    : null;
+  const objectiveOrder = [...states].sort((a, b) =>
+    evaluationObjectiveCompare(a.evaluation, b.evaluation, 'route-risk') ||
+    stateTieKey(a).localeCompare(stateTieKey(b))
+  );
+  const targetState = targetKey
+    ? states.find(state => completionTeamKey(state.team.map(candidateIdentity)) === targetKey)
+    : null;
+
+  console.log(JSON.stringify({
+    schemaVersion: STAGED_ROUTE_SEARCH_SCHEMA_VERSION,
+    type: 'route-search-checkpoint',
+    stage: 'beam-3-selective-rescore',
+    fingerprint: expectedFingerprint,
+    config: stagedConfigSnapshot(ctx),
+    candidateCap: checkpoint.candidateCap,
+    scannedCandidates: checkpoint.scannedCandidates,
+    screenedCandidates: checkpoint.screenedCandidates,
+    screenedCandidateFamilies: checkpoint.screenedCandidateFamilies,
+    screenedKeys: checkpoint.screenedKeys,
+    selectedCandidateDetails: checkpoint.selectedCandidateDetails || [],
+    beam: beam.map(state => ({
+      teamKeys: state.team.map(candidateIdentity),
+      evaluation: state.evaluation,
+    })),
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'beam-3-selective-rescore',
+        runs,
+        maxLowWins,
+        shardCount: shardDocs.length,
+        sourceStates: states.length,
+        resampledBossRows: totalResampledBossRows,
+        beamWidth,
+        wallMs: Date.now() - startedAt,
+      },
+    ],
+    selectiveRescore: {
+      runs,
+      maxLowWins,
+      sourceStates: states.length,
+      resampledBossRows: totalResampledBossRows,
+      selectedCount: beam.length,
+      target: targetState ? {
+        teamKeys: targetState.team.map(candidateIdentity),
+        objectiveRank: objectiveOrder.findIndex(state => stateTieKey(state) === stateTieKey(targetState)) + 1,
+        selected: beam.some(state => stateTieKey(state) === stateTieKey(targetState)),
+        metrics: {
+          retry: routeRiskExpectedRetryFailures(targetState.evaluation),
+          geometric: routeRiskGeometricScore(targetState.evaluation),
+          mean: routeRiskMeanWinRate(targetState.evaluation),
+        },
+      } : null,
+    },
+  }, null, 2));
+}
+
+
 async function cmdRouteExpStoryRescoreShard() {
   const startedAt = Date.now();
   const ctx = await loadStagedRouteContext();
@@ -15715,6 +15924,8 @@ const commands = {
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
+  'route-exp-story-selective-rescore-shard': cmdRouteExpStorySelectiveRescoreShard,
+  'route-exp-story-selective-rescore-merge': cmdRouteExpStorySelectiveRescoreMerge,
   'route-exp-story-rescore-shard': cmdRouteExpStoryRescoreShard,
   'route-exp-story-rescore-merge': cmdRouteExpStoryRescoreMerge,
   'route-exp-story-beam-recall-audit': cmdRouteExpStoryBeamRecallAudit,
