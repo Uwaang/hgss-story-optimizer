@@ -1,0 +1,28 @@
+name: research-v2-route-risk-grind-selector-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-route-risk-grind-selector]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: node --check src/cli.mjs
+      - name: Route-risk grind selector smoke
+        run: node src/cli.mjs route-risk-grind-selector-smoke
