@@ -4482,9 +4482,43 @@ async function cmdRouteExpStoryBeamShard() {
 }
 
 
-async function stagedEvaluateTeamForBossLabels(ctx, team, runs, bossLabels) {
+async function stagedEvaluateTeamForBossLabels(
+  ctx,
+  team,
+  runs,
+  bossLabels,
+  effectiveResourceProfile = null,
+) {
   const labels = [...new Set((bossLabels || []).map(String))];
   if (!labels.length) return null;
+  const battleOptions = {
+    ...ctx.battleOptions,
+    bossLabels: labels,
+  };
+  const requestedResourceProfile = normalizeResourceProfile(
+    ctx.moveAccess?.resourceProfile || 'all'
+  );
+  const fixedVariant = effectiveResourceProfile
+    ? resourceMoveAccessVariants(ctx.moveAccess).find(
+        variant => variant.resourceProfile === effectiveResourceProfile
+      )
+    : null;
+  if (fixedVariant) {
+    const evaluation = await evaluateCandidatesWithMoveAccess(
+      team,
+      ctx.story.bosses,
+      runs,
+      fixedVariant,
+      ctx.expContext,
+      ctx.grindPolicy,
+      battleOptions,
+    );
+    return {
+      ...evaluation,
+      requestedResourceProfile,
+      effectiveResourceProfile: fixedVariant.resourceProfile,
+    };
+  }
   return evaluateCandidates(
     team,
     ctx.story.bosses,
@@ -4493,10 +4527,7 @@ async function stagedEvaluateTeamForBossLabels(ctx, team, runs, bossLabels) {
     ctx.expContext,
     ctx.grindPolicy,
     ctx.objective,
-    {
-      ...ctx.battleOptions,
-      bossLabels: labels,
-    },
+    battleOptions,
   );
 }
 
@@ -4555,7 +4586,13 @@ async function cmdRouteExpStorySelectiveRescoreShard() {
       )
       .map(bossRow => String(bossRow.boss));
     const partialEvaluation = resampleBosses.length
-      ? await stagedEvaluateTeamForBossLabels(ctx, team, runs, resampleBosses)
+      ? await stagedEvaluateTeamForBossLabels(
+          ctx,
+          team,
+          runs,
+          resampleBosses,
+          row.evaluation?.effectiveResourceProfile || null,
+        )
       : null;
     const evaluation = mergeSelectiveEvaluationRows(row.evaluation, partialEvaluation);
     resampledBossRows += resampleBosses.length;
