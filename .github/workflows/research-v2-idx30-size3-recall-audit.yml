@@ -47,7 +47,7 @@ jobs:
           node src/cli.mjs route-exp-story-beam-recall-audit \
             --inputs="$INPUTS" \
             --beam-width=12 --adaptive-confidence-z=1.96 --adaptive-challenger-cap=12 \
-            --max-width=200 --target-terminals=Rhyperior \
+            --max-width=12 --target-terminals=Rhyperior \
             $SEARCH_ARGS \
             > results/audit.json
 
