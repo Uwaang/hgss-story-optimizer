@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   smoke:
-    if: contains(github.event.head_commit.message, '[research-v2-route-risk-grind-selector]')
+    if: contains(github.event.head_commit.message, '[research-v2-terminal-grind]') || contains(github.event.head_commit.message, '[research-v2-route-risk-grind-selector]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
