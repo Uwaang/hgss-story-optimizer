@@ -1,0 +1,103 @@
+name: research-v2-complete-final100-sharded
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk --route-grind-proxy=false
+
+jobs:
+  rescore:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-final100-sharded]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/final-cache-${{ matrix.shard }}.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106243688
+          github-token: ${{ github.token }}
+      - name: Rescore finalist shard at 100 runs per boss
+        run: |
+          cp results/input/beam6-cache-merged.json "results/final-cache-${{ matrix.shard }}.json"
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/beam6-checkpoint.json \
+            --runs=100 --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS \
+            > "results/final-rescore-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-final100-shard-${{ matrix.shard }}
+          path: |
+            hgss_story_sim/results/final-rescore-${{ matrix.shard }}.json
+            hgss_story_sim/results/final-cache-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: rescore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106243688
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-complete-final100-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+      - name: Merge final 100-run rescoring
+        run: |
+          INPUTS="$(find results/shards -name 'final-rescore-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-rescore-merge \
+            --input=results/input/beam6-checkpoint.json \
+            --inputs="$INPUTS" --runs=100 \
+            $SEARCH_ARGS \
+            > results/global-final100-sharded.json
+          jq '{finalRescoredTeams,paretoFront,top:[.top[]|{team,teamKeys,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}]}' results/global-final100-sharded.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-complete-global-final100-sharded
+          path: hgss_story_sim/results/global-final100-sharded.json
+          if-no-files-found: error
