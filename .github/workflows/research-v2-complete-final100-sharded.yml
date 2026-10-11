@@ -20,6 +20,25 @@ env:
     --objective=route-risk --route-grind-proxy=false
 
 jobs:
+  inspect:
+    if: contains(github.event.head_commit.message, '[research-v2-complete-final100-sharded]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-beam6-merge
+          path: hgss_story_sim/results/input
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106243688
+          github-token: ${{ github.token }}
+      - name: Print beam6 finalist pool
+        run: |
+          jq '{stage,beamCount:(.beam|length),beam:[.beam[]|{teamKeys,routeExpectedRetryFailures,routeRiskGeometricScore,routeRiskMeanWinRate}]}' results/input/beam6-checkpoint.json
+
   rescore:
     if: contains(github.event.head_commit.message, '[research-v2-complete-final100-sharded]')
     runs-on: ubuntu-latest
