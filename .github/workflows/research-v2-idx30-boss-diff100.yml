@@ -1,0 +1,73 @@
+name: research-v2-idx30-boss-diff100
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-idx30-boss-diff100]')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-resume-global-final100
+          path: hgss_story_sim/results/global
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106243688
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-complete-benchmark100-idx30-tyranitar
+          path: hgss_story_sim/results/idx30
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38106351279
+          github-token: ${{ github.token }}
+      - name: Compare 100-run boss retry contributions
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const global=JSON.parse(fs.readFileSync('results/global/global-final100.json','utf8'));
+          const histFile=fs.readdirSync('results/idx30').find(x=>x.endsWith('.json'));
+          const hist=JSON.parse(fs.readFileSync('results/idx30/'+histFile,'utf8'));
+          const g=global.top[0];
+          function contrib(row){
+            if(row.skipped) return 0;
+            const w=Number(row.wins||0), l=Number(row.losses||0);
+            if(w+l<=0) return 0;
+            const p=(w+1)/(w+l+2);
+            return (1-p)/p;
+          }
+          const hm=new Map((hist.evaluation?.rows||[]).map(r=>[r.boss,r]));
+          const rows=(g.bosses||[]).filter(r=>!r.skipped).map(gr=>{
+            const hr=hm.get(gr.boss)||{};
+            return {
+              boss:gr.boss,
+              global:{wins:gr.wins,losses:gr.losses,winRate:gr.winRate,retry:contrib(gr)},
+              idx30:{wins:hr.wins||0,losses:hr.losses||0,winRate:hr.winRate||0,retry:contrib(hr)},
+              retryGap:contrib(gr)-contrib(hr),
+              progressGap:Number(gr.battleProgressScore||0)-Number(hr.battleProgressScore||0)
+            };
+          }).sort((a,b)=>b.retryGap-a.retryGap);
+          console.log(JSON.stringify({
+            globalTeam:g.teamKeys,
+            globalSummary:{
+              retry:g.routeExpectedRetryFailures,
+              geometric:g.routeRiskGeometricScore,
+              mean:g.routeRiskMeanWinRate
+            },
+            idx30Team:hist.teamKeys,
+            idx30Summary:hist.metrics,
+            biggestGlobalRetryLiabilities:rows.slice(0,15),
+            biggestGlobalAdvantages:[...rows].sort((a,b)=>a.retryGap-b.retryGap).slice(0,10)
+          },null,2));
+          NODE
