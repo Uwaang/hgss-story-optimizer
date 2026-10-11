@@ -1,0 +1,81 @@
+name: research-v2-size4-zero-projection-audit
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-size4-zero-projection-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-size4-selective-rescore-shard-*
+          path: hgss_story_sim/results/shards
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38122401532
+          github-token: ${{ github.token }}
+      - name: Rank states with unresolved-zero projection
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const targetKey=key([
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Abra::Abra->Alakazam#1',
+            'Rhyhorn::Rhyhorn->Rhyperior#1',
+            'Lapras::Lapras->Lapras#1'
+          ]);
+          function retryRow(r){
+            const w=Number(r.wins||0),l=Number(r.losses||0),t=Number(r.ties||0);
+            const p=(w+1)/(w+l+t+2); return (1-p)/p;
+          }
+          function metrics(e,targetRuns=null){
+            const rows=(e?.rows||[]).filter(r=>!r.skipped);
+            let retry=0,zeros=0;
+            for(const r of rows){
+              const w=Number(r.wins||0);
+              if(targetRuns!==null && w===0){retry+=targetRuns+1; zeros++;}
+              else {retry+=retryRow(r); if(w===0) zeros++;}
+            }
+            return {retry,zeros};
+          }
+          const by=new Map();
+          for(const file of fs.readdirSync('results/shards').filter(x=>x.startsWith('selective4-')&&x.endsWith('.json'))){
+            const d=JSON.parse(fs.readFileSync('results/shards/'+file,'utf8'));
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const rows=[...by.values()].map(r=>({
+            teamKeys:r.teamKeys,
+            current:metrics(r.evaluation),
+            projected32:metrics(r.evaluation,32),
+            projected64:metrics(r.evaluation,64)
+          }));
+          const rank=(field)=>{
+            const a=[...rows].sort((x,y)=>x[field].retry-y[field].retry||key(x.teamKeys).localeCompare(key(y.teamKeys)));
+            return {
+              targetRank:a.findIndex(x=>key(x.teamKeys)===targetKey)+1,
+              target:a.find(x=>key(x.teamKeys)===targetKey),
+              top64:a.slice(0,64).map(x=>({teamKeys:x.teamKeys,retry:x[field].retry,zeros:x[field].zeros}))
+            };
+          };
+          console.log(JSON.stringify({
+            schemaVersion:1,
+            count:rows.length,
+            current:rank('current'),
+            projected32:rank('projected32'),
+            projected64:rank('projected64')
+          },null,2));
+          NODE
