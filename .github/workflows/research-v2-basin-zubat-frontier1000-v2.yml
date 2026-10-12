@@ -1,0 +1,170 @@
+name: research-v2-basin-zubat-frontier1000-v2
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --exclude-origins=Zubat
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-basin-zubat-frontier1000-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: lowgrind-weavile
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUG9saXdhZzo6UG9saXdhZy0+UG9saXRvZWQjMiIsIkNvbWJlZTo6Q29tYmVlLT5WZXNwaXF1ZW4jMSIsIld5bmF1dDo6V29iYnVmZmV0LT5Xb2JidWZmZXQjMSIsIk9uaXg6OlN0ZWVsaXgtPlN0ZWVsaXgjMSIsIlNuZWFzZWw6OlNuZWFzZWwtPldlYXZpbGUjMSJd
+          - label: core-shuckle-weavile
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiQWJyYTo6QWJyYS0+QWxha2F6YW0jMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIiwiTGFwcmFzOjpMYXByYXMtPkxhcHJhcyMxIiwiU2h1Y2tsZTo6U2h1Y2tsZS0+U2h1Y2tsZSMxIiwiU25lYXNlbDo6U25lYXNlbC0+V2VhdmlsZSMxIl0=
+          - label: highmean
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiSG9yc2VhOjpIb3JzZWEtPktpbmdkcmEjMSIsIlNlZWw6OkRld2dvbmctPkRld2dvbmcjMSIsIk1pc2RyZWF2dXM6Ok1pc2RyZWF2dXMtPk1pc21hZ2l1cyMxIiwiT25peDo6U3RlZWxpeC0+U3RlZWxpeCMxIiwiTmF0dTo6TmF0dS0+WGF0dSMxIl0=
+          - label: ultralowgrind
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUG9saXdhZzo6UG9saXdhZy0+UG9saXRvZWQjMiIsIkNvbWJlZTo6Q29tYmVlLT5WZXNwaXF1ZW4jMSIsIld5bmF1dDo6V29iYnVmZmV0LT5Xb2JidWZmZXQjMSIsIkxhcnZpdGFyOjpQdXBpdGFyLT5UeXJhbml0YXIjMSIsIlJoeWhvcm46OlJoeWhvcm4tPlJoeXBlcmlvciMxIl0=
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/zubat-frontier1000-${{ matrix.label }}-cache.json
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate corrected Crobat-free finalist at 1000 runs per boss
+        run: |
+          mkdir -p results/zubat-frontier1000
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=1000 \
+            $SEARCH_ARGS \
+            > "results/zubat-frontier1000/${{ matrix.label }}.json"
+          jq '{
+            runs,
+            teamKeys,
+            metrics,
+            grindBattles:.evaluation.routeGrindProxy.expectedBattles,
+            grindExp:.evaluation.routeGrindProxy.cumulativeGrindExp,
+            red:(.evaluation.rows[]|select(.boss=="Red")|{wins,runs,winRate,progress:.battleProgressScore})
+          }' "results/zubat-frontier1000/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-frontier1000-${{ matrix.label }}
+          path: hgss_story_sim/results/zubat-frontier1000/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-basin-zubat-frontier1000-v2]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-frontier1000-*
+          path: hgss_story_sim/results/zubat-frontier1000
+          merge-multiple: true
+      - name: Summarize full route, pre-Red route, and Red separately
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const rowP = row => {
+            const w=Number(row?.wins||0), l=Number(row?.losses||0);
+            if(w+l>0) return (w+1)/(w+l+2);
+            return Math.max(1e-6,Math.min(1-1e-6,Number(row?.winRate||0)));
+          };
+          const metrics = rows => {
+            const active=(rows||[]).filter(r=>!r.skipped);
+            if(!active.length) return {retry:null,geometric:0,mean:0,progress:0};
+            const retry=active.reduce((s,r)=>{const p=rowP(r); return s+(1-p)/p;},0);
+            const geometric=Math.exp(active.reduce((s,r)=>s+Math.log(rowP(r)),0)/active.length);
+            const totals=active.reduce((a,r)=>({wins:a.wins+Number(r.wins||0),runs:a.runs+Number(r.runs||0)}),{wins:0,runs:0});
+            const mean=totals.runs?totals.wins/totals.runs:0;
+            const progress=active.reduce((s,r)=>s+Number(r.battleProgressScore??r.winRate??0),0)/active.length;
+            return {retry,geometric,mean,progress};
+          };
+          const dir='results/zubat-frontier1000';
+          const rows=fs.readdirSync(dir)
+            .filter(x=>x.endsWith('.json')&&x!=='summary.json')
+            .sort()
+            .map(file=>{
+              const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+              const e=d.evaluation||{};
+              const active=(e.rows||[]).filter(r=>!r.skipped);
+              const preRed=active.filter(r=>r.boss!=='Red');
+              const red=active.find(r=>r.boss==='Red')||null;
+              return {
+                label:file.replace(/\.json$/,''),
+                teamKeys:d.teamKeys,
+                runs:d.runs,
+                full:d.metrics,
+                preRed:metrics(preRed),
+                red:red?{
+                  wins:Number(red.wins||0),
+                  runs:Number(red.runs||0),
+                  winRate:Number(red.winRate||0),
+                  progress:Number(red.battleProgressScore??red.winRate??0),
+                  averageOpponentFaints:Number(red.averageOpponentFaints||0)
+                }:null,
+                grindBattles:e.routeGrindProxy?.expectedBattles??null,
+                grindExp:e.routeGrindProxy?.cumulativeGrindExp??null,
+                bosses:active.map(r=>({
+                  boss:r.boss,wins:r.wins,runs:r.runs,winRate:r.winRate,
+                  progress:r.battleProgressScore??r.winRate
+                }))
+              };
+            });
+
+          const dominates=(a,b,view)=>{
+            const am=a[view], bm=b[view];
+            const weak=
+              am.retry<=bm.retry &&
+              am.geometric>=bm.geometric &&
+              am.mean>=bm.mean &&
+              a.grindBattles<=b.grindBattles;
+            const strict=
+              am.retry<bm.retry ||
+              am.geometric>bm.geometric ||
+              am.mean>bm.mean ||
+              a.grindBattles<b.grindBattles;
+            return weak&&strict;
+          };
+          const pareto = view => rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b,view))).map(r=>r.label);
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-418 corrected Crobat leave-one-out high-sample validation',
+            runsPerBoss:1000,
+            exclusion:'Zubat origin family, candidate-search-key-origin-v2',
+            metricPolicy:'report full route and pre-Red separately because a shared zero-win Red wall scales raw retry with sample count',
+            rows,
+            fullParetoLabels:pareto('full'),
+            preRedParetoLabels:pareto('preRed')
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-frontier1000-summary
+          path: hgss_story_sim/results/zubat-frontier1000/summary.json
+          if-no-files-found: error
