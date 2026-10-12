@@ -1465,6 +1465,12 @@ function candidateFamilyIdentity(candidate) {
   return candidate.familyId || candidate.species;
 }
 
+function candidateOriginIdentity(candidate) {
+  const key = String(candidateIdentity(candidate));
+  const separator = key.indexOf('::');
+  return separator >= 0 ? key.slice(0, separator) : String(candidate.species);
+}
+
 function findStarterCandidate(candidates, requested) {
   if (!requested || String(requested).toLowerCase() === 'any') return null;
   const wanted = String(requested).toLowerCase();
@@ -3725,7 +3731,7 @@ async function loadStagedRouteContext() {
     ? {
         ...rawPool,
         candidates: rawPool.candidates.filter(candidate =>
-          !excludedOrigins.includes(String(candidate.species))
+          !excludedOrigins.includes(candidateOriginIdentity(candidate))
         ),
       }
     : rawPool;
@@ -3784,7 +3790,10 @@ function stagedConfigSnapshot(ctx) {
     routeGrindProxy: ctx.routeGrindProxy,
     routeGrindProxyTarget: ctx.routeGrindProxyTarget,
     ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
-      ? { excludedOrigins: ctx.excludedOrigins }
+      ? {
+          excludedOrigins: ctx.excludedOrigins,
+          exclusionSemanticsVersion: 'candidate-search-key-origin-v2',
+        }
       : {}),
   };
 }
