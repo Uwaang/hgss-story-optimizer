@@ -1,0 +1,550 @@
+name: research-v2-basin-zubat-v2-phase1-v2
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --exclude-origins=Zubat
+
+jobs:
+  screen:
+    if: contains(github.event.head_commit.message, '[research-v2-basin-zubat-v2-phase1-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Screen complete-route candidates with practical grind proxy
+        run: |
+          node src/cli.mjs route-exp-story-screen-shard \
+            --screen-runs=2 --shard-count=4 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/screen-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-screen-${{ matrix.shard }}
+          path: hgss_story_sim/results/screen-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  screen_merge:
+    needs: screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-screen-*
+          path: hgss_story_sim/results/screen
+          merge-multiple: true
+      - name: Merge recall-safe cap100 screen
+        run: |
+          INPUTS="$(find results/screen -name 'screen-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-screen-merge \
+            --inputs="$INPUTS" --candidate-cap=100 \
+            $SEARCH_ARGS > results/checkpoint1.json
+          jq '{candidateCap,scannedCandidates,screenedCandidates,screenedCandidateFamilies,config}' results/checkpoint1.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-checkpoint1
+          path: hgss_story_sim/results/checkpoint1.json
+          if-no-files-found: error
+
+  expand2:
+    needs: screen_merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-checkpoint1
+          path: hgss_story_sim/results/input
+      - name: Expand size1 to size2
+        run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/checkpoint1.json --target-size=2 --runs=2 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/expand2-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-expand2-${{ matrix.shard }}
+          path: hgss_story_sim/results/expand2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  selective2:
+    needs: expand2
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-expand2-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+      - name: Selective12 size2
+        run: |
+          INPUTS="$(find results/source -name 'expand2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --shard-count=12 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/selective2-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-selective2-${{ matrix.shard }}
+          path: hgss_story_sim/results/selective2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  promote2:
+    needs: selective2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-checkpoint1
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-selective2-*
+          path: hgss_story_sim/results/selective
+          merge-multiple: true
+      - name: Conservative projected64 Pareto promotion size2
+        run: |
+          INPUTS="$(find results/selective -name 'selective2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-projected-zero-select-merge \
+            --checkpoint=results/base/checkpoint1.json --inputs="$INPUTS" \
+            --target-runs=64 --beam-width=64 --selection=beam \
+            $SEARCH_ARGS > results/promotion2.json
+          jq '{projectedZeroSelect:{sourceStates:.projectedZeroSelect.sourceStates,totalZeroRows:.projectedZeroSelect.totalZeroRows,selectedCount:.projectedZeroSelect.selectedCount,selected:(.projectedZeroSelect.selected[:10])}}' results/promotion2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion2
+          path: hgss_story_sim/results/promotion2.json
+          if-no-files-found: error
+
+  full16_2:
+    needs: promote2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion2
+          path: hgss_story_sim/results/input
+      - run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/promotion2.json --runs=16 \
+            --shard-count=16 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/full16-2-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-2-${{ matrix.shard }}
+          path: hgss_story_sim/results/full16-2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  prepare2:
+    needs: full16_2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-full16-2-*
+          path: hgss_story_sim/results/full16
+          merge-multiple: true
+      - name: Package full16 size2 for zero-only racing
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const by=new Map(); let fingerprint=null,config=null;
+          for(const file of fs.readdirSync('results/full16')){
+            const d=JSON.parse(fs.readFileSync('results/full16/'+file,'utf8'));
+            fingerprint??=d.fingerprint; config??=d.config;
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const states=[...by.values()];
+          const zeros=states.reduce((s,r)=>s+(r.evaluation?.rows||[]).filter(x=>!x.skipped&&Number(x.wins||0)===0).length,0);
+          fs.writeFileSync('results/full16-expanded2.json',JSON.stringify({
+            schemaVersion:2,type:'route-beam-shard',fingerprint,config,
+            expanded:states.map(r=>({teamKeys:r.teamKeys,evaluation:r.evaluation}))
+          },null,2));
+          console.log(JSON.stringify({states:states.length,totalZeroRows:zeros},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-expanded2
+          path: hgss_story_sim/results/full16-expanded2.json
+          if-no-files-found: error
+
+  rare64_2:
+    needs: prepare2
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-expanded2
+          path: hgss_story_sim/results/input
+      - run: |
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs=results/input/full16-expanded2.json --runs=64 --max-low-wins=0 \
+            --shard-count=16 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rare64-2-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-rare64-2-${{ matrix.shard }}
+          path: hgss_story_sim/results/rare64-2-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select2:
+    needs: rare64_2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion2
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-rare64-2-*
+          path: hgss_story_sim/results/rare
+          merge-multiple: true
+      - name: Select grind-aware size2 beam16
+        run: |
+          INPUTS="$(find results/rare -name 'rare64-2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/base/promotion2.json --inputs="$INPUTS" \
+            --runs=64 --max-low-wins=0 --beam-width=16 --selection=beam \
+            $SEARCH_ARGS > results/beam2.json
+          jq '{beamCount:(.beam|length),selectiveRescore,beam:[.beam[]|{teamKeys,proxy:.evaluation.routeGrindProxy.expectedBattles}]}' results/beam2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-beam2
+          path: hgss_story_sim/results/beam2.json
+          if-no-files-found: error
+
+  expand3:
+    needs: select2
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-beam2
+          path: hgss_story_sim/results/input
+      - run: |
+          node src/cli.mjs route-exp-story-beam-shard \
+            --input=results/input/beam2.json --target-size=3 --runs=2 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/expand3-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-expand3-${{ matrix.shard }}
+          path: hgss_story_sim/results/expand3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  selective3:
+    needs: expand3
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-expand3-*
+          path: hgss_story_sim/results/source
+          merge-multiple: true
+      - run: |
+          INPUTS="$(find results/source -name 'expand3-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs="$INPUTS" --runs=12 --max-low-wins=1 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/selective3-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-selective3-${{ matrix.shard }}
+          path: hgss_story_sim/results/selective3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  promote3:
+    needs: selective3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-beam2
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-selective3-*
+          path: hgss_story_sim/results/selective
+          merge-multiple: true
+      - run: |
+          INPUTS="$(find results/selective -name 'selective3-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-projected-zero-select-merge \
+            --checkpoint=results/base/beam2.json --inputs="$INPUTS" \
+            --target-runs=64 --beam-width=64 --selection=beam \
+            $SEARCH_ARGS > results/promotion3.json
+          jq '{projectedZeroSelect:{sourceStates:.projectedZeroSelect.sourceStates,totalZeroRows:.projectedZeroSelect.totalZeroRows,selectedCount:.projectedZeroSelect.selectedCount,selected:(.projectedZeroSelect.selected[:10])}}' results/promotion3.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion3
+          path: hgss_story_sim/results/promotion3.json
+          if-no-files-found: error
+
+  full16_3:
+    needs: promote3
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion3
+          path: hgss_story_sim/results/input
+      - run: |
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/promotion3.json --runs=16 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/full16-3-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-3-${{ matrix.shard }}
+          path: hgss_story_sim/results/full16-3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  prepare3:
+    needs: full16_3
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-full16-3-*
+          path: hgss_story_sim/results/full16
+          merge-multiple: true
+      - name: Package full16 size3 for zero-only racing
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const key=x=>[...(x||[])].sort().join('|');
+          const by=new Map(); let fingerprint=null,config=null;
+          for(const file of fs.readdirSync('results/full16')){
+            const d=JSON.parse(fs.readFileSync('results/full16/'+file,'utf8'));
+            fingerprint??=d.fingerprint; config??=d.config;
+            for(const r of d.rescored||[]) by.set(key(r.teamKeys),r);
+          }
+          const states=[...by.values()];
+          const zeros=states.reduce((s,r)=>s+(r.evaluation?.rows||[]).filter(x=>!x.skipped&&Number(x.wins||0)===0).length,0);
+          fs.writeFileSync('results/full16-expanded3.json',JSON.stringify({
+            schemaVersion:2,type:'route-beam-shard',fingerprint,config,
+            expanded:states.map(r=>({teamKeys:r.teamKeys,evaluation:r.evaluation}))
+          },null,2));
+          console.log(JSON.stringify({states:states.length,totalZeroRows:zeros},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-expanded3
+          path: hgss_story_sim/results/full16-expanded3.json
+          if-no-files-found: error
+
+  rare64_3:
+    needs: prepare3
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-full16-expanded3
+          path: hgss_story_sim/results/input
+      - run: |
+          node src/cli.mjs route-exp-story-selective-rescore-shard \
+            --inputs=results/input/full16-expanded3.json --runs=64 --max-low-wins=0 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rare64-3-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-rare64-3-${{ matrix.shard }}
+          path: hgss_story_sim/results/rare64-3-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select3:
+    needs: rare64_3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-promotion3
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-basin-zubat-v2-rare64-3-*
+          path: hgss_story_sim/results/rare
+          merge-multiple: true
+      - run: |
+          INPUTS="$(find results/rare -name 'rare64-3-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-selective-rescore-merge \
+            --checkpoint=results/base/promotion3.json --inputs="$INPUTS" \
+            --runs=64 --max-low-wins=0 --beam-width=16 --selection=beam \
+            $SEARCH_ARGS > results/beam3.json
+          jq '{beamCount:(.beam|length),selectiveRescore,beam:[.beam[]|{teamKeys,proxy:.evaluation.routeGrindProxy.expectedBattles}]}' results/beam3.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-basin-zubat-v2-beam3
+          path: hgss_story_sim/results/beam3.json
+          if-no-files-found: error
