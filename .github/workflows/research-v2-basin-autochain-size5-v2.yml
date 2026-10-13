@@ -1,14 +1,10 @@
 name: research-v2-basin-autochain-size5-v2
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       origin:
         description: canonical origin family to exclude
-        required: true
-        type: string
-      source_run_id:
-        description: upstream size4 run id
         required: true
         type: string
 
@@ -48,9 +44,6 @@ jobs:
         with:
           name: research-v2-basin-autochain-v2-beam4
           path: hgss_story_sim/results/input
-          repository: Uwaang/hgss-story-optimizer
-          run-id: ${{ inputs.source_run_id }}
-          github-token: ${{ github.token }}
       - name: Expand origin-excluded size4 beam to size5
         run: |
           node src/cli.mjs route-exp-story-beam-shard \
@@ -112,9 +105,6 @@ jobs:
         with:
           name: research-v2-basin-autochain-v2-beam4
           path: hgss_story_sim/results/base
-          repository: Uwaang/hgss-story-optimizer
-          run-id: ${{ inputs.source_run_id }}
-          github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           pattern: research-v2-basin-autochain-v2-selective5-*
@@ -266,14 +256,3 @@ jobs:
           name: research-v2-basin-autochain-v2-beam5
           path: hgss_story_sim/results/beam5.json
           if-no-files-found: error
-
-  dispatch_terminal:
-    needs: select5
-    if: success()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch terminal
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method POST             -H "Accept: application/vnd.github+json"             "/repos/${{ github.repository }}/actions/workflows/research-v2-basin-autochain-terminal-v2.yml/dispatches"             -f ref="${{ github.ref_name }}"             -f 'inputs[origin]'="${{ inputs.origin }}"             -f 'inputs[source_run_id]'="${{ github.run_id }}"
