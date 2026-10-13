@@ -1,7 +1,7 @@
 name: research-v2-chain-smoke-b
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       source_run_id:
         description: upstream run id
@@ -17,3 +17,4 @@ jobs:
     steps:
       - run: |
           echo "source_run_id=${{ inputs.source_run_id }}"
+          test -n "${{ inputs.source_run_id }}"
