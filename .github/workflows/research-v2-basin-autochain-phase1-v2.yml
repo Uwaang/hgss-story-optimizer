@@ -1,7 +1,7 @@
 name: research-v2-basin-autochain-phase1-v2
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       origin:
         description: canonical origin family to exclude
@@ -550,14 +550,3 @@ jobs:
           name: research-v2-basin-autochain-v2-beam3
           path: hgss_story_sim/results/beam3.json
           if-no-files-found: error
-
-  dispatch_size4:
-    needs: select3
-    if: success()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch size4
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method POST             -H "Accept: application/vnd.github+json"             "/repos/${{ github.repository }}/actions/workflows/research-v2-basin-autochain-size4-v2.yml/dispatches"             -f ref="${{ github.ref_name }}"             -f 'inputs[origin]'="${{ inputs.origin }}"             -f 'inputs[source_run_id]'="${{ github.run_id }}"
