@@ -7,15 +7,10 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
-  dispatch_b:
-    if: contains(github.event.head_commit.message, '[research-v2-chain-smoke-a]')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch smoke target
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method POST             -H "Accept: application/vnd.github+json"             "/repos/${{ github.repository }}/actions/workflows/research-v2-chain-smoke-b.yml/dispatches"             -f ref="${{ github.ref_name }}"             -f 'inputs[source_run_id]'="${{ github.run_id }}"
+  smoke_b:
+    if: contains(github.event.head_commit.message, '[research-v2-chain-smoke-reusable]')
+    uses: ./.github/workflows/research-v2-chain-smoke-b.yml
+    with:
+      source_run_id: ${{ github.run_id }}
