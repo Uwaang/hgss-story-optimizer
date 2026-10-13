@@ -1,7 +1,7 @@
 {
   "enabled": false,
-  "origin": "Rhyhorn",
-  "stage": "size4",
-  "source_run_id": "38394524745",
-  "note": "Enable with a tagged kick commit only after the upstream run is verified successful."
+  "origin": "Abra",
+  "stage": "phase1",
+  "mode": "branch-local-reusable-full-chain",
+  "note": "Enable only when starting a fresh ablation chain. Current Rhyhorn work continues from its existing run via the hourly research watch."
 }
