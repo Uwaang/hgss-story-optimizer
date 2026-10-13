@@ -41,19 +41,19 @@ jobs:
       origin: ${{ needs.config.outputs.origin }}
 
   size4:
-    needs: phase1
+    needs: [config, phase1]
     uses: ./.github/workflows/research-v2-basin-autochain-size4-v2.yml
     with:
       origin: ${{ needs.config.outputs.origin }}
 
   size5:
-    needs: size4
+    needs: [config, size4]
     uses: ./.github/workflows/research-v2-basin-autochain-size5-v2.yml
     with:
       origin: ${{ needs.config.outputs.origin }}
 
   terminal:
-    needs: size5
+    needs: [config, size5]
     uses: ./.github/workflows/research-v2-basin-autochain-terminal-v2.yml
     with:
       origin: ${{ needs.config.outputs.origin }}
