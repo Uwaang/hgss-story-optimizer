@@ -1,14 +1,10 @@
 name: research-v2-basin-autochain-terminal-v2
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       origin:
         description: canonical origin family to exclude
-        required: true
-        type: string
-      source_run_id:
-        description: upstream size5 run id
         required: true
         type: string
 
@@ -45,9 +41,6 @@ jobs:
         with:
           name: research-v2-basin-autochain-v2-beam5
           path: hgss_story_sim/results/source
-          repository: Uwaang/hgss-story-optimizer
-          run-id: ${{ inputs.source_run_id }}
-          github-token: ${{ github.token }}
       - name: Migrate validated size5 parent keys into terminal-grind semantics
         run: |
           node src/cli.mjs route-exp-story-fingerprint $SEARCH_ARGS > results/fingerprint.json
@@ -65,7 +58,7 @@ jobs:
             stage:'beam-5-migrated-terminal-grind-v2',
             beam:source.beam.map(r=>({teamKeys:r.teamKeys,evaluation:null})),
             migration:{
-              sourceRun:38363979038,
+              sourceRun:Number(process.env.GITHUB_RUN_ID),
               sourceArtifact:'research-v2-basin-autochain-v2-beam5',
               reason:'prefix selection is combat-only under terminal-grind v2; migrate validated parent keys only',
               sourceSemantics:source.config?.semanticsVersion||null,
