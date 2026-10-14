@@ -758,7 +758,9 @@ At this point:
 
 Therefore create a durable Research v2 consolidation pointer from the current active head.
 
-Recommended durable branch name:
-`research/v2-consolidated`
+Durable Research v2 branch created:
+- branch: `research/v2-consolidated`
+- creation head: `0a4ec14185edc0edc67d3e4f9eea3d7a431d726d`
+- purpose: stable continuation pointer after completion of SCRUM-414 through SCRUM-418 and SCRUM-413 branch/run inventory.
 
 The existing `research/v2-completion-aware-global-search-v2` branch remains useful as the historical implementation line for SCRUM-418, but should no longer be the semantic name of the whole Research v2 continuation after consolidation.
