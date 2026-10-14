@@ -396,8 +396,38 @@ function cmdSelect(opts) {
   }
 }
 
+
+function cmdContinue(opts) {
+  const pool = readJson(opts.pool);
+  const fingerprint = readJson(opts.fingerprint);
+  const incumbentsDoc = readJson(opts.incumbents);
+  const nextRound = Number(opts['next-round']);
+  if (!Number.isInteger(nextRound) || nextRound < 2) {
+    throw new Error('continue requires --next-round=N >= 2');
+  }
+  const proposals = Number(opts.proposals || 16);
+  const out = opts.out || ('results/coordinate/round' + nextRound);
+  const incumbents = incumbentsDoc.incumbents || [];
+  if (!incumbents.length) throw new Error('continue incumbents are empty');
+  const built = makeRound(pool, fingerprint, incumbents, nextRound, proposals);
+  writeJson(path.join(out, 'incumbents.json'), {
+    schemaVersion: 1,
+    round: nextRound - 1,
+    incumbents,
+  });
+  writeJson(path.join(out, 'manifest.json'), built.manifest);
+  writeJson(path.join(out, 'checkpoint.json'), built.checkpoint);
+  console.log(JSON.stringify({
+    nextRound,
+    starts: incumbents.length,
+    proposalsPerStart: proposals,
+    checkpointTeams: built.checkpoint.beam.length,
+  }, null, 2));
+}
+
 const command = process.argv[2];
 const opts = args();
 if (command === 'prepare') cmdPrepare(opts);
 else if (command === 'select') cmdSelect(opts);
-else throw new Error('Use prepare or select');
+else if (command === 'continue') cmdContinue(opts);
+else throw new Error('Use prepare, continue, or select');
