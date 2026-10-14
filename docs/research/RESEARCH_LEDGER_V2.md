@@ -651,3 +651,114 @@ With SCRUM-414 through SCRUM-418 complete, resume **SCRUM-413** and finish repos
    - wider HG/SS scope later.
 
 Do not delete historical branches until their unique semantics/results are represented in this ledger or linked Jira.
+
+
+## 14. Remaining diverged branches — final disposition audit
+
+The current active Research v2 line was compared directly against the remaining diverged branch tips.
+
+### 14.1 Archive-safe historical/diagnostic branches
+
+| Branch | Branch-only commits | Final classification | Reason |
+|---|---:|---|---|
+| `fix/joint-route-build-v1` | 5 | diagnostic-only / superseded | iterative route-build + moveset tie-break experiments were superseded by SCRUM-416 actual-battle calibration and joint reconciliation |
+| `exp/d-bench-control` | 5 | research-result-only / superseded implementation | the important finding (EXP participation/bench state matters) is preserved; its semantics were reimplemented in SCRUM-417 recipient scheduling |
+| `research/v2-move-legality-v1` | 1 | diagnostic-only / superseded | branch-only commit is only the workflow that quantified historical level-up move overgrant; Move Reminder/`4L1` legality was subsequently fixed and regression-tested |
+| `research/v2-evolution-trigger-audit-v1` | 1 | diagnostic-only / superseded | branch-only commit is only the trigger-source audit workflow; pending move/item -> later level-up evolution state is now implemented in the scheduler/canonical pool |
+
+These branches contain no remaining required production semantics that are absent from the current Research v2 line.
+
+### 14.2 Old Red/Lance line
+
+#### `experiment/red-min-grind` — 60 branch-only commits
+
+Classification: **historical research source; archive-safe after ledger preservation**.
+
+Important old semantics were checked against the current line:
+
+- Gen4 Lightning Rod / Storm Drain behavior is explicitly present in current `battle.mjs`;
+- Choice-lock-aware smart switching uses the active request/disabled-move state;
+- HP-dependent Eruption / Water Spout decision power has explicit regression coverage;
+- Focus Punch conditional execution risk is modeled from HGSS opponent move-choice probabilities rather than the old hand-tuned `×0.18 / ×0.08` penalties;
+- Choice-compatible offensive EV/build handling is present in the current build evaluator.
+
+The remaining branch-only commits are mainly:
+- Red-only GA/search orchestration;
+- cross-level/focused Red workflows;
+- old Red-specific moveset/build heuristics;
+- performance/cache experiments;
+- historical validators.
+
+Those are not intended to be ported wholesale after SCRUM-414/416.
+
+#### `experiment/lance-min-grind` — 80 branch-only commits
+
+Classification: **historical legality/target-boss research source; archive-safe after ledger preservation**.
+
+The extra Lance-line correctness ideas are represented or superseded in current v2:
+- disjoint wild encounter levels -> current source-backed `levelDistribution`;
+- pre-evolution move retention -> current move-legality smoke/regression;
+- friendship/move/item evolution timing -> current canonical evolution + scheduler trigger state;
+- held-item timing/inventory -> current route held-item policy;
+- target-boss/local-boundary tooling -> diagnostic only, not part of the global objective.
+
+#### `experiment/red57-vs-lance` — 91 branch-only commits
+
+Classification: **historical control/cross-boss diagnostic; archive-safe after ledger preservation**.
+
+Its final 11 commits beyond the Lance line are cross-boss build/availability validators and exact historical Red-team checks. They remain useful as historical evidence but are not merge targets.
+
+### 14.3 Archive policy
+
+“Archive-safe” means:
+- no code/commit needs to be cherry-picked before v2 consolidation;
+- the branch may be deleted later after the repository owner chooses to perform branch cleanup;
+- its scientific result/important semantics must remain represented by this ledger and Jira.
+
+No branches are deleted as part of this audit.
+
+## 15. Representative Research v2 run index
+
+This is intentionally a **representative** reproducibility index, not every exploratory run.
+
+| Milestone | Representative run(s) | Durable conclusion |
+|---|---|---|
+| SCRUM-414 mechanics attribution | `37898662064` | corrected evaluator anchor; Choice-lock semantics retained; HP-aware Eruption/Water Spout accounts for historical repricing delta |
+| SCRUM-415 stone/conditional/friendship coverage | `37899947101`, `37900471093`, `37900847377` | major HGSS evolution classes restored with source-backed timing |
+| SCRUM-415 natural move evolution | `37902300498` | Ambipom/Lickilicky/Tangrowth/Yanmega legal natural triggers; residual trigger-state evolutions deferred to scheduler |
+| SCRUM-416 corrected smart-policy high sample | `37923263801` | old severe Focus Punch option-cost conclusion shown to be largely confounded |
+| SCRUM-416 Typhlosion final local benchmark | `37925824007` | no-Eruption route-risk leader under corrected evaluator |
+| SCRUM-416 Tyranitar Red-only 1000 | `37931043228` | sparse-win Red-only local result; progress remains secondary surrogate |
+| SCRUM-416 Rhyperior finalist | `37931267780` | local Scary Face route-risk improvement, later tested for joint transfer |
+| SCRUM-416 Lapras Bruno2 1000 | `37939929316` | Brine directional rare-wall improvement reproduced |
+| SCRUM-416 joint 500 | `37943823029` | local moveset optima are non-separable; joint context reverses Rhyperior local choice |
+| SCRUM-416 final Tyranitar reconciliation | `37947375241` | Tyranitar Screech local result rejected in joint context; P0-D signed off |
+| SCRUM-417 first 64-run scheduler frontier | `38044502764` | recipient/bench schedules produce a real multi-objective grind frontier |
+| SCRUM-417 trigger-state regression | `38048187862` | Mamoswine/Gliscor/Weavile pending-condition -> later level-up semantics validated |
+| SCRUM-417 final local-stability screen | `38051695259` | 5-state recipient schedule frontier locally stable; Scheduler v1 exit criteria met |
+| SCRUM-418 Crobat-free high sample | `38287910366` | exact fallback team receives reusable 1000-run evidence |
+| SCRUM-418 Rhyhorn-free terminal | `38510573312` | third independent core ablation recovers the same practical fallback |
+| SCRUM-418 Abra-free full chain | `38527011138` | strongest prefix-basin disruption still reconverges at terminal |
+| SCRUM-418 independent coordinate final | `38610537965` | 16-start, 15-round less-correlated search stabilizes without beating staged-search fallback |
+
+Current recurring practical fallback:
+`Typhlosion / Politoed / Vespiquen / Wobbuffet / Steelix / Weavile`
+
+Independent coordinate best:
+`Typhlosion / Ambipom / Rhyperior / Kingdra / Ditto / Wobbuffet`
+
+The independent result is not a replacement frontier leader; it is robustness evidence that a substantially less-correlated search method did not surface a superior challenger.
+
+## 16. Consolidation decision
+
+At this point:
+- SCRUM-414 through SCRUM-418 are complete;
+- the current active branch contains the validated v2 foundation;
+- remaining diverged branches are historical/diagnostic/research-result sources rather than required unported code.
+
+Therefore create a durable Research v2 consolidation pointer from the current active head.
+
+Recommended durable branch name:
+`research/v2-consolidated`
+
+The existing `research/v2-completion-aware-global-search-v2` branch remains useful as the historical implementation line for SCRUM-418, but should no longer be the semantic name of the whole Research v2 continuation after consolidation.
