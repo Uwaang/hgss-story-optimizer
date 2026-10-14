@@ -540,3 +540,114 @@ Decision:
 - battle cache semantics are fingerprinted and default namespace is bumped to `hgss-battle-cache-v3-parity` so legacy/corrected runs cannot cross-hit cached battles.
 
 P0-B parity extraction from the historical Red/Lance branches is complete. The branches may still be retained as research references for Moveset/Build v2, but their PRs no longer need to remain open as merge candidates.
+
+
+---
+
+## 13. 2026-10-15 Research v2 continuation checkpoint
+
+This section supersedes stale operational status above where branch/PR state has changed since the 2026-10-09 audit.
+
+### 13.1 Current active research line
+
+- active branch: `research/v2-completion-aware-global-search-v2`
+- audited head: `a4d8826c19ee8c8bf85219025ab03afffcab250e`
+- vs `main`: **652 ahead / 0 behind**
+- vs `research/v2-rebase`: **295 ahead / 0 behind**
+
+The active Research v2 line is now the practical continuation point for the completed P0/P1 foundation work.
+`research/v2-rebase` remains the historical consolidation base, not the current experimental head.
+
+### 13.2 Jira milestone state
+
+Research v2 child milestones:
+
+| Jira | Topic | Status |
+|---|---|---|
+| SCRUM-413 | Research Ledger / Branch & PR Inventory | **IN PROGRESS** |
+| SCRUM-414 | Battle Mechanics Parity | **DONE** |
+| SCRUM-415 | Evolution Coverage | **DONE** |
+| SCRUM-416 | Moveset/Build v2 | **DONE** |
+| SCRUM-417 | EXP Scheduler v1 | **DONE** |
+| SCRUM-418 | Completion-aware Global Search v2 | **DONE** |
+| SCRUM-419 | HM Move Deleter / HM-forget legality audit | backlog |
+
+### 13.3 What changed after the original ledger audit
+
+#### Battle/evaluator foundation
+- Choice-lock-aware switching and HP-aware Eruption/Water Spout decision semantics were recovered and validated.
+- evaluator/policy confounds in moveset experiments were isolated;
+- corrected evaluator became the basis for later Research v2 work.
+
+#### Evolution / move legality
+- stone, conditional-level, friendship, natural move-known and scheduler-aware trigger coverage were integrated;
+- Move Reminder / evolved-form-only `4L1` legality was audited and corrected;
+- remaining evolution timing issues were handled through progression-state logic instead of optimistic stage-only shortcuts.
+
+#### Moveset/Build v2
+- the project stopped stacking arbitrary score coefficients to suppress strange movesets;
+- actual-battle counterfactual/high-sample validation became the calibration boundary;
+- representative Typhlosion, Tyranitar, Rhyperior and Alakazam work was completed under corrected semantics.
+
+#### EXP Scheduler v1
+- progression-state EXP allocation and active-recipient/bench participation were implemented and validated;
+- the old fixed-allocator assumption is no longer the intended global model.
+
+#### Completion-aware Global Search v2
+- low-sample rare-wall handling, candidate recall, completion-aware pruning and terminal practical-grind evaluation were integrated;
+- canonical-origin leave-one-out tests for Crobat/Zubat, Lapras, Rhyhorn/Rhyperior and Abra/Alakazam all retained viable terminal basins;
+- all four ablations repeatedly recovered the same practical fallback:
+  `Typhlosion / Politoed / Vespiquen / Wobbuffet / Steelix / Weavile`;
+- female Combee acquisition probability is intentionally excluded from the cost objective by research policy; female-only Vespiquen legality remains enforced;
+- independent 16-start full-team coordinate search was run for 15 rounds without staged prefix pruning or known-team seeding;
+- its best endpoint stabilized at:
+  `Typhlosion / Ambipom / Rhyperior / Kingdra / Ditto / Wobbuffet`
+  with 100-run retry 181.7818 and grind 1468;
+- it did not beat the staged/leave-one-out fallback (100-run retry 144.8487, grind 828), and no new 1000-run challenger was warranted.
+- SCRUM-418 was closed after candidate recall + basin robustness + independent-method robustness were sufficiently supported.
+
+### 13.4 Current branch-lineage audit
+
+Already fully contained by the current active branch (no commits missing from these branch tips):
+- `research/v2-rebase`
+- `research/v2-mechanics-finalize`
+- `research/v2-evolution-stone-v1`
+- `research/v2-evolution-friendship-v1`
+- `research/v2-evolution-natural-move-v1`
+- `research/v2-move-relearner-legality-v1`
+- `research/v2-moveset-calibration-v1`
+- `research/v2-exp-scheduler-v1`
+
+Still diverged / historical-reference branches:
+- `fix/joint-route-build-v1`: 5 branch-only commits relative to the current line's merge base
+- `exp/d-bench-control`: 5 branch-only commits
+- `experiment/red-min-grind`: 60 branch-only commits
+- `experiment/lance-min-grind`: 80 branch-only commits
+- `experiment/red57-vs-lance`: 91 branch-only commits
+- `research/v2-move-legality-v1`: 1 branch-only commit
+- `research/v2-evolution-trigger-audit-v1`: 1 branch-only commit
+
+The old Red/Lance and bench branches are now primarily **historical/research-reference sources** because their important semantics have been reimplemented/validated in later v2 work. Their remaining unique commits must still be classified before branch deletion.
+
+### 13.5 Pull-request state
+
+As of this checkpoint, there are **no open pull requests** in the repository.
+PRs #1–#10 are all closed; #7–#10 were merged into the v2 rebase line, while the older experimental PRs were closed without wholesale merge.
+
+Therefore the old Section 5 “Current open PRs” is historical only.
+
+### 13.6 Immediate continuation
+
+With SCRUM-414 through SCRUM-418 complete, resume **SCRUM-413** and finish repository consolidation bookkeeping before starting another broad research phase:
+
+1. classify remaining diverged branch-only commits;
+2. build/update representative run/artifact index;
+3. mark branches as absorbed / historical-result-only / diagnostic-only / recovery-only / safe-to-archive;
+4. decide the durable Research v2 consolidation branch/head;
+5. then return to SCRUM-412 medium-term roadmap:
+   - dense grind/reliability frontier;
+   - sequential Elite Four semantics;
+   - multi-seed/search robustness;
+   - wider HG/SS scope later.
+
+Do not delete historical branches until their unique semantics/results are represented in this ledger or linked Jira.
