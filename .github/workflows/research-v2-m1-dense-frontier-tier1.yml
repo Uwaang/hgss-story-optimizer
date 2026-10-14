@@ -1,0 +1,228 @@
+name: research-v2-m1-dense-frontier-tier1
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  STORY_TARGETS: "0.25,0.375,0.5,0.625,0.75"
+  RED_TARGETS: "0.125,0.25,0.375,0.5"
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[research-v2-m1-dense-tier1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - label: staged-fallback
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            team_preset: ""
+            schedule_b64: ""
+          - label: coordinate-best
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            team_preset: ""
+            schedule_b64: ""
+          - label: scheduler-story-min
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: scheduler-red25-min
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: scheduler-red50-min
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smokes
+        run: |
+          node src/cli.mjs exp-scheduler-v1-smoke
+          node src/cli.mjs exp-scheduler-v1-evolution-trigger-smoke
+      - name: Dense practical-grind Tier-1
+        env:
+          LABEL: ${{ matrix.label }}
+          TEAM_KEYS: ${{ matrix.team_keys }}
+          TEAM_PRESET: ${{ matrix.team_preset }}
+          SCHEDULE_B64: ${{ matrix.schedule_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p results/m1
+          args=(
+            src/cli.mjs route-exp-practical-grind
+            --version=HEARTGOLD
+            --starter=Cyndaquil
+            --evolution-policy=trade-aware
+            --exp-profile=normal-route
+            --exp-allocator=boss-aware-soft
+            --entry-level=expected
+            --same-stage-join=map-order
+            --resources=all
+            --spend-policy=natural
+            --story-targets="$STORY_TARGETS"
+            --red-targets="$RED_TARGETS"
+            --screen-runs=2
+            --verify-runs=4
+            --repair-runs=8
+            --final-runs=16
+            --max-repair-rounds=20
+            --repair-mode=global-only
+            --lean-repair=true
+          )
+          if [[ -n "$TEAM_KEYS" ]]; then
+            args+=(--team-keys="$TEAM_KEYS")
+          else
+            args+=(--team-preset="$TEAM_PRESET" --recipient-schedule-base64="$SCHEDULE_B64")
+          fi
+          node "${args[@]}" > "results/m1/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m1/'+label+'.json','utf8'));
+          console.log(JSON.stringify({
+            label,
+            storyFrontier:(d.storyFrontier||[]).map(s=>({
+              storyTarget:s.storyTargetWinRate,
+              storyGrind:s.storyGrindBattles,
+              storyWorst:s.storyWorstBossWinRate,
+              converged:s.repairConverged,
+              red:(s.redFrontier||[]).map(r=>({
+                redTarget:r.targetWinRate,
+                totalGrind:r.totalGrindBattles,
+                additionalRed:r.additionalRedGrindBattles,
+                achieved:r.achievedWinRate
+              }))
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m1-dense-tier1-${{ matrix.label }}
+          path: hgss_story_sim/results/m1/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: evaluate
+    if: always() && needs.evaluate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m1-dense-tier1-*
+          path: hgss_story_sim/results/m1
+          merge-multiple: true
+      - name: Summarize Tier-1 dense grid
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m1';
+          const docs=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>({
+            label:file.replace(/\.json$/,''),
+            doc:JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'))
+          }));
+          const storyPoints=[];
+          const points=[];
+          for(const {label,doc} of docs){
+            for(const s of doc.storyFrontier||[]){
+              storyPoints.push({
+                label,
+                storyTarget:Number(s.storyTargetWinRate),
+                storyGrind:Number(s.storyGrindBattles),
+                storyWorst:Number(s.storyWorstBossWinRate),
+                converged:Boolean(s.repairConverged)
+              });
+              for(const r of s.redFrontier||[]){
+                points.push({
+                  label,
+                  storyTarget:Number(s.storyTargetWinRate),
+                  redTarget:Number(r.targetWinRate),
+                  storyGrind:Number(s.storyGrindBattles),
+                  totalGrind:Number(r.totalGrindBattles),
+                  redAdditional:Number(r.additionalRedGrindBattles),
+                  redAchieved:Number(r.achievedWinRate),
+                  converged:Boolean(s.repairConverged)
+                });
+              }
+            }
+          }
+          const storyWinners=[];
+          for(const target of [...new Set(storyPoints.map(x=>x.storyTarget))].sort((a,b)=>a-b)){
+            const candidates=storyPoints.filter(x=>x.storyTarget===target&&x.converged)
+              .sort((a,b)=>a.storyGrind-b.storyGrind||a.label.localeCompare(b.label));
+            if(candidates.length) storyWinners.push({target,winner:candidates[0],ranking:candidates});
+          }
+          const coordinateWinners=[];
+          const coords=[...new Set(points.map(x=>x.storyTarget+'|'+x.redTarget))].sort();
+          for(const coord of coords){
+            const [st,rt]=coord.split('|').map(Number);
+            const candidates=points.filter(x=>x.storyTarget===st&&x.redTarget===rt&&x.converged)
+              .sort((a,b)=>a.totalGrind-b.totalGrind||a.label.localeCompare(b.label));
+            if(candidates.length) coordinateWinners.push({
+              storyTarget:st,redTarget:rt,winner:candidates[0],ranking:candidates
+            });
+          }
+          const winnerCounts={};
+          for(const x of storyWinners){
+            winnerCounts[x.winner.label]=(winnerCounts[x.winner.label]||0)+1;
+          }
+          for(const x of coordinateWinners){
+            winnerCounts[x.winner.label]=(winnerCounts[x.winner.label]||0)+1;
+          }
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-420 Tier-1 dense grind/reliability grid',
+            tier:'tier1',
+            runs:{screen:2,verify:4,repair:8,final:16},
+            storyTargets:[0.25,0.375,0.5,0.625,0.75],
+            redTargets:[0.125,0.25,0.375,0.5],
+            labels:docs.map(x=>x.label),
+            storyPoints,
+            points,
+            storyWinners,
+            coordinateWinners,
+            winnerCounts
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            labels:summary.labels,
+            winnerCounts,
+            storyWinners:storyWinners.map(x=>({
+              target:x.target,label:x.winner.label,grind:x.winner.storyGrind,worst:x.winner.storyWorst
+            })),
+            coordinateWinners:coordinateWinners.map(x=>({
+              storyTarget:x.storyTarget,redTarget:x.redTarget,label:x.winner.label,
+              totalGrind:x.winner.totalGrind,storyGrind:x.winner.storyGrind,
+              redAdditional:x.winner.redAdditional,achieved:x.winner.redAchieved
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m1-dense-tier1-summary
+          path: hgss_story_sim/results/m1/summary.json
+          if-no-files-found: error
