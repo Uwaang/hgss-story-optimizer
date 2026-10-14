@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 6
   SEARCH_ARGS: >-
     --route-profile=complete
     --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
