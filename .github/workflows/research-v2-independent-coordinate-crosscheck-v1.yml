@@ -1,0 +1,478 @@
+name: research-v2-independent-coordinate-crosscheck-v1
+
+on:
+  push:
+    branches:
+      - research/v2-completion-aware-global-search-v2
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[research-v2-independent-coordinate-v1]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Build independent coordinate starts
+        run: |
+          mkdir -p results/coordinate/base results/coordinate/round1
+          node src/cli.mjs route-exp-story-fingerprint $SEARCH_ARGS > results/coordinate/base/fingerprint.json
+          node src/cli.mjs pool --version=HEARTGOLD --evolution-policy=trade-aware --full=true > results/coordinate/base/pool.json
+          node scripts/research-v2-coordinate-crosscheck.mjs prepare \
+            --pool=results/coordinate/base/pool.json \
+            --fingerprint=results/coordinate/base/fingerprint.json \
+            --starts=16 --proposals=16 \
+            --out=results/coordinate/round1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/coordinate/base
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-round1
+          path: hgss_story_sim/results/coordinate/round1
+          if-no-files-found: error
+
+  rescore1:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round1
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=4 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-r1-rescore-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select1:
+    needs: rescore1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round1
+          path: hgss_story_sim/results/round
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-r1-rescore-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - run: |
+          node scripts/research-v2-coordinate-crosscheck.mjs select \
+            --round=1 --max-rounds=5 --proposals=16 \
+            --pool=results/base/pool.json \
+            --fingerprint=results/base/fingerprint.json \
+            --manifest=results/round/manifest.json \
+            --rescored=results/rescored \
+            --out=results/coordinate/round2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-round2
+          path: hgss_story_sim/results/coordinate/round2
+          if-no-files-found: error
+
+  rescore2:
+    needs: select1
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round2
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=4 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-r2-rescore-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select2:
+    needs: rescore2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round2
+          path: hgss_story_sim/results/round
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-r2-rescore-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - run: |
+          node scripts/research-v2-coordinate-crosscheck.mjs select \
+            --round=2 --max-rounds=5 --proposals=16 \
+            --pool=results/base/pool.json \
+            --fingerprint=results/base/fingerprint.json \
+            --manifest=results/round/manifest.json \
+            --rescored=results/rescored \
+            --out=results/coordinate/round3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-round3
+          path: hgss_story_sim/results/coordinate/round3
+          if-no-files-found: error
+
+  rescore3:
+    needs: select2
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round3
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=4 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-r3-rescore-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select3:
+    needs: rescore3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round3
+          path: hgss_story_sim/results/round
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-r3-rescore-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - run: |
+          node scripts/research-v2-coordinate-crosscheck.mjs select \
+            --round=3 --max-rounds=5 --proposals=16 \
+            --pool=results/base/pool.json \
+            --fingerprint=results/base/fingerprint.json \
+            --manifest=results/round/manifest.json \
+            --rescored=results/rescored \
+            --out=results/coordinate/round4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-round4
+          path: hgss_story_sim/results/coordinate/round4
+          if-no-files-found: error
+
+  rescore4:
+    needs: select3
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round4
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=4 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-r4-rescore-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select4:
+    needs: rescore4
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round4
+          path: hgss_story_sim/results/round
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-r4-rescore-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - run: |
+          node scripts/research-v2-coordinate-crosscheck.mjs select \
+            --round=4 --max-rounds=5 --proposals=16 \
+            --pool=results/base/pool.json \
+            --fingerprint=results/base/fingerprint.json \
+            --manifest=results/round/manifest.json \
+            --rescored=results/rescored \
+            --out=results/coordinate/round5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-round5
+          path: hgss_story_sim/results/coordinate/round5
+          if-no-files-found: error
+
+  rescore5:
+    needs: select4
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round5
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=4 \
+            --shard-count=24 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-r5-rescore-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  select5:
+    needs: rescore5
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-base
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-round5
+          path: hgss_story_sim/results/round
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-r5-rescore-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - run: |
+          node scripts/research-v2-coordinate-crosscheck.mjs select \
+            --round=5 --max-rounds=5 --proposals=16 \
+            --pool=results/base/pool.json \
+            --fingerprint=results/base/fingerprint.json \
+            --manifest=results/round/manifest.json \
+            --rescored=results/rescored \
+            --out=results/coordinate/endpoints
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-endpoints
+          path: hgss_story_sim/results/coordinate/endpoints
+          if-no-files-found: error
+
+  final100:
+    needs: select5
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-endpoints
+          path: hgss_story_sim/results/input
+      - run: |
+          mkdir -p results/final
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=100 \
+            --shard-count=16 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/final/final100-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-coordinate-final100-${{ matrix.shard }}
+          path: hgss_story_sim/results/final/final100-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: final100
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-endpoints
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-coordinate-final100-*
+          path: hgss_story_sim/results/final
+          merge-multiple: true
+      - name: Merge independent coordinate endpoints
+        run: |
+          INPUTS="$(find results/final -name 'final100-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-rescore-merge \
+            --input=results/input/checkpoint.json --inputs="$INPUTS" --runs=100 \
+            $SEARCH_ARGS > results/coordinate-final100.json
+          jq '{
+            finalRescoredTeams,
+            paretoFront:[.paretoFront[]|{
+              teamKeys,
+              retry:.routeExpectedRetryFailures,
+              geometric:.routeRiskGeometricScore,
+              mean:.routeRiskMeanWinRate,
+              grindBattles:.routeGrindProxy.expectedBattles,
+              grindExp:.routeGrindProxy.cumulativeGrindExp
+            }],
+            top:[.top[:16][]|{
+              teamKeys,
+              retry:.routeExpectedRetryFailures,
+              geometric:.routeRiskGeometricScore,
+              mean:.routeRiskMeanWinRate,
+              grindBattles:.routeGrindProxy.expectedBattles,
+              grindExp:.routeGrindProxy.cumulativeGrindExp
+            }]
+          }' results/coordinate-final100.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-independent-coordinate-crosscheck-v1-final100
+          path: hgss_story_sim/results/coordinate-final100.json
+          if-no-files-found: error
