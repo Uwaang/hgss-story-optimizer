@@ -4292,6 +4292,17 @@ async function cmdRouteExpStoryCompletionRollout() {
     Number.isFinite(childCandidateLimitRaw) && childCandidateLimitRaw > 0
       ? childCandidateLimitRaw
       : null;
+  const parentShardCount = Math.max(
+    1,
+    Math.floor(Number(arg('parent-shard-count', '1'))),
+  );
+  const parentShardIndex = Math.max(
+    0,
+    Math.floor(Number(arg('parent-shard-index', '0'))),
+  );
+  if (parentShardIndex >= parentShardCount) {
+    throw new Error('parent-shard-index must be < parent-shard-count');
+  }
 
   const byKey = stagedCandidateMap(ctx);
   const screened = (checkpoint.screenedKeys || []).map(key => {
@@ -4331,9 +4342,13 @@ async function cmdRouteExpStoryCompletionRollout() {
       [...b.teamKeys].sort().join('|')
     );
   });
-  const parents = parentLimit
+  const parentPool = parentLimit
     ? orderedParents.slice(0, parentLimit)
     : orderedParents;
+  const parents = parentPool.filter(parent =>
+    stagedShardIndex(completionTeamKey(parent.teamKeys || []), parentShardCount) ===
+      parentShardIndex
+  );
 
   const childCandidates = childCandidateLimit
     ? screened.slice(0, childCandidateLimit)
@@ -4401,7 +4416,10 @@ async function cmdRouteExpStoryCompletionRollout() {
     runs,
     confirmRuns,
     sourceParentCount: sourceParents.length,
+    selectedParentPoolCount: parentPool.length,
     evaluatedParentCount: parents.length,
+    parentShardCount,
+    parentShardIndex,
     screenedCandidateCount: screened.length,
     rolloutCandidateCount: childCandidates.length,
     uniqueChildren: ranked.uniqueChildren,
@@ -4409,6 +4427,154 @@ async function cmdRouteExpStoryCompletionRollout() {
     battleCache: battleCacheStats(),
     rows: ranked.rows,
     confirmedRows,
+  }, null, 2));
+}
+
+
+async function cmdRouteExpStoryCompletionRolloutMerge() {
+  const startedAt = Date.now();
+  const ctx = await loadStagedRouteContext();
+  const checkpoint = await readJsonPath(arg('input', ''));
+  stagedCheckpointCompatibility(checkpoint, ctx);
+  const inputs = stagedInputPaths(arg('inputs', ''));
+  const beamWidth = Math.max(1, Math.floor(Number(arg('beam-width', '16'))));
+  if (!inputs.length) {
+    throw new Error('route-exp-story-completion-rollout-merge requires --inputs');
+  }
+
+  const expectedFingerprint = stagedRouteSearchFingerprint(ctx);
+  const sourceBeam = checkpoint.beam || [];
+  if (!sourceBeam.length) {
+    throw new Error('completion-rollout-merge checkpoint beam is empty');
+  }
+  const sourceByKey = new Map(
+    sourceBeam.map(row => [completionTeamKey(row.teamKeys || []), row])
+  );
+  const rowsByKey = new Map();
+  let shardUniqueChildren = 0;
+  const shardAudit = [];
+
+  for (const input of inputs) {
+    const doc = await readJsonPath(input);
+    if (doc?.fingerprint !== expectedFingerprint) {
+      throw new Error(
+        'completion-rollout shard fingerprint mismatch for ' + input +
+        ': expected ' + expectedFingerprint + ', got ' +
+        String(doc?.fingerprint || 'missing')
+      );
+    }
+    shardUniqueChildren += Number(doc?.uniqueChildren || 0);
+    shardAudit.push({
+      input,
+      parentShardCount: Number(doc?.parentShardCount || 1),
+      parentShardIndex: Number(doc?.parentShardIndex || 0),
+      evaluatedParentCount: Number(doc?.evaluatedParentCount || 0),
+      uniqueChildren: Number(doc?.uniqueChildren || 0),
+    });
+    for (const row of doc?.rows || []) {
+      const key = completionTeamKey(row?.teamKeys || []);
+      if (!key) continue;
+      if (!sourceByKey.has(key)) {
+        throw new Error('completion-rollout returned unknown parent: ' + key);
+      }
+      if (!row?.currentMetrics || !row?.bestChild?.metrics) {
+        throw new Error('completion-rollout parent missing metrics: ' + key);
+      }
+      if (rowsByKey.has(key)) {
+        throw new Error('completion-rollout duplicate parent across shards: ' + key);
+      }
+      rowsByKey.set(key, row);
+    }
+  }
+
+  const missing = [...sourceByKey.keys()].filter(key => !rowsByKey.has(key));
+  if (missing.length) {
+    throw new Error(
+      'completion-rollout-merge missing parent(s): ' + missing.join(', ')
+    );
+  }
+
+  const selection = selectCompletionAwareParents(
+    [...sourceByKey.entries()].map(([key, source]) => {
+      const row = rowsByKey.get(key);
+      const currentMetrics = row.currentMetrics;
+      const completionMetrics = row.bestChild.metrics;
+      return {
+        key,
+        teamKeys: source.teamKeys,
+        currentMetrics,
+        completionMetrics,
+        requestedAddedKey: row.bestChild.addedKey || null,
+        improvement: {
+          retry:
+            Number(currentMetrics.retry) - Number(completionMetrics.retry),
+          geometric:
+            Number(completionMetrics.geometric) - Number(currentMetrics.geometric),
+          mean:
+            Number(completionMetrics.mean) - Number(currentMetrics.mean),
+          progress:
+            Number(completionMetrics.progress) - Number(currentMetrics.progress || 0),
+        },
+      };
+    }),
+    beamWidth,
+  );
+
+  const selectionByKey = new Map(selection.rows.map(row => [row.key, row]));
+  const beam = selection.selectedKeys.map(key => {
+    const original = sourceByKey.get(key);
+    const selected = selectionByKey.get(key);
+    return {
+      ...original,
+      completionSelection: {
+        currentRank: selected.currentRank,
+        completionRank: selected.completionRank,
+        selectionLayer: selected.selectionLayer,
+        requestedAddedKey: selected.requestedAddedKey,
+        currentMetrics: selected.currentMetrics,
+        completionMetrics: selected.completionMetrics,
+        improvement: selected.improvement,
+      },
+    };
+  });
+
+  console.log(JSON.stringify({
+    ...checkpoint,
+    type: 'route-search-checkpoint',
+    stage: String(checkpoint.stage || 'beam') + '-completion-rollout-select',
+    beam,
+    timings: [
+      ...(checkpoint.timings || []),
+      {
+        stage: 'completion-rollout-select',
+        wallMs: Date.now() - startedAt,
+        sourceParents: sourceBeam.length,
+        rolloutParents: rowsByKey.size,
+        selectedParents: beam.length,
+        beamWidth,
+      },
+    ],
+    completionAwareSelection: {
+      policy: 'current-rank-x-one-step-completion-rank-pareto-v1',
+      beamWidth,
+      sourceParentCount: sourceBeam.length,
+      rolloutParentCount: rowsByKey.size,
+      shardUniqueChildren,
+      shardAudit,
+      selectedKeys: selection.selectedKeys,
+      rows: selection.rows.map(row => ({
+        key: row.key,
+        teamKeys: row.teamKeys,
+        currentRank: row.currentRank,
+        completionRank: row.completionRank,
+        selectionLayer: row.selectionLayer,
+        selected: row.selected,
+        requestedAddedKey: row.requestedAddedKey,
+        currentMetrics: row.currentMetrics,
+        completionMetrics: row.completionMetrics,
+        improvement: row.improvement,
+      })),
+    },
   }, null, 2));
 }
 
@@ -17607,6 +17773,7 @@ const commands = {
   'completion-aware-selector-smoke': cmdCompletionAwareSelectorSmoke,
   'route-risk-grind-selector-smoke': cmdRouteRiskGrindSelectorSmoke,
   'route-exp-story-completion-rollout': cmdRouteExpStoryCompletionRollout,
+  'route-exp-story-completion-rollout-merge': cmdRouteExpStoryCompletionRolloutMerge,
   'route-exp-story-completion-select': cmdRouteExpStoryCompletionSelect,
   'route-exp-story-beam-shard': cmdRouteExpStoryBeamShard,
   'route-exp-story-selective-rescore-shard': cmdRouteExpStorySelectiveRescoreShard,
