@@ -174,7 +174,7 @@ function routeRiskGeometricScore(evaluation) {
   return storyClearGeometricScore(routeRiskActiveRows(evaluation));
 }
 
-function routeRiskExpectedRetryFailures(evaluation) {
+function routeRiskLegacyExpectedRetryFailures(evaluation) {
   return routeRiskActiveRows(evaluation).reduce((sum, row) => {
     const p = routeRiskRowProbability(row);
     return sum + (1 - p) / p;
@@ -191,6 +191,19 @@ const ROUTE_E4_CHAIN_GROUPS = [
     labels: ['Will 2', 'Koga 2', 'Bruno 2', 'Karen 2', 'Lance 2'],
   },
 ];
+
+function routeE4MoveAccessStageByLabel(routeBosses) {
+  const map = new Map();
+  const byLabel = new Map((routeBosses || []).map(boss => [String(boss.label), boss]));
+  for (const group of ROUTE_E4_CHAIN_GROUPS) {
+    const entry = byLabel.get(group.labels[0]);
+    if (!entry) continue;
+    for (const label of group.labels) {
+      if (byLabel.has(label)) map.set(label, Number(entry.stage));
+    }
+  }
+  return map;
+}
 
 function routeRiskE4GroupedRetryDiagnostics(evaluation, chainOverrides = {}) {
   const rows = routeRiskActiveRows(evaluation);
@@ -236,7 +249,7 @@ function routeRiskE4GroupedRetryDiagnostics(evaluation, chainOverrides = {}) {
     const p = routeRiskRowProbability(row);
     nonChainRetry += (1 - p) / p;
   }
-  const legacyRetry = routeRiskExpectedRetryFailures(evaluation);
+  const legacyRetry = routeRiskLegacyExpectedRetryFailures(evaluation);
   return {
     legacyRetry,
     nonChainRetry,
@@ -246,6 +259,16 @@ function routeRiskE4GroupedRetryDiagnostics(evaluation, chainOverrides = {}) {
     note:
       'second-E4 marginal-product is a fresh-inventory approximation unless an inventory-DP override is supplied',
   };
+}
+
+function routeRiskExpectedRetryFailures(evaluation) {
+  if (evaluation?.e4GroupedRouteRisk) {
+    return routeRiskE4GroupedRetryDiagnostics(
+      evaluation,
+      evaluation?.e4ChainProbabilityOverrides || {},
+    ).groupedRetry;
+  }
+  return routeRiskLegacyExpectedRetryFailures(evaluation);
 }
 
 function routeRiskMeanRetryFailures(evaluation) {
@@ -1042,6 +1065,10 @@ function summarizeMemberUsage(candidates, rows) {
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
+  const e4GroupedRouteRisk = Boolean(battleOptions?.e4GroupedRouteRisk);
+  const e4MoveAccessStages = e4GroupedRouteRisk
+    ? routeE4MoveAccessStageByLabel(routeBosses)
+    : new Map();
   const requestedBossLabels = Array.isArray(battleOptions?.bossLabels)
     ? new Set(battleOptions.bossLabels.map(String))
     : null;
@@ -1115,6 +1142,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         purchasablePlan,
         levelsByBattle,
         speciesByBattle,
+        e4MoveAccessStages,
       )
     : {};
   const candidatesByKey = new Map(
@@ -1144,6 +1172,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         levelsByCandidate,
         speciesByCandidate,
         boss,
+        moveAccessStage: e4MoveAccessStages.get(String(boss.label)),
       },
     );
     const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
@@ -1158,6 +1187,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             purchasablePlan,
             [levelsByCandidate || {}],
             [speciesByCandidate || {}],
+            e4MoveAccessStages,
           )
         : routeBuildPlan;
       playerTeam = playerTeam.map(mon => {
@@ -1166,10 +1196,14 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         const build = activeBuildPlan[key];
         let built = applyPlayerRouteBuild(mon, build);
         if (candidate && build?.routeMoves) {
+          const frozenStage = e4MoveAccessStages.get(String(boss.label));
+          const moveBoss = Number.isFinite(Number(frozenStage))
+            ? { ...boss, stage: Number(frozenStage) }
+            : boss;
           built = equalLevelRouteMovesAtStage(
             built,
             candidate,
-            boss,
+            moveBoss,
             moveAccess,
             singleUsePlan,
             purchasablePlan,
@@ -1304,6 +1338,10 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     routeBuildOptimization,
     routeBuildScope,
     routeBuildPlan,
+    e4GroupedRouteRisk,
+    e4GroupedRouteRiskMode: e4GroupedRouteRisk
+      ? 'same-policy-marginal-product-screen'
+      : 'legacy-independent-boss',
     purchaseCosts,
     resourceBudget,
     memberUsage,
@@ -3608,6 +3646,7 @@ async function cmdRouteExpStorySearch() {
   const battleOptions = {
     p1AiMode: 'smart',
     routeBuildOptimization: true,
+    e4GroupedRouteRisk,
     routeGrindProxy,
     routeGrindProxyTarget,
   };
@@ -3671,7 +3710,7 @@ async function cmdRouteExpStorySearch() {
 
 
 const STAGED_ROUTE_SEARCH_SCHEMA_VERSION = 2;
-const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-progression-safe-complete-v2-terminal-grind';
+const STAGED_ROUTE_SEARCH_SEMANTICS_VERSION = 'route-risk-progression-safe-complete-v3-optional-e4-grouped';
 
 function canonicalFingerprintValue(value) {
   if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
@@ -3764,6 +3803,7 @@ async function loadStagedRouteContext() {
   const sameStageJoinPolicy = normalizeSameStageJoinPolicy(arg('same-stage-join', 'map-order'));
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const objective = normalizeSearchObjective(arg('objective', 'route-risk'));
+  const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -3823,6 +3863,7 @@ async function loadStagedRouteContext() {
     sameStageJoinPolicy,
     expAllocator,
     objective,
+    e4GroupedRouteRisk,
     routeGrindProxy,
     routeGrindProxyTarget,
     excludedOrigins,
@@ -3855,6 +3896,7 @@ function stagedConfigSnapshot(ctx) {
     sameStageJoinPolicy: ctx.sameStageJoinPolicy,
     expAllocator: ctx.expAllocator,
     objective: ctx.objective,
+    e4GroupedRouteRisk: Boolean(ctx.e4GroupedRouteRisk),
     routeGrindProxy: ctx.routeGrindProxy,
     routeGrindProxyTarget: ctx.routeGrindProxyTarget,
     ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
@@ -6436,6 +6478,7 @@ async function cmdRouteExpStoryEvaluate() {
   const resourceProfile = normalizeResourceProfile(arg('resources', 'all'));
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '4'))));
+  const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -6558,6 +6601,7 @@ async function cmdRouteExpStoryEvaluate() {
       p1AiMode: 'smart',
       routeBuildOptimization: true,
       routeBuildScope: buildScope,
+      e4GroupedRouteRisk,
       bossLabels: bossLabels.length ? bossLabels : null,
       routeGrindProxy,
       routeGrindProxyTarget,
@@ -12370,6 +12414,7 @@ function buildRouteExpRouteBuildPlan(
   purchasablePlan,
   levelsByBattle,
   speciesByBattle = null,
+  moveAccessStageByLabel = null,
 ) {
   const plan = {};
   for (const candidate of candidates) {
@@ -12390,6 +12435,7 @@ function buildRouteExpRouteBuildPlan(
           levelsByCandidate: levels,
           speciesByCandidate: speciesByBattle?.[bossIndex] || null,
           boss,
+          moveAccessStage: moveAccessStageByLabel?.get(String(boss.label)),
         },
       )[0];
       if (!mon) continue;
@@ -12423,10 +12469,14 @@ function buildRouteExpRouteBuildPlan(
 
     const refinedSamples = samples.map(sample => {
       let mon = applyPlayerRouteBuild(sample.mon, build);
+      const frozenStage = moveAccessStageByLabel?.get(String(sample.boss.label));
+      const moveBoss = Number.isFinite(Number(frozenStage))
+        ? { ...sample.boss, stage: Number(frozenStage) }
+        : sample.boss;
       mon = equalLevelRouteMovesAtStage(
         mon,
         candidate,
-        sample.boss,
+        moveBoss,
         moveAccess,
         singleUsePlan,
         purchasablePlan,
