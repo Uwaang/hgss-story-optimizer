@@ -12118,6 +12118,112 @@ function optimizeEqualLevelHeldItemTeam(team, enemyTeam, boss) {
   };
 }
 
+
+const E4_SEQUENTIAL_CONSUMABLE_POLICY = {
+  // Sitrus/Lum can be stockpiled repeatedly via HGSS shard exchange / Berry Pots.
+  // Focus Sash is repeatable for 48 BP, but BP farming is outside the current
+  // route resource model. Keep one guaranteed/prepared copy as the conservative
+  // baseline rather than granting free unlimited BP purchases.
+  renewable: new Set(['Sitrus Berry', 'Lum Berry']),
+  finiteInitial: { 'Focus Sash': 1 },
+};
+
+function sequentialHeldItemInventory() {
+  return {
+    renewable: new Set(E4_SEQUENTIAL_CONSUMABLE_POLICY.renewable),
+    finite: { ...E4_SEQUENTIAL_CONSUMABLE_POLICY.finiteInitial },
+  };
+}
+
+function sequentialItemAvailable(inventory, item) {
+  if (!item) return true;
+  if (inventory?.renewable?.has(item)) return true;
+  if (Object.prototype.hasOwnProperty.call(inventory?.finite || {}, item)) {
+    return Number(inventory.finite[item] || 0) > 0;
+  }
+  return true;
+}
+
+function optimizeSequentialHeldItemTeam(team, enemyTeam, boss, inventory) {
+  const policy = equalLevelHeldItemPolicy(boss?.stage);
+  if (policy.items.length === 1 && policy.items[0] === '') {
+    return { team: team.map(mon => ({ ...mon, item: '' })), policy };
+  }
+  const allowed = policy.items.filter(item => sequentialItemAvailable(inventory, item));
+  const bannedBySlot = team.map(() => new Set());
+
+  function buildSlot(index, extraExcluded = []) {
+    const excluded = new Set([...bannedBySlot[index], ...extraExcluded]);
+    const items = allowed.filter(item => !excluded.has(item));
+    return optimizePlayerHeldItemForBoss(team[index], enemyTeam, { items });
+  }
+
+  const built = team.map((_, index) => buildSlot(index));
+  const caps = {
+    ...(policy.finiteCaps || {}),
+    ...Object.fromEntries(
+      Object.entries(inventory?.finite || {}).map(([item, count]) => [
+        item,
+        Math.max(0, Number(count || 0)),
+      ])
+    ),
+  };
+  for (const [item, capRaw] of Object.entries(caps)) {
+    const cap = Math.max(0, Number(capRaw || 0));
+    const holders = built
+      .map((mon, index) => ({ mon, index }))
+      .filter(entry => entry.mon.item === item);
+    if (holders.length <= cap) continue;
+    const ranked = holders.map(entry => {
+      const alternative = buildSlot(entry.index, [item]);
+      return {
+        ...entry,
+        alternative,
+        loss: Number(entry.mon._heldItemOptimization?.proxyScore || 0) -
+          Number(alternative._heldItemOptimization?.proxyScore || 0),
+      };
+    }).sort((a, b) =>
+      Number(b.loss) - Number(a.loss) ||
+      String(a.mon.species).localeCompare(String(b.mon.species))
+    );
+    const keep = new Set(ranked.slice(0, cap).map(entry => entry.index));
+    for (const entry of ranked) {
+      if (keep.has(entry.index)) continue;
+      bannedBySlot[entry.index].add(item);
+      built[entry.index] = buildSlot(entry.index);
+    }
+  }
+  return {
+    team: built,
+    policy: {
+      ...policy,
+      sequentialInventory: {
+        renewable: [...(inventory?.renewable || [])],
+        finite: { ...(inventory?.finite || {}) },
+      },
+      selected: Object.fromEntries(
+        built.map(mon => [mon._candidateKey || mon.species, mon.item || ''])
+      ),
+    },
+  };
+}
+
+function applySequentialConsumableEvents(inventory, events = []) {
+  const consumed = [];
+  for (const event of events || []) {
+    const item = String(event?.item || '');
+    if (!item || inventory?.renewable?.has(item)) continue;
+    if (!Object.prototype.hasOwnProperty.call(inventory?.finite || {}, item)) continue;
+    const tags = (event?.tags || []).map(String);
+    if (tags.some(tag => /knock off/i.test(tag))) continue;
+    const before = Math.max(0, Number(inventory.finite[item] || 0));
+    if (before <= 0) continue;
+    inventory.finite[item] = before - 1;
+    consumed.push({ item, key: event.key || null, before, after: before - 1, tags });
+  }
+  return consumed;
+}
+
 function equalLevelRouteMovesAtStage(
   mon,
   candidate,
@@ -16526,12 +16632,9 @@ async function cmdE4SequentialCompare() {
   const teamPreset = String(arg('team-preset', 'staged-fallback')).trim().toLowerCase();
   const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
 
-  if (chain !== 'first' && chain !== 'e4-1' && chain !== '1') {
-    throw new Error(
-      'e4-sequential-compare currently implements route-realistic first E4 only; ' +
-      'second-E4 chain extraction is covered separately until held-item inventory semantics are finalized'
-    );
-  }
+  const normalizedChain = (chain === 'second' || chain === 'e4-2' || chain === '2')
+    ? 'second'
+    : 'first';
   if (version !== 'HEARTGOLD') {
     throw new Error('e4-sequential-compare currently supports HEARTGOLD only');
   }
@@ -16640,9 +16743,9 @@ async function cmdE4SequentialCompare() {
           build.routeMoveOptimization?.bannedMoves || [],
         );
       }
-      // First-E4 story policy intentionally has no held-item optimization before
-      // stage20, so this is exact for the current route model and avoids silently
-      // granting renewable consumables before the inventory audit.
+      // Held items are assigned dynamically per run/boss for E4-2 because
+      // consumable inventory can depend on prior battles. E4-1 remains itemless
+      // under the conservative pre-stage20 story policy.
       return { ...built, item: '' };
     });
     return {
@@ -16664,23 +16767,43 @@ async function cmdE4SequentialCompare() {
   for (let run = 0; run < runs; run += 1) {
     const battles = [];
     let complete = true;
+    const inventory = sequentialHeldItemInventory();
     for (let index = 0; index < prepared.length; index += 1) {
       const row = prepared[index];
       const label = String(row.boss.label);
       reached[label] += 1;
+      const held = normalizedChain === 'second'
+        ? optimizeSequentialHeldItemTeam(row.playerTeam, row.enemyTeam, row.boss, inventory)
+        : {
+            team: row.playerTeam.map(mon => ({ ...mon, item: '' })),
+            policy: equalLevelHeldItemPolicy(row.boss.stage),
+          };
       const result = await runBattle(
-        row.playerTeam,
+        held.team,
         row.enemyTeam,
         8800001 + seedOffset + run * 100 + index,
         {
           p2Trainer: row.boss,
           p1AiMode: 'smart',
           e4Sequential: true,
-          e4Chain: 'first',
+          e4Chain: normalizedChain,
           e4ChainIndex: index,
         },
       );
-      battles.push({ boss: label, ...compactSequentialBattleResult(result) });
+      const consumed = applySequentialConsumableEvents(
+        inventory,
+        result.p1EndItemEvents || [],
+      );
+      battles.push({
+        boss: label,
+        heldItems: held.policy?.selected || {},
+        inventoryAfter: {
+          renewable: [...inventory.renewable],
+          finite: { ...inventory.finite },
+        },
+        consumed,
+        ...compactSequentialBattleResult(result),
+      });
       if (result.winner !== 'Player') {
         failedAt[label] += 1;
         complete = false;
@@ -16733,8 +16856,8 @@ async function cmdE4SequentialCompare() {
 
   console.log(JSON.stringify({
     schemaVersion: 1,
-    purpose: 'SCRUM-422 first-E4 sequential-clear foundation compare',
-    chain: 'first',
+    purpose: 'SCRUM-422 E4 sequential-clear compare',
+    chain: normalizedChain,
     policy: {
       betweenBattles: {
         hp: 'full-recovery',
@@ -16744,7 +16867,9 @@ async function cmdE4SequentialCompare() {
         partyOrder: 'may-change',
       },
       moves: 'route target set fixed at E4 entry; only natural level/species progression may unlock target moves',
-      heldItems: 'disabled for first-E4 under current conservative story held-item policy',
+      heldItems: normalizedChain === 'first'
+        ? 'disabled for first-E4 under current conservative story held-item policy'
+        : 'boss-specific swaps; renewable Sitrus/Lum reserve, one conservative Focus Sash copy; consumed finite items persist across chain',
       expAndEvolution: 'persist via route EXP checkpoint snapshots',
       evs: 'project-fixed; no chain accumulation',
       bagInBattle: 'forbidden',
