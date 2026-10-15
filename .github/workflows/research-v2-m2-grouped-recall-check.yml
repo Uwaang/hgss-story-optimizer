@@ -1,0 +1,221 @@
+name: research-v2-m2-grouped-recall-check
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-grouped-recall]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-coordinate-endpoints15
+          path: hgss_story_sim/results/legacy-endpoints
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38610537965
+          github-token: ${{ github.token }}
+      - name: Restamp old coordinate endpoints under grouped-E4 semantics
+        run: |
+          set -euo pipefail
+          mkdir -p results/grouped-recall
+          CHECKPOINT="$(find results/legacy-endpoints -name checkpoint.json -type f | head -n 1)"
+          test -n "$CHECKPOINT"
+          node --input-type=module "$CHECKPOINT" <<'NODE'
+          import fs from 'node:fs';
+          const input=process.argv[2];
+          const doc=JSON.parse(fs.readFileSync(input,'utf8'));
+          const fallback=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+            'Onix::Steelix->Steelix#1',
+            'Sneasel::Sneasel->Weavile#1',
+          ];
+          const key=xs=>[...xs].sort().join('|');
+          const rows=[...(doc.beam||[]),{teamKeys:fallback,evaluation:null}];
+          const unique=new Map(rows.map(row=>[key(row.teamKeys||[]),{teamKeys:row.teamKeys,evaluation:null}]));
+          const out={
+            ...doc,
+            fingerprint:null,
+            config:{},
+            beam:[...unique.values()],
+            timings:[
+              ...(doc.timings||[]),
+              {
+                stage:'m2-grouped-recall-restamp-source',
+                sourceRun:38610537965,
+                sourceArtifact:'research-v2-coordinate-endpoints15',
+                addedControl:'staged-fallback',
+                sourceTeams:(doc.beam||[]).length,
+                combinedTeams:unique.size,
+              },
+            ],
+          };
+          fs.writeFileSync('results/grouped-recall/unstamped.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            sourceTeams:(doc.beam||[]).length,
+            combinedTeams:unique.size,
+            fallbackAlreadyPresent:(doc.beam||[]).some(row=>key(row.teamKeys||[])===key(fallback)),
+          },null,2));
+          NODE
+          node src/cli.mjs route-exp-story-stamp-checkpoint \
+            --input=results/grouped-recall/unstamped.json --allow-legacy=true \
+            $SEARCH_ARGS > results/grouped-recall/checkpoint.json
+          jq -e '.config.e4GroupedRouteRisk == true' results/grouped-recall/checkpoint.json
+          jq '{fingerprint,teamCount:(.beam|length),config}' results/grouped-recall/checkpoint.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-grouped-recall-checkpoint
+          path: hgss_story_sim/results/grouped-recall/checkpoint.json
+          if-no-files-found: error
+
+  rescore:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m2-grouped-recall-checkpoint
+          path: hgss_story_sim/results/input
+      - name: Grouped-E4 rescore
+        run: |
+          set -euo pipefail
+          mkdir -p results/rescore
+          node src/cli.mjs route-exp-story-rescore-shard \
+            --input=results/input/checkpoint.json --runs=16 \
+            --shard-count=4 --shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rescore/shard-${{ matrix.shard }}.json"
+          jq -e '[.rescored[].evaluation.e4GroupedRouteRisk] | all' "results/rescore/shard-${{ matrix.shard }}.json"
+          jq '{shardIndex,rescoredCount,grouped:[.rescored[].evaluation.e4GroupedRouteRisk]|unique}' "results/rescore/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-grouped-recall-shard-${{ matrix.shard }}
+          path: hgss_story_sim/results/rescore/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: rescore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m2-grouped-recall-checkpoint
+          path: hgss_story_sim/results/input
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m2-grouped-recall-shard-*
+          path: hgss_story_sim/results/rescored
+          merge-multiple: true
+      - name: Merge and report recall
+        run: |
+          set -euo pipefail
+          INPUTS="$(find results/rescored -name 'shard-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-rescore-merge \
+            --input=results/input/checkpoint.json --inputs="$INPUTS" --runs=16 \
+            $SEARCH_ARGS > results/grouped-recall-final16.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const doc=JSON.parse(fs.readFileSync('results/grouped-recall-final16.json','utf8'));
+          const fallback=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+            'Onix::Steelix->Steelix#1',
+            'Sneasel::Sneasel->Weavile#1',
+          ];
+          const key=xs=>[...xs].sort().join('|');
+          const rows=doc.top||[];
+          const fallbackIndex=rows.findIndex(row=>key(row.teamKeys||[])===key(fallback));
+          if (fallbackIndex < 0) throw new Error('staged fallback missing from grouped recall result');
+          if (doc?.config?.e4GroupedRouteRisk !== true) throw new Error('merged result is not grouped-E4');
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-422 corrected-objective search/recall check',
+            sourceCoordinateRun:38610537965,
+            runsPerBoss:16,
+            candidateTeams:rows.length,
+            groupedMode:doc.config.e4GroupedRouteRisk,
+            fallbackRank:fallbackIndex+1,
+            fallback:{
+              team:rows[fallbackIndex].team,
+              retry:rows[fallbackIndex].routeExpectedRetryFailures,
+              geometric:rows[fallbackIndex].routeRiskGeometricScore,
+              mean:rows[fallbackIndex].routeRiskMeanWinRate,
+              grindBattles:rows[fallbackIndex].routeGrindProxy?.expectedBattles ?? null,
+            },
+            best:rows.slice(0,5).map((row,index)=>({
+              rank:index+1,
+              team:row.team,
+              teamKeys:row.teamKeys,
+              retry:row.routeExpectedRetryFailures,
+              geometric:row.routeRiskGeometricScore,
+              mean:row.routeRiskMeanWinRate,
+              grindBattles:row.routeGrindProxy?.expectedBattles ?? null,
+            })),
+            note:'16-run recall/sanity check only; high-sample M2 posterior/DP evidence remains authoritative for finalist ordering.',
+          };
+          fs.writeFileSync('results/grouped-recall-summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-grouped-recall-summary
+          path: |
+            hgss_story_sim/results/grouped-recall-final16.json
+            hgss_story_sim/results/grouped-recall-summary.json
+          if-no-files-found: error
