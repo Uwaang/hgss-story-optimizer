@@ -3847,6 +3847,7 @@ async function loadStagedRouteContext() {
   const battleOptions = {
     p1AiMode: 'smart',
     routeBuildOptimization: true,
+    e4GroupedRouteRisk,
     routeGrindProxy,
     routeGrindProxyTarget,
   };
