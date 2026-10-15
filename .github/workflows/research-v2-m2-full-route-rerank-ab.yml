@@ -1,0 +1,159 @@
+name: research-v2-m2-full-route-rerank-ab
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-route-rerank-ab]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - label: staged-fallback
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            schedule_b64: ""
+          - label: coordinate-best
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            schedule_b64: ""
+          - label: scheduler-story-min
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: scheduler-red25-min
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: scheduler-red50-min
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Full-route 100-run evaluation
+        env:
+          LABEL: ${{ matrix.label }}
+          TEAM_KEYS: ${{ matrix.team_keys }}
+          SCHEDULE_B64: ${{ matrix.schedule_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p results/m2-rerank
+          args=(
+            src/cli.mjs route-exp-story-evaluate
+            --route-profile=complete
+            --version=HEARTGOLD
+            --starter=Cyndaquil
+            --evolution-policy=trade-aware
+            --exp-profile=normal-route
+            --grind-policy=none
+            --exp-allocator=boss-aware-soft
+            --entry-level=expected
+            --same-stage-join=map-order
+            --resources=all
+            --spend-policy=natural
+            --build-scope=route
+            --runs=100
+            --team-keys="$TEAM_KEYS"
+          )
+          if [[ -n "$SCHEDULE_B64" ]]; then
+            args+=(--recipient-schedule-base64="$SCHEDULE_B64")
+          fi
+          node "${args[@]}" > "results/m2-rerank/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m2-rerank/'+label+'.json','utf8'));
+          const e4Labels=new Set(['Will','Koga','Bruno','Karen','Lance','Will 2','Koga 2','Bruno 2','Karen 2','Lance 2']);
+          const p = x => (Number(x.winRate)*100+1)/(102);
+          let nonE4Retry=0, legacyE4Retry=0;
+          const e4={first:[],second:[]};
+          for(const row of d.checkpoints||[]){
+            const prob=Math.max(1e-12,Math.min(1-1e-12,p(row)));
+            const retry=(1-prob)/prob;
+            if(e4Labels.has(row.boss)){
+              legacyE4Retry+=retry;
+              (row.boss.includes(' 2')?e4.second:e4.first).push({boss:row.boss,winRate:row.winRate,posteriorP:prob,retry});
+            } else nonE4Retry+=retry;
+          }
+          console.log(JSON.stringify({
+            label,
+            recipientSchedule:d.assumptions?.recipientSchedule||{},
+            legacyTotalRetry:d.performance?.routeExpectedRetryFailures,
+            nonE4Retry,
+            legacyE4Retry,
+            groupedDiagnostic:d.performance?.e4GroupedRetryDiagnostic,
+            firstE4Rows:e4.first,
+            secondE4Rows:e4.second
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-route-rerank-${{ matrix.label }}
+          path: hgss_story_sim/results/m2-rerank/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: evaluate
+    if: always() && needs.evaluate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m2-route-rerank-*
+          path: hgss_story_sim/results/m2-rerank
+          merge-multiple: true
+      - run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m2-rerank';
+          const e4Labels=new Set(['Will','Koga','Bruno','Karen','Lance','Will 2','Koga 2','Bruno 2','Karen 2','Lance 2']);
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            let nonE4Retry=0, legacyE4Retry=0;
+            for(const row of d.checkpoints||[]){
+              const p=Math.max(1e-12,Math.min(1-1e-12,(Number(row.winRate)*100+1)/102));
+              const retry=(1-p)/p;
+              if(e4Labels.has(row.boss)) legacyE4Retry+=retry;
+              else nonE4Retry+=retry;
+            }
+            return {
+              label:file.replace(/\.json$/,''),
+              recipientSchedule:d.assumptions?.recipientSchedule||{},
+              legacyTotalRetry:Number(d.performance?.routeExpectedRetryFailures),
+              nonE4Retry,
+              legacyE4Retry,
+              groupedDiagnostic:d.performance?.e4GroupedRetryDiagnostic
+            };
+          });
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify({schemaVersion:1,rows},null,2));
+          console.log(JSON.stringify({rows},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-route-rerank-summary
+          path: hgss_story_sim/results/m2-rerank/summary.json
+          if-no-files-found: error
