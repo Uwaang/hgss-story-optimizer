@@ -818,6 +818,9 @@ export function candidateBossUtility(candidate, boss, level) {
 
 export function materializeCandidateTeam(candidates, stage, level, options = {}) {
   const moveAccess = options.moveAccess || null;
+  const moveAccessStage = Number.isFinite(Number(options.moveAccessStage))
+    ? Number(options.moveAccessStage)
+    : Number(stage);
   const singleUsePlan = options.singleUsePlan || {};
   const purchasablePlan = options.purchasablePlan || {};
   const levelsByCandidate = options.levelsByCandidate || null;
@@ -845,7 +848,14 @@ export function materializeCandidateTeam(candidates, stage, level, options = {})
       ];
       const moves = Array.isArray(mon.moves) && mon.moves.length
         ? mon.moves
-        : selectCandidateMoves(species.name, candidateLevel, stage, moveAccess, assignedMachines, mon.species);
+        : selectCandidateMoves(
+            species.name,
+            candidateLevel,
+            moveAccessStage,
+            moveAccess,
+            assignedMachines,
+            mon.species,
+          );
       return {
         _candidateKey: key,
         name: species.name,
