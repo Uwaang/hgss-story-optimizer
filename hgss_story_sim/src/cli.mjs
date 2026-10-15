@@ -16758,6 +16758,42 @@ async function cmdE4SequentialCompare() {
     };
   });
 
+  const policyMarginalRows = [];
+  for (let index = 0; index < prepared.length; index += 1) {
+    const row = prepared[index];
+    const freshInventory = sequentialHeldItemInventory();
+    const held = normalizedChain === 'second'
+      ? optimizeSequentialHeldItemTeam(row.playerTeam, row.enemyTeam, row.boss, freshInventory)
+      : {
+          team: row.playerTeam.map(mon => ({ ...mon, item: '' })),
+          policy: equalLevelHeldItemPolicy(row.boss.stage),
+        };
+    const marginal = await simulateMatchup(
+      held.team,
+      row.enemyTeam,
+      runs,
+      8900001 + seedOffset + index * 100000,
+      {
+        p2Trainer: row.boss,
+        p1AiMode: 'smart',
+        e4SequentialPolicyMarginal: true,
+        e4Chain: normalizedChain,
+        e4ChainIndex: index,
+      },
+    );
+    policyMarginalRows.push({
+      boss: String(row.boss.label),
+      wins: Number(marginal.wins || 0),
+      runs: Number(marginal.runs || runs),
+      winRate: Number(marginal.winRate || 0),
+      heldItems: held.policy?.selected || {},
+    });
+  }
+  const policyMarginalProduct = policyMarginalRows.reduce(
+    (product, row) => product * Number(row.winRate || 0),
+    1,
+  );
+
   const reached = Object.fromEntries(labels.map(label => [label, 0]));
   const cleared = Object.fromEntries(labels.map(label => [label, 0]));
   const failedAt = Object.fromEntries(labels.map(label => [label, 0]));
@@ -16880,6 +16916,13 @@ async function cmdE4SequentialCompare() {
     independent: {
       rows: independentRows.map(({ moves, ...row }) => row),
       productWinRate: independentProduct,
+    },
+    policyMarginal: {
+      rows: policyMarginalRows,
+      productWinRate: policyMarginalProduct,
+      interpretation: normalizedChain === 'first'
+        ? 'same frozen E4-entry move/item policy as sequential; full recovery makes the product the exact chain model under independent battle RNG'
+        : 'same frozen E4-entry move policy and fresh initial consumable inventory at every boss; comparison baseline for persistent-inventory penalty',
     },
     sequential: {
       clears: chainClears,
