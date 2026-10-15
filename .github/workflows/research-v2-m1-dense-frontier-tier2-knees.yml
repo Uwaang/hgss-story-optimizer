@@ -1,0 +1,361 @@
+name: research-v2-m1-dense-frontier-tier2-knees
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 10
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-m1-tier2-knees]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include:
+          - group: story25
+            label: staged-fallback
+            story_target: "0.25"
+            red_target: ""
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            team_preset: ""
+            schedule_b64: ""
+          - group: story25
+            label: scheduler-story-min
+            story_target: "0.25"
+            red_target: ""
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: story375
+            label: scheduler-story-min
+            story_target: "0.375"
+            red_target: ""
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: story375
+            label: coordinate-best
+            story_target: "0.375"
+            red_target: ""
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            team_preset: ""
+            schedule_b64: ""
+          - group: story625
+            label: scheduler-story-min
+            story_target: "0.625"
+            red_target: ""
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: story625
+            label: scheduler-red50-min
+            story_target: "0.625"
+            red_target: ""
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - group: story625
+            label: scheduler-red25-min
+            story_target: "0.625"
+            red_target: ""
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s25-r125
+            label: coordinate-best
+            story_target: "0.25"
+            red_target: "0.125"
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            team_preset: ""
+            schedule_b64: ""
+          - group: s25-r125
+            label: scheduler-red25-min
+            story_target: "0.25"
+            red_target: "0.125"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s25-r125
+            label: scheduler-story-min
+            story_target: "0.25"
+            red_target: "0.125"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: s50-r375
+            label: scheduler-story-min
+            story_target: "0.5"
+            red_target: "0.375"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: s50-r375
+            label: scheduler-red25-min
+            story_target: "0.5"
+            red_target: "0.375"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s50-r375
+            label: scheduler-red50-min
+            story_target: "0.5"
+            red_target: "0.375"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - group: s50-r50
+            label: scheduler-red25-min
+            story_target: "0.5"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s50-r50
+            label: scheduler-red50-min
+            story_target: "0.5"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - group: s625-r25
+            label: coordinate-best
+            story_target: "0.625"
+            red_target: "0.25"
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            team_preset: ""
+            schedule_b64: ""
+          - group: s625-r25
+            label: scheduler-red50-min
+            story_target: "0.625"
+            red_target: "0.25"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - group: s625-r50
+            label: scheduler-red50-min
+            story_target: "0.625"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - group: s625-r50
+            label: scheduler-red25-min
+            story_target: "0.625"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s625-r50
+            label: scheduler-story-min
+            story_target: "0.625"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: s75-r50
+            label: scheduler-story-min
+            story_target: "0.75"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - group: s75-r50
+            label: scheduler-red25-min
+            story_target: "0.75"
+            red_target: "0.5"
+            team_keys: ""
+            team_preset: "d-quagsire"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - group: s75-r50
+            label: staged-fallback
+            story_target: "0.75"
+            red_target: "0.5"
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            team_preset: ""
+            schedule_b64: ""
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Regression smokes
+        run: |
+          node src/cli.mjs exp-scheduler-v1-smoke
+          node src/cli.mjs exp-scheduler-v1-evolution-trigger-smoke
+      - name: Targeted 64-run knee validation
+        env:
+          GROUP: ${{ matrix.group }}
+          LABEL: ${{ matrix.label }}
+          STORY_TARGET: ${{ matrix.story_target }}
+          RED_TARGET: ${{ matrix.red_target }}
+          TEAM_KEYS: ${{ matrix.team_keys }}
+          TEAM_PRESET: ${{ matrix.team_preset }}
+          SCHEDULE_B64: ${{ matrix.schedule_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p results/m1-tier2
+          args=(
+            src/cli.mjs route-exp-practical-grind
+            --version=HEARTGOLD
+            --starter=Cyndaquil
+            --evolution-policy=trade-aware
+            --exp-profile=normal-route
+            --exp-allocator=boss-aware-soft
+            --entry-level=expected
+            --same-stage-join=map-order
+            --resources=all
+            --spend-policy=natural
+            --story-targets="$STORY_TARGET"
+            --screen-runs=2
+            --verify-runs=8
+            --repair-runs=32
+            --final-runs=64
+            --max-repair-rounds=24
+            --repair-mode=global-only
+            --lean-repair=true
+          )
+          if [[ -n "$RED_TARGET" ]]; then
+            args+=(--red-targets="$RED_TARGET")
+          else
+            args+=(--skip-red=true)
+          fi
+          if [[ -n "$TEAM_KEYS" ]]; then
+            args+=(--team-keys="$TEAM_KEYS")
+          else
+            args+=(--team-preset="$TEAM_PRESET" --recipient-schedule-base64="$SCHEDULE_B64")
+          fi
+          node "${args[@]}" > "results/m1-tier2/${GROUP}__${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const group=process.env.GROUP, label=process.env.LABEL;
+          const file='results/m1-tier2/'+group+'__'+label+'.json';
+          const d=JSON.parse(fs.readFileSync(file,'utf8'));
+          const s=d.storyFrontier?.[0]||{};
+          const r=s.redFrontier?.[0]||null;
+          console.log(JSON.stringify({
+            group,label,
+            storyTarget:s.storyTargetWinRate,
+            storyGrind:s.storyGrindBattles,
+            storyWorst:s.storyWorstBossWinRate,
+            converged:s.repairConverged,
+            repairRounds:s.repairRounds,
+            red:r?{
+              target:r.targetWinRate,
+              totalGrind:r.totalGrindBattles,
+              additional:r.additionalRedGrindBattles,
+              achieved:r.achievedWinRate
+            }:null
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-v2-m1-tier2-${{ matrix.group }}-${{ matrix.label }}
+          path: hgss_story_sim/results/m1-tier2/${{ matrix.group }}__${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m1-tier2-*
+          path: hgss_story_sim/results/m1-tier2
+          merge-multiple: true
+      - name: Summarize validated knees
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m1-tier2';
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).map(file=>{
+            const [group,labelWithExt]=file.split('__');
+            const label=labelWithExt.replace(/\.json$/,'');
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            const s=d.storyFrontier?.[0]||{};
+            const r=s.redFrontier?.[0]||null;
+            return {
+              group,label,
+              storyTarget:Number(s.storyTargetWinRate),
+              storyGrind:Number(s.storyGrindBattles),
+              storyWorst:Number(s.storyWorstBossWinRate),
+              converged:Boolean(s.repairConverged),
+              redTarget:r?Number(r.targetWinRate):null,
+              totalGrind:r?Number(r.totalGrindBattles):null,
+              redAdditional:r?Number(r.additionalRedGrindBattles):null,
+              redAchieved:r?Number(r.achievedWinRate):null
+            };
+          });
+          const groups={};
+          for(const row of rows){
+            (groups[row.group]??=[]).push(row);
+          }
+          const summaries=[];
+          for(const [group,rs] of Object.entries(groups)){
+            const candidates=rs.filter(r=>r.converged).sort((a,b)=>{
+              const av=a.redTarget===null?a.storyGrind:a.totalGrind;
+              const bv=b.redTarget===null?b.storyGrind:b.totalGrind;
+              return av-bv || a.label.localeCompare(b.label);
+            });
+            summaries.push({
+              group,
+              winner:candidates[0]||null,
+              ranking:candidates,
+              gap12:candidates.length>1
+                ? ((candidates[1].redTarget===null?candidates[1].storyGrind:candidates[1].totalGrind) -
+                   (candidates[0].redTarget===null?candidates[0].storyGrind:candidates[0].totalGrind))
+                : null
+            });
+          }
+          summaries.sort((a,b)=>a.group.localeCompare(b.group));
+          const out={
+            schemaVersion:1,
+            purpose:'SCRUM-420 Tier-2 targeted 64-run knee/crossing validation',
+            runs:{screen:2,verify:8,repair:32,final:64},
+            rows,
+            groups:summaries
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({
+            groups:summaries.map(g=>({
+              group:g.group,
+              winner:g.winner?.label??null,
+              storyTarget:g.winner?.storyTarget??null,
+              redTarget:g.winner?.redTarget??null,
+              metric:g.winner?(g.winner.redTarget===null?g.winner.storyGrind:g.winner.totalGrind):null,
+              gap12:g.gap12,
+              ranking:g.ranking.map(r=>({
+                label:r.label,
+                storyGrind:r.storyGrind,
+                totalGrind:r.totalGrind,
+                storyWorst:r.storyWorst,
+                redAchieved:r.redAchieved
+              }))
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m1-tier2-summary
+          path: hgss_story_sim/results/m1-tier2/summary.json
+          if-no-files-found: error
