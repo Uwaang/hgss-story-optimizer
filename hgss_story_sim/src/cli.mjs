@@ -16717,6 +16717,7 @@ async function cmdE4SequentialCompare() {
         levelsByCandidate,
         speciesByCandidate,
         boss,
+        moveAccessStage: Number(entryBoss.stage),
       },
     );
     playerTeam = playerTeam.map(mon => {
