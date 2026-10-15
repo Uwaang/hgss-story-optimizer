@@ -18,7 +18,7 @@ env:
     --entry-level=expected --same-stage-join=map-order
     --resources=all --spend-policy=natural
     --objective=route-risk
-    --route-grind-proxy=false
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
     --e4-grouped-route-risk=true
 
 jobs:
