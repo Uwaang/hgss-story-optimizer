@@ -6454,6 +6454,7 @@ async function cmdRouteExpStoryEvaluate() {
   const teamPreset = String(arg('team-preset', '')).trim().toLowerCase();
   const recipientTargetName = String(arg('recipient-target', '')).trim();
   const recipientActivateBoss = String(arg('recipient-activate', '')).trim();
+  const recipientScheduleB64 = String(arg('recipient-schedule-base64', '')).trim();
   const allowPartialTeam = arg('allow-partial-team', 'false') === 'true';
 
   if (expProfile === 'ace') {
@@ -6522,12 +6523,36 @@ async function cmdRouteExpStoryEvaluate() {
   );
   if (!starter) throw new Error('Requested team must contain the selected starter');
 
+  let effectiveExpContext = expContext;
+  let resolvedRecipientSchedule = {};
+  if (recipientScheduleB64) {
+    let requestedSchedule;
+    try {
+      requestedSchedule = JSON.parse(
+        Buffer.from(recipientScheduleB64, 'base64').toString('utf8')
+      );
+    } catch (error) {
+      throw new Error('Invalid --recipient-schedule-base64: ' + error.message);
+    }
+    const recipientRouteBosses = storyBattlesForCandidates(story.bosses, team);
+    const resolved = buildRecipientPolicyFromActivationSchedule(
+      team,
+      recipientRouteBosses,
+      requestedSchedule,
+    );
+    effectiveExpContext = {
+      ...expContext,
+      recipientPolicy: resolved.recipientPolicy,
+    };
+    resolvedRecipientSchedule = resolved.resolvedSchedule;
+  }
+
   const evaluation = await evaluateCandidatesWithMoveAccess(
     team,
     story.bosses,
     runs,
     moveAccess,
-    expContext,
+    effectiveExpContext,
     grindPolicy,
     {
       p1AiMode: 'smart',
@@ -6605,6 +6630,7 @@ async function cmdRouteExpStoryEvaluate() {
       allowPartialTeam,
       routeGrindProxy,
       routeGrindProxyTarget,
+      recipientSchedule: resolvedRecipientSchedule,
       routeExpInterpretation: expProfile === 'normal-route'
         ? 'all source-visible trainer rewards on curated normal-route maps; not yet a proven mandatory-only trainer subset'
         : expProfile === 'all-accessible'
@@ -6647,6 +6673,8 @@ async function cmdRouteExpStoryEvaluate() {
       bottom5BossWinRate: Number(evaluation.bottom5BossWinRate || 0),
       storyClearGeometricScore: Number(evaluation.storyClearGeometricScore || 0),
       storyClearCoverageScore: Number(evaluation.storyClearCoverageScore || 0),
+      routeExpectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+      e4GroupedRetryDiagnostic: routeRiskE4GroupedRetryDiagnostics(evaluation),
     },
     checkpoints,
   }, null, 2));
