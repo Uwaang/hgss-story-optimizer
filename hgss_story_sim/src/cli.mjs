@@ -16769,6 +16769,52 @@ async function cmdE4SequentialCompare() {
   }, null, 2));
 }
 
+
+async function cmdHeldItemConsumptionSmoke() {
+  const p1 = [{
+    name: 'Sashmon',
+    species: 'Magikarp',
+    level: 1,
+    item: 'Focus Sash',
+    ability: 'Swift Swim',
+    nature: 'Serious',
+    ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+    evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 },
+    moves: ['Splash'],
+    _candidateKey: 'smoke-magikarp',
+  }];
+  const p2 = [{
+    name: 'Attacker',
+    species: 'Mewtwo',
+    level: 100,
+    item: '',
+    ability: 'Pressure',
+    nature: 'Modest',
+    ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+    evs: { hp: 0, atk: 0, def: 0, spa: 252, spd: 0, spe: 252 },
+    moves: ['Psychic'],
+  }];
+  const result = await runBattle(p1, p2, 92242026, {
+    p1AiMode: 'no-switch',
+    p2AiMode: 'aggressive',
+  });
+  const sash = (result.p1EndItemEvents || []).find(event =>
+    event.item === 'Focus Sash' && event.key === 'smoke-magikarp'
+  );
+  if (!sash) {
+    throw new Error(
+      'Focus Sash consumption event was not captured: ' +
+      JSON.stringify(result.p1EndItemEvents || [])
+    );
+  }
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-422 p1 consumable held-item event regression',
+    winner: result.winner,
+    p1EndItemEvents: result.p1EndItemEvents,
+  }, null, 2));
+}
+
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
@@ -16853,6 +16899,7 @@ const commands = {
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
   'e4-sequential-compare': cmdE4SequentialCompare,
+  'held-item-consumption-smoke': cmdHeldItemConsumptionSmoke,
   'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
