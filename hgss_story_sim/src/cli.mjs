@@ -16918,6 +16918,13 @@ async function cmdE4SequentialCompare() {
     1,
   );
 
+  const policyMarginalPosteriorProduct = policyMarginalRows.reduce(
+    (product, row) => product * (
+      (Number(row.wins || 0) + 1) / (Number(row.runs || runs) + 2)
+    ),
+    1,
+  );
+
   function aggregateTrueConsumedItemCount(result, item, winningOnly = false) {
     const source = winningOnly
       ? result?.p1WinningEndItemEventCounts || {}
@@ -16972,6 +16979,11 @@ async function cmdE4SequentialCompare() {
       );
       const winWithSash = Number(withSash.wins || 0);
       const runsWithSash = Math.max(1, Number(withSash.runs || runs));
+      const posteriorWinRate1 = (winWithSash + 1) / (runsWithSash + 2);
+      const posteriorConsumeGivenWin =
+        (winConsumeCount + 1) / (winWithSash + 2);
+      const zeroWins = Number(withoutSash.wins || 0);
+      const zeroRuns = Math.max(1, Number(withoutSash.runs || runs));
       transitions.push({
         boss: String(row.boss.label),
         state1: {
@@ -16980,17 +16992,26 @@ async function cmdE4SequentialCompare() {
           winConsume: winConsumeCount / runsWithSash,
           winRate: winWithSash / runsWithSash,
           winningSashConsumptions: winConsumeCount,
+          posteriorWinRate: posteriorWinRate1,
+          posteriorConsumeGivenWin,
+          posteriorWinConsume:
+            posteriorWinRate1 * posteriorConsumeGivenWin,
+          posteriorWinNoConsume:
+            posteriorWinRate1 * (1 - posteriorConsumeGivenWin),
         },
         state0: {
           heldItems: heldZero.policy?.selected || {},
           winRate: Number(withoutSash.winRate || 0),
-          wins: Number(withoutSash.wins || 0),
-          runs: Number(withoutSash.runs || runs),
+          wins: zeroWins,
+          runs: zeroRuns,
+          posteriorWinRate: (zeroWins + 1) / (zeroRuns + 2),
         },
       });
     }
     let pSash1 = 1;
     let pSash0 = 0;
+    let postSash1 = 1;
+    let postSash0 = 0;
     const checkpoints = [];
     for (const transition of transitions) {
       const nextSash1 = pSash1 * transition.state1.winNoConsume;
@@ -16999,11 +17020,23 @@ async function cmdE4SequentialCompare() {
         pSash0 * transition.state0.winRate;
       pSash1 = nextSash1;
       pSash0 = nextSash0;
+
+      const nextPostSash1 =
+        postSash1 * transition.state1.posteriorWinNoConsume;
+      const nextPostSash0 =
+        postSash1 * transition.state1.posteriorWinConsume +
+        postSash0 * transition.state0.posteriorWinRate;
+      postSash1 = nextPostSash1;
+      postSash0 = nextPostSash0;
+
       checkpoints.push({
         boss: transition.boss,
         clearProbabilityWithSashRemaining: pSash1,
         clearProbabilitySashConsumed: pSash0,
         cumulativeClearProbability: pSash1 + pSash0,
+        posteriorClearProbabilityWithSashRemaining: postSash1,
+        posteriorClearProbabilitySashConsumed: postSash0,
+        posteriorCumulativeClearProbability: postSash1 + postSash0,
       });
     }
     inventoryDp = {
@@ -17011,8 +17044,9 @@ async function cmdE4SequentialCompare() {
       transitions,
       checkpoints,
       clearProbability: pSash1 + pSash0,
+      posteriorClearProbability: postSash1 + postSash0,
       interpretation:
-        'two-state dynamic program over one finite Focus Sash; renewable berries are outside the finite state',
+        'two-state dynamic program over one finite Focus Sash; raw transition rates retained for validation, scoring uses Beta-smoothed win rates plus Beta-smoothed conditional Sash consumption',
     };
   }
 
@@ -17143,6 +17177,7 @@ async function cmdE4SequentialCompare() {
     policyMarginal: {
       rows: policyMarginalRows,
       productWinRate: policyMarginalProduct,
+      posteriorProductWinRate: policyMarginalPosteriorProduct,
       interpretation: normalizedChain === 'first'
         ? 'same frozen E4-entry move/item policy as sequential; full recovery makes the product the exact chain model under independent battle RNG'
         : 'same frozen E4-entry move policy and fresh initial consumable inventory at every boss; comparison baseline for persistent-inventory penalty',
