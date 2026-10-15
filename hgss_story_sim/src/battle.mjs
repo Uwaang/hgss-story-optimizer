@@ -19,7 +19,7 @@ const NATURES_BY_ID = [
 const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
   ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
   : null;
-const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v4-move-usage');
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v5-p1-enditem');
 const SMART_DYNAMIC_HP_POWER = String(process.env.HGSS_SMART_DYNAMIC_HP_POWER || '1') !== '0';
 const SMART_REQUEST_AWARE_SWITCH = String(process.env.HGSS_SMART_REQUEST_AWARE_SWITCH || '1') !== '0';
 let battleCacheLoaded = false;
@@ -2485,6 +2485,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   ).catch(() => undefined);
   let p1Faints = 0;
   let p2Faints = 0;
+  const p1EndItemEvents = [];
   const resultPromise = (async () => {
     let winner = null;
     let turns = 0;
@@ -2515,6 +2516,15 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
             }
             p1ActiveKey = key;
           }
+        }
+        if (event === '-enditem' && actor.startsWith('p1')) {
+          const key = p1UsageKey(actor, p1KeyByDisplayName);
+          const item = String(parts[3] || '').trim();
+          p1EndItemEvents.push({
+            key,
+            item,
+            tags: parts.slice(4).filter(Boolean),
+          });
         }
         if (event === 'faint' && actor.startsWith('p1')) {
           const key = p1UsageKey(actor, p1KeyByDisplayName);
@@ -2552,6 +2562,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       ? 1
       : Math.min(1, p2Faints / Math.max(1, p2Team.length)),
     p1Usage,
+    p1EndItemEvents,
     p1AiMode: p1Mode,
     p1SmartDecisionTrace: options.p1SmartTrace ? [...p1Stats.smartMoveDecisionTrace] : [],
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
