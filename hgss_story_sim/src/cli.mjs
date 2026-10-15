@@ -7,7 +7,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule } from './exp-budget.mjs';
+import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
   loadPretAvailabilityData,
@@ -17242,6 +17242,289 @@ async function cmdHeldItemConsumptionSmoke() {
   }, null, 2));
 }
 
+
+async function cmdE4SequentialRematchCompare() {
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '64'))));
+  const commonLevel = Math.max(1, Math.min(100, Math.floor(Number(arg('level', '57')))));
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const teamKeysArg = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamPreset = String(arg('team-preset', 'staged-fallback')).trim().toLowerCase();
+  const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
+  const labels = e4ChainLabels('second');
+
+  if (version !== 'HEARTGOLD') {
+    throw new Error('e4-sequential-rematch-compare currently supports HEARTGOLD only');
+  }
+
+  const story = await loadEqualLevelStory();
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess('all', 'unbounded'),
+    loadExpContext(
+      story,
+      'normal-route',
+      version,
+      'none',
+      'expected',
+      'map-order',
+      'boss-aware-soft',
+    ),
+  ]);
+
+  let team;
+  if (teamKeysArg.length) {
+    if (teamKeysArg.length !== 6) {
+      throw new Error('e4-sequential-rematch-compare requires exactly six --team-keys');
+    }
+    team = resolveExactTeamFromKeys(pool, teamKeysArg);
+  } else if (teamPreset === 'd-quagsire' || teamPreset === 'scheduler') {
+    team = [
+      canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+      canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+      canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+      canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+      canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+      canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+    ];
+  } else {
+    team = resolveExactTeamFromKeys(pool, e4SequentialPresetKeys(teamPreset));
+  }
+
+  const independent = await evaluateEqualLevelStoryTeam(
+    team,
+    story,
+    commonLevel,
+    runs,
+    moveAccess,
+    { bossLabels: labels },
+  );
+  if (!independent.legal) {
+    throw new Error('Rematch E4 team is illegal at requested level: ' + JSON.stringify(independent));
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const byLabel = new Map(routeBosses.map((boss, index) => [String(boss.label), { boss, index }]));
+  const chainBosses = labels.map(label => {
+    const row = byLabel.get(label);
+    if (!row) throw new Error('Rematch E4 boss missing: ' + label);
+    return row;
+  });
+  const entryBoss = chainBosses[0].boss;
+  const candidatesByKey = new Map(team.map(candidate => [candidateIdentity(candidate), candidate]));
+
+  function initialStates() {
+    return team.map(candidate => {
+      const key = candidateIdentity(candidate);
+      const exp = expAtLevel(candidate.growthRate, commonLevel);
+      if (exp === null) throw new Error('Missing growth curve for ' + key);
+      return {
+        candidate,
+        key,
+        growthRate: candidate.growthRate,
+        exp,
+        level: commonLevel,
+        unknown: false,
+      };
+    });
+  }
+
+  function prepareForBoss(states, boss) {
+    const levels = Object.fromEntries(states.map(state => [state.key, state.level]));
+    const ordered = orderCandidatesForBoss(team, boss, levels);
+    let playerTeam = materializeCandidateTeam(
+      ordered,
+      boss.stage,
+      commonLevel,
+      {
+        moveAccess,
+        singleUsePlan: independent.singleUsePlan,
+        purchasablePlan: independent.purchasablePlan,
+        levelsByCandidate: levels,
+        boss,
+      },
+    );
+    playerTeam = playerTeam.map(mon => {
+      const key = mon._candidateKey || mon.species;
+      const candidate = candidatesByKey.get(key);
+      const build = independent.routeBuildPlan?.[key] || null;
+      let built = applyPlayerRouteBuild(mon, build);
+      if (candidate && build?.routeMoves) {
+        // All rematch E4 bosses share the same stage. Keep external access fixed
+        // to E4 entry while allowing level/species progression to unlock natural
+        // target moves.
+        const frozenAccessBoss = { ...boss, stage: Number(entryBoss.stage) };
+        built = equalLevelRouteMovesAtStage(
+          built,
+          candidate,
+          frozenAccessBoss,
+          moveAccess,
+          independent.singleUsePlan,
+          independent.purchasablePlan,
+          build.routeMoves,
+          build.routeMoveOptimization?.bannedMoves || [],
+        );
+      }
+      return built;
+    });
+    const enemyTeam = hgssTrainerToShowdownTeam(boss.trainer, boss);
+    const held = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
+    return {
+      playerTeam: held.team,
+      enemyTeam,
+      heldItemPolicy: held.policy,
+      levels,
+    };
+  }
+
+  const reached = Object.fromEntries(labels.map(label => [label, 0]));
+  const cleared = Object.fromEntries(labels.map(label => [label, 0]));
+  const failedAt = Object.fromEntries(labels.map(label => [label, 0]));
+  const consumedItems = {};
+  const levelSnapshots = Object.fromEntries(labels.map(label => [label, []]));
+  let chainClears = 0;
+  const runDetails = [];
+
+  for (let run = 0; run < runs; run += 1) {
+    const states = initialStates();
+    const battles = [];
+    let complete = true;
+
+    for (let index = 0; index < chainBosses.length; index += 1) {
+      const boss = chainBosses[index].boss;
+      const label = String(boss.label);
+      reached[label] += 1;
+      const prepared = prepareForBoss(states, boss);
+      levelSnapshots[label].push({ ...prepared.levels });
+      const result = await runBattle(
+        prepared.playerTeam,
+        prepared.enemyTeam,
+        9800001 + seedOffset + run * 100 + index,
+        {
+          p2Trainer: boss,
+          p1AiMode: 'smart',
+          e4Sequential: true,
+          e4Chain: 'second',
+          e4ChainIndex: index,
+        },
+      );
+      for (const event of result.p1EndItemEvents || []) {
+        const item = String(event.item || '');
+        if (!item) continue;
+        consumedItems[item] = Number(consumedItems[item] || 0) + 1;
+      }
+      battles.push({
+        boss: label,
+        levels: prepared.levels,
+        heldItems: prepared.heldItemPolicy?.selected || {},
+        ...compactSequentialBattleResult(result),
+      });
+
+      if (result.winner !== 'Player') {
+        failedAt[label] += 1;
+        complete = false;
+        break;
+      }
+      cleared[label] += 1;
+
+      if (index + 1 < chainBosses.length) {
+        const reward = trainerBattleExp(
+          boss.trainer,
+          expContext.world.expYieldBySpecies,
+        );
+        const nextBoss = chainBosses[index + 1].boss;
+        allocateBossAwareSoftExp(
+          states,
+          reward.total,
+          nextBoss,
+          (candidate, targetBoss, level) => candidateBossUtility(candidate, targetBoss, level),
+          Number(expContext.bossAwareSoftLevelScale || 8),
+        );
+      }
+    }
+    if (complete) chainClears += 1;
+    if (runs <= 32) runDetails.push({ run, complete, battles });
+  }
+
+  const independentRows = labels.map(label => {
+    const row = independent.rows.find(item => String(item.boss) === label);
+    if (!row) throw new Error('Independent rematch E4 row missing: ' + label);
+    return {
+      boss: label,
+      wins: Number(row.wins || 0),
+      runs: Number(row.runs || runs),
+      winRate: Number(row.winRate || 0),
+      heldItems: row.heldItemPolicy?.selected || {},
+    };
+  });
+  const independentProduct = independentRows.reduce(
+    (product, row) => product * Number(row.winRate || 0),
+    1,
+  );
+  const sequentialRows = labels.map(label => ({
+    boss: label,
+    reached: reached[label],
+    cleared: cleared[label],
+    conditionalWinRate: reached[label] ? cleared[label] / reached[label] : null,
+    failedAt: failedAt[label],
+    levelRangeByMember: (() => {
+      const snapshots = levelSnapshots[label] || [];
+      const keys = new Set(snapshots.flatMap(row => Object.keys(row)));
+      return Object.fromEntries([...keys].sort().map(key => {
+        const values = snapshots.map(row => Number(row[key])).filter(Number.isFinite);
+        return [key, values.length ? { min: Math.min(...values), max: Math.max(...values) } : null];
+      }));
+    })(),
+  }));
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-422 rematch-E4 sequential-clear compare',
+    chain: 'second',
+    commonEntryLevel: commonLevel,
+    policy: {
+      betweenBattles: {
+        hp: 'full-recovery',
+        fainted: 'revive-allowed',
+        status: 'full-cure',
+        pp: 'full-restore',
+        partyOrder: 'may-change',
+        heldItemSwap: 'allowed',
+      },
+      moves: 'route target set fixed at E4 entry; natural level/species progression may unlock target moves',
+      heldItems: {
+        optimization: 'boss-specific swaps allowed',
+        finiteNonConsumableCaps: equalLevelHeldItemPolicy(entryBoss.stage).finiteCaps,
+        consumables: 'pre-stocked renewable legal copies; consumption recorded, no magical restoration',
+        renewableEvidence: {
+          focusSash: 'Battle Frontier repeat purchase',
+          sitrusBerry: 'Berry Pots / shard exchange',
+          lumBerry: 'Berry Pots / shard exchange',
+        },
+      },
+      expAndEvolution: 'trainer reward persists after each clear; boss-aware-soft allocation before next member',
+      evs: 'project-fixed; no chain accumulation',
+      bagInBattle: 'forbidden',
+    },
+    teamKeys: team.map(candidateIdentity),
+    team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    runs,
+    independent: {
+      rows: independentRows,
+      productWinRate: independentProduct,
+    },
+    sequential: {
+      clears: chainClears,
+      clearRate: chainClears / runs,
+      rows: sequentialRows,
+      consumedItems,
+    },
+    deltaClearRate: chainClears / runs - independentProduct,
+    runDetails,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
@@ -17326,6 +17609,7 @@ const commands = {
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
   'e4-sequential-compare': cmdE4SequentialCompare,
+  'e4-sequential-rematch-compare': cmdE4SequentialRematchCompare,
   'held-item-consumption-smoke': cmdHeldItemConsumptionSmoke,
   'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
