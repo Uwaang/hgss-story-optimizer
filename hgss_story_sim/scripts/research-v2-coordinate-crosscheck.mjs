@@ -210,17 +210,67 @@ function walkJson(dir) {
   return out;
 }
 
+const ROUTE_E4_CHAIN_GROUPS = [
+  {
+    key: 'first',
+    labels: ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'],
+  },
+  {
+    key: 'second',
+    labels: ['Will 2', 'Koga 2', 'Bruno 2', 'Karen 2', 'Lance 2'],
+  },
+];
+
+function routeRowProbability(row) {
+  const wins = Number(row?.wins);
+  const losses = Number(row?.losses);
+  if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
+    return (wins + 1) / (wins + losses + 2);
+  }
+  return Math.max(1e-6, Math.min(1 - 1e-6, Number(row?.winRate || 0)));
+}
+
+function routeExpectedRetry(evaluation, rows) {
+  if (!evaluation?.e4GroupedRouteRisk) {
+    return rows.reduce((sum, row) => {
+      const p = routeRowProbability(row);
+      return sum + (1 - p) / p;
+    }, 0);
+  }
+
+  const byLabel = new Map(rows.map(row => [String(row.boss), row]));
+  const groupedLabels = new Set();
+  let retry = 0;
+  const overrides = evaluation?.e4ChainProbabilityOverrides || {};
+
+  for (const group of ROUTE_E4_CHAIN_GROUPS) {
+    const groupRows = group.labels.map(label => byLabel.get(label)).filter(Boolean);
+    if (groupRows.length !== group.labels.length) continue;
+    for (const label of group.labels) groupedLabels.add(label);
+
+    const marginalProduct = groupRows.reduce(
+      (product, row) => product * routeRowProbability(row),
+      1,
+    );
+    const override = Number(overrides?.[group.key]);
+    const probability = Number.isFinite(override) && override > 0
+      ? Math.max(1e-12, Math.min(1, override))
+      : Math.max(1e-12, Math.min(1, marginalProduct));
+    retry += (1 - probability) / probability;
+  }
+
+  for (const row of rows) {
+    if (groupedLabels.has(String(row.boss))) continue;
+    const p = routeRowProbability(row);
+    retry += (1 - p) / p;
+  }
+  return retry;
+}
+
 function routeMetrics(evaluation) {
   const rows = (evaluation?.rows || []).filter(row => !row?.skipped);
-  const probs = rows.map(row => {
-    const wins = Number(row?.wins);
-    const losses = Number(row?.losses);
-    if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
-      return (wins + 1) / (wins + losses + 2);
-    }
-    return Math.max(1e-6, Math.min(1 - 1e-6, Number(row?.winRate || 0)));
-  });
-  const retry = probs.reduce((sum, p) => sum + (1 - p) / p, 0);
+  const probs = rows.map(routeRowProbability);
+  const retry = routeExpectedRetry(evaluation, rows);
   const geometric = probs.length
     ? Math.exp(probs.reduce((sum, p) => sum + Math.log(p), 0) / probs.length)
     : 0;
