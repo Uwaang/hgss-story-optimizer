@@ -16462,6 +16462,313 @@ async function cmdRouteRiskGrindSelectorSmoke() {
   }, null, 2));
 }
 
+
+function e4ChainLabels(chain = 'first') {
+  const normalized = String(chain || 'first').toLowerCase();
+  if (normalized === 'first' || normalized === 'e4-1' || normalized === '1') {
+    return ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'];
+  }
+  if (normalized === 'second' || normalized === 'e4-2' || normalized === '2') {
+    return ['Will 2', 'Koga 2', 'Bruno 2', 'Karen 2', 'Lance 2'];
+  }
+  throw new Error('Unknown E4 chain: ' + chain + '. Use first or second.');
+}
+
+function resolveExactTeamFromKeys(pool, teamKeys) {
+  const byKey = new Map(pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+  const team = teamKeys.map(key => {
+    const candidate = byKey.get(key);
+    if (!candidate) throw new Error('Canonical candidate key not found: ' + key);
+    return candidate;
+  });
+  if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+    throw new Error('Requested E4 sequential team violates family/exclusive-group constraints');
+  }
+  return team;
+}
+
+function e4SequentialPresetKeys(name) {
+  const preset = String(name || 'staged-fallback').toLowerCase();
+  if (preset === 'staged-fallback') {
+    return [
+      'Cyndaquil::Cyndaquil->Typhlosion#1',
+      'Poliwag::Poliwag->Politoed#2',
+      'Combee::Combee->Vespiquen#1',
+      'Wynaut::Wobbuffet->Wobbuffet#1',
+      'Onix::Steelix->Steelix#1',
+      'Sneasel::Sneasel->Weavile#1',
+    ];
+  }
+  if (preset === 'd-quagsire' || preset === 'scheduler') {
+    return null;
+  }
+  throw new Error('Unknown E4 sequential preset: ' + name);
+}
+
+function compactSequentialBattleResult(result) {
+  return {
+    winner: result.winner,
+    turns: Number(result.turns || 0),
+    p1Faints: Number(result.p1Faints || 0),
+    p2Faints: Number(result.p2Faints || 0),
+    battleProgressScore: Number(result.battleProgressScore || 0),
+    p1EndItemEvents: result.p1EndItemEvents || [],
+  };
+}
+
+async function cmdE4SequentialCompare() {
+  const chain = String(arg('chain', 'first')).toLowerCase();
+  const labels = e4ChainLabels(chain);
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '32'))));
+  const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
+  const evolutionPolicy = String(arg('evolution-policy', 'trade-aware')).toLowerCase();
+  const teamKeysArg = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamPreset = String(arg('team-preset', 'staged-fallback')).trim().toLowerCase();
+  const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
+
+  if (chain !== 'first' && chain !== 'e4-1' && chain !== '1') {
+    throw new Error(
+      'e4-sequential-compare currently implements route-realistic first E4 only; ' +
+      'second-E4 chain extraction is covered separately until held-item inventory semantics are finalized'
+    );
+  }
+  if (version !== 'HEARTGOLD') {
+    throw new Error('e4-sequential-compare currently supports HEARTGOLD only');
+  }
+
+  const story = await loadStory('complete');
+  const [pool, moveAccess, expContext] = await Promise.all([
+    loadCanonicalPool(version, story, evolutionPolicy),
+    loadMoveAccess('all', 'natural'),
+    loadExpContext(
+      story,
+      'normal-route',
+      version,
+      'none',
+      'expected',
+      'map-order',
+      'boss-aware-soft',
+    ),
+  ]);
+
+  let team;
+  if (teamKeysArg.length) {
+    if (teamKeysArg.length !== 6) {
+      throw new Error('e4-sequential-compare requires exactly six --team-keys');
+    }
+    team = resolveExactTeamFromKeys(pool, teamKeysArg);
+  } else if (teamPreset === 'd-quagsire' || teamPreset === 'scheduler') {
+    team = [
+      canonicalEvolutionVariant(pool, 'Cyndaquil', 'Typhlosion'),
+      canonicalEvolutionVariant(pool, 'Magnemite', 'Magneton'),
+      canonicalEvolutionVariant(pool, 'Magikarp', 'Gyarados'),
+      canonicalEvolutionVariant(pool, 'Gastly', 'Gengar'),
+      canonicalEvolutionVariant(pool, 'Rhyhorn', 'Rhyperior'),
+      canonicalEvolutionVariant(pool, 'Wooper', 'Quagsire'),
+    ];
+  } else {
+    team = resolveExactTeamFromKeys(pool, e4SequentialPresetKeys(teamPreset));
+  }
+
+  const independent = await evaluateCandidatesWithMoveAccess(
+    team,
+    story.bosses,
+    runs,
+    moveAccess,
+    expContext,
+    'none',
+    {
+      p1AiMode: 'smart',
+      routeBuildOptimization: true,
+      routeBuildScope: 'route',
+      bossLabels: labels,
+    },
+  );
+  if (!independent.expSchedule) {
+    throw new Error('E4 sequential compare requires a route EXP schedule');
+  }
+
+  const routeBosses = storyBattlesForCandidates(story.bosses, team);
+  const routeIndexByLabel = new Map(routeBosses.map((boss, index) => [String(boss.label), index]));
+  const chainBosses = labels.map(label => {
+    const index = routeIndexByLabel.get(label);
+    if (!Number.isInteger(index)) throw new Error('E4 boss missing from route: ' + label);
+    return { boss: routeBosses[index], routeIndex: index };
+  });
+  const entryBoss = chainBosses[0].boss;
+  const candidatesByKey = new Map(team.map(candidate => [candidateIdentity(candidate), candidate]));
+
+  const prepared = chainBosses.map(({ boss, routeIndex }) => {
+    const snapshot = independent.expSchedule.battles[routeIndex];
+    const levelsByCandidate = snapshot?.levelsBefore || {};
+    const speciesByCandidate = snapshot?.speciesBefore || {};
+    const ordered = orderCandidatesForBoss(team, boss, levelsByCandidate);
+    let playerTeam = materializeCandidateTeam(
+      ordered,
+      boss.stage,
+      boss.aceLevel,
+      {
+        moveAccess,
+        singleUsePlan: independent.singleUsePlan,
+        purchasablePlan: independent.purchasablePlan,
+        levelsByCandidate,
+        speciesByCandidate,
+        boss,
+      },
+    );
+    playerTeam = playerTeam.map(mon => {
+      const key = mon._candidateKey || mon.species;
+      const candidate = candidatesByKey.get(key);
+      const build = independent.routeBuildPlan?.[key] || null;
+      let built = applyPlayerRouteBuild(mon, build);
+      if (candidate && build?.routeMoves) {
+        // External preparation is frozen at E4 entry. Current level/species still
+        // advance, so natural level-up moves/evolutions can become legal, but a
+        // later E4 stage cannot unlock new TM/tutor/reminder access.
+        const frozenAccessBoss = {
+          ...boss,
+          stage: Number(entryBoss.stage),
+        };
+        built = equalLevelRouteMovesAtStage(
+          built,
+          candidate,
+          frozenAccessBoss,
+          moveAccess,
+          independent.singleUsePlan,
+          independent.purchasablePlan,
+          build.routeMoves,
+          build.routeMoveOptimization?.bannedMoves || [],
+        );
+      }
+      // First-E4 story policy intentionally has no held-item optimization before
+      // stage20, so this is exact for the current route model and avoids silently
+      // granting renewable consumables before the inventory audit.
+      return { ...built, item: '' };
+    });
+    return {
+      boss,
+      routeIndex,
+      levelsByCandidate,
+      speciesByCandidate,
+      playerTeam,
+      enemyTeam: hgssTrainerToShowdownTeam(boss.trainer, boss),
+    };
+  });
+
+  const reached = Object.fromEntries(labels.map(label => [label, 0]));
+  const cleared = Object.fromEntries(labels.map(label => [label, 0]));
+  const failedAt = Object.fromEntries(labels.map(label => [label, 0]));
+  const runDetails = [];
+  let chainClears = 0;
+
+  for (let run = 0; run < runs; run += 1) {
+    const battles = [];
+    let complete = true;
+    for (let index = 0; index < prepared.length; index += 1) {
+      const row = prepared[index];
+      const label = String(row.boss.label);
+      reached[label] += 1;
+      const result = await runBattle(
+        row.playerTeam,
+        row.enemyTeam,
+        8800001 + seedOffset + run * 100 + index,
+        {
+          p2Trainer: row.boss,
+          p1AiMode: 'smart',
+          e4Sequential: true,
+          e4Chain: 'first',
+          e4ChainIndex: index,
+        },
+      );
+      battles.push({ boss: label, ...compactSequentialBattleResult(result) });
+      if (result.winner !== 'Player') {
+        failedAt[label] += 1;
+        complete = false;
+        break;
+      }
+      cleared[label] += 1;
+      // User-approved between-battle policy: HP/faint/status/PP fully recover.
+      // EXP/level/species snapshots for the next boss already include the
+      // deterministic route EXP gained from clearing this boss.
+    }
+    if (complete) chainClears += 1;
+    if (runs <= 32) runDetails.push({ run, complete, battles });
+  }
+
+  const independentRows = labels.map(label => {
+    const row = independent.rows.find(item => String(item.boss) === label);
+    if (!row) throw new Error('Independent E4 row missing: ' + label);
+    return {
+      boss: label,
+      wins: Number(row.wins || 0),
+      runs: Number(row.runs || runs),
+      winRate: Number(row.winRate || 0),
+      moves: row.playerBuilds || {},
+    };
+  });
+  const independentProduct = independentRows.reduce(
+    (product, row) => product * Number(row.winRate || 0),
+    1,
+  );
+  const sequentialRows = labels.map(label => ({
+    boss: label,
+    reached: reached[label],
+    cleared: cleared[label],
+    conditionalWinRate: reached[label] ? cleared[label] / reached[label] : null,
+    failedAt: failedAt[label],
+    levels: Object.fromEntries(
+      prepared.find(row => String(row.boss.label) === label)?.playerTeam.map(mon => [
+        mon._candidateKey || mon.species,
+        mon.level,
+      ]) || []
+    ),
+    species: prepared.find(row => String(row.boss.label) === label)?.playerTeam.map(mon => mon.species) || [],
+    moves: Object.fromEntries(
+      prepared.find(row => String(row.boss.label) === label)?.playerTeam.map(mon => [
+        mon._candidateKey || mon.species,
+        mon.moves,
+      ]) || []
+    ),
+  }));
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-422 first-E4 sequential-clear foundation compare',
+    chain: 'first',
+    policy: {
+      betweenBattles: {
+        hp: 'full-recovery',
+        fainted: 'revive-allowed',
+        status: 'full-cure',
+        pp: 'full-restore',
+        partyOrder: 'may-change',
+      },
+      moves: 'route target set fixed at E4 entry; only natural level/species progression may unlock target moves',
+      heldItems: 'disabled for first-E4 under current conservative story held-item policy',
+      expAndEvolution: 'persist via route EXP checkpoint snapshots',
+      evs: 'project-fixed; no chain accumulation',
+      bagInBattle: 'forbidden',
+    },
+    teamKeys: team.map(candidateIdentity),
+    team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    runs,
+    independent: {
+      rows: independentRows.map(({ moves, ...row }) => row),
+      productWinRate: independentProduct,
+    },
+    sequential: {
+      clears: chainClears,
+      clearRate: chainClears / runs,
+      rows: sequentialRows,
+    },
+    deltaClearRate: chainClears / runs - independentProduct,
+    entryMoves: sequentialRows[0]?.moves || {},
+    moveProgression: sequentialRows.map(row => ({ boss: row.boss, moves: row.moves })),
+    runDetails,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
 const command = process.argv[2] || 'smoke';
 const commands = {
   extract: cmdExtract,
@@ -16545,6 +16852,7 @@ const commands = {
   'equal-level-electric-trace': cmdEqualLevelElectricTrace,
   'equal-level-story-search': cmdEqualLevelStorySearch,
   'evolution-checkpoint-smoke': cmdEvolutionCheckpointSmoke,
+  'e4-sequential-compare': cmdE4SequentialCompare,
   'evolution-legality-smoke': cmdEvolutionLegalitySmoke,
   'meaningful-six': cmdMeaningfulSix,
   'trainer-ai-compare': cmdTrainerAiCompare,
