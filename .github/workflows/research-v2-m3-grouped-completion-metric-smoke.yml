@@ -1,0 +1,42 @@
+name: research-v2-m3-grouped-completion-metric-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-grouped-completion-metric-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assert completion-aware grouped E4 retry semantics
+        run: |
+          node --input-type=module <<'NODE'
+          import { completionEvaluationMetrics } from './src/completion-aware.mjs';
+          const labels=[
+            'Will','Koga','Bruno','Karen','Lance',
+            'Will 2','Koga 2','Bruno 2','Karen 2','Lance 2'
+          ];
+          const rows=labels.map(boss=>({
+            boss,runs:2,wins:1,losses:1,ties:0,winRate:0.5,battleProgressScore:0.5
+          }));
+          const legacy=completionEvaluationMetrics({rows,e4GroupedRouteRisk:false});
+          const grouped=completionEvaluationMetrics({rows,e4GroupedRouteRisk:true});
+          const close=(a,b)=>Math.abs(a-b)<1e-10;
+          if(!close(legacy.retry,10)) throw new Error('legacy retry mismatch: '+legacy.retry);
+          if(!close(grouped.retry,62)) throw new Error('grouped retry mismatch: '+grouped.retry);
+          if(!close(grouped.geometric,0.5)) throw new Error('geometric mismatch: '+grouped.geometric);
+          console.log(JSON.stringify({legacy,grouped,expected:{legacyRetry:10,groupedRetry:62}},null,2));
+          NODE
