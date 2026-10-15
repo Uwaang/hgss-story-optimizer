@@ -16631,6 +16631,7 @@ async function cmdE4SequentialCompare() {
   const teamKeysArg = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamPreset = String(arg('team-preset', 'staged-fallback')).trim().toLowerCase();
   const seedOffset = Math.floor(Number(arg('seed-offset', '0')) || 0);
+  const recipientScheduleB64 = String(arg('recipient-schedule-base64', '')).trim();
 
   const normalizedChain = (chain === 'second' || chain === 'e4-2' || chain === '2')
     ? 'second'
@@ -16673,12 +16674,36 @@ async function cmdE4SequentialCompare() {
     team = resolveExactTeamFromKeys(pool, e4SequentialPresetKeys(teamPreset));
   }
 
+  let effectiveExpContext = expContext;
+  let resolvedRecipientSchedule = {};
+  if (recipientScheduleB64) {
+    let requestedSchedule;
+    try {
+      requestedSchedule = JSON.parse(
+        Buffer.from(recipientScheduleB64, 'base64').toString('utf8')
+      );
+    } catch (error) {
+      throw new Error('Invalid --recipient-schedule-base64: ' + error.message);
+    }
+    const recipientRouteBosses = storyBattlesForCandidates(story.bosses, team);
+    const resolved = buildRecipientPolicyFromActivationSchedule(
+      team,
+      recipientRouteBosses,
+      requestedSchedule,
+    );
+    effectiveExpContext = {
+      ...expContext,
+      recipientPolicy: resolved.recipientPolicy,
+    };
+    resolvedRecipientSchedule = resolved.resolvedSchedule;
+  }
+
   const independent = await evaluateCandidatesWithMoveAccess(
     team,
     story.bosses,
     runs,
     moveAccess,
-    expContext,
+    effectiveExpContext,
     'none',
     {
       p1AiMode: 'smart',
@@ -17013,6 +17038,7 @@ async function cmdE4SequentialCompare() {
     },
     teamKeys: team.map(candidateIdentity),
     team: team.map(candidate => candidate.terminalSpecies || candidate.species),
+    recipientSchedule: resolvedRecipientSchedule,
     runs,
     independent: {
       rows: independentRows.map(({ moves, ...row }) => row),
