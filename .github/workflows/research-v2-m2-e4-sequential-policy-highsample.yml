@@ -1,0 +1,128 @@
+name: research-v2-m2-e4-sequential-policy-highsample
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  compare:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-e4-policy-highsample]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - label: first-staged-1000
+            chain: first
+            team_preset: staged-fallback
+            runs: 1000
+          - label: second-staged-500
+            chain: second
+            team_preset: staged-fallback
+            runs: 500
+          - label: second-scheduler-500
+            chain: second
+            team_preset: d-quagsire
+            runs: 500
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Sequential policy high-sample
+        env:
+          LABEL: ${{ matrix.label }}
+          CHAIN: ${{ matrix.chain }}
+          TEAM_PRESET: ${{ matrix.team_preset }}
+          RUNS: ${{ matrix.runs }}
+        run: |
+          mkdir -p results/m2-policy
+          node src/cli.mjs e4-sequential-compare             --chain="$CHAIN"             --team-preset="$TEAM_PRESET"             --runs="$RUNS"             > "results/m2-policy/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m2-policy/'+label+'.json','utf8'));
+          console.log(JSON.stringify({
+            label,
+            chain:d.chain,
+            team:d.team,
+            runs:d.runs,
+            legacyIndependentProduct:d.independent.productWinRate,
+            policyMarginalProduct:d.policyMarginal.productWinRate,
+            policyMarginalRows:d.policyMarginal.rows,
+            sequentialClearRate:d.sequential.clearRate,
+            sequentialClears:d.sequential.clears,
+            sequentialRows:d.sequential.rows.map(r=>({
+              boss:r.boss,reached:r.reached,cleared:r.cleared,
+              conditionalWinRate:r.conditionalWinRate,failedAt:r.failedAt
+            })),
+            deltaVsPolicyMarginal:d.sequential.clearRate-d.policyMarginal.productWinRate
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-policy-${{ matrix.label }}
+          path: hgss_story_sim/results/m2-policy/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: compare
+    if: always() && needs.compare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m2-e4-policy-*
+          path: hgss_story_sim/results/m2-policy
+          merge-multiple: true
+      - run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m2-policy';
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            return {
+              label:file.replace(/\.json$/,''),
+              chain:d.chain,
+              team:d.team,
+              runs:d.runs,
+              independentProduct:d.independent.productWinRate,
+              policyMarginalProduct:d.policyMarginal.productWinRate,
+              sequentialClearRate:d.sequential.clearRate,
+              sequentialClears:d.sequential.clears,
+              deltaVsPolicyMarginal:d.sequential.clearRate-d.policyMarginal.productWinRate,
+              marginalRows:d.policyMarginal.rows,
+              sequentialRows:d.sequential.rows.map(r=>({
+                boss:r.boss,reached:r.reached,cleared:r.cleared,
+                conditionalWinRate:r.conditionalWinRate
+              }))
+            };
+          });
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify({schemaVersion:1,rows},null,2));
+          console.log(JSON.stringify({rows},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-policy-highsample-summary
+          path: hgss_story_sim/results/m2-policy/summary.json
+          if-no-files-found: error
