@@ -9,13 +9,64 @@ export function betaPosteriorMean(row) {
   return (wins + 1) / (wins + losses + ties + 2);
 }
 
+const ROUTE_E4_CHAIN_GROUPS = [
+  {
+    key: 'first',
+    labels: ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'],
+  },
+  {
+    key: 'second',
+    labels: ['Will 2', 'Koga 2', 'Bruno 2', 'Karen 2', 'Lance 2'],
+  },
+];
+
+function routeRiskRowProbability(row) {
+  const wins = Number(row?.wins);
+  const losses = Number(row?.losses);
+  if (Number.isFinite(wins) && Number.isFinite(losses) && wins + losses > 0) {
+    return (wins + 1) / (wins + losses + 2);
+  }
+  return Math.max(1e-6, Math.min(1 - 1e-6, Number(row?.winRate || 0)));
+}
+
+function completionExpectedRetryFailures(evaluation, rows) {
+  if (!evaluation?.e4GroupedRouteRisk) {
+    return rows.reduce((sum, row) => {
+      const probability = routeRiskRowProbability(row);
+      return sum + (1 - probability) / Math.max(1e-12, probability);
+    }, 0);
+  }
+
+  const byLabel = new Map(rows.map(row => [String(row.boss), row]));
+  const groupedLabels = new Set();
+  let retry = 0;
+  for (const group of ROUTE_E4_CHAIN_GROUPS) {
+    const groupRows = group.labels.map(label => byLabel.get(label)).filter(Boolean);
+    if (groupRows.length !== group.labels.length) continue;
+    for (const label of group.labels) groupedLabels.add(label);
+    const marginalProduct = groupRows.reduce(
+      (product, row) => product * routeRiskRowProbability(row),
+      1,
+    );
+    const override = Number(evaluation?.e4ChainProbabilityOverrides?.[group.key]);
+    const probability = Number.isFinite(override) && override > 0
+      ? Math.max(1e-12, Math.min(1, override))
+      : Math.max(1e-12, Math.min(1, marginalProduct));
+    retry += (1 - probability) / probability;
+  }
+
+  for (const row of rows) {
+    if (groupedLabels.has(String(row.boss))) continue;
+    const probability = routeRiskRowProbability(row);
+    retry += (1 - probability) / Math.max(1e-12, probability);
+  }
+  return retry;
+}
+
 export function completionEvaluationMetrics(evaluation) {
   const rows = activeRows(evaluation);
-  const probabilities = rows.map(betaPosteriorMean);
-  const retry = probabilities.reduce(
-    (sum, probability) => sum + (1 - probability) / Math.max(1e-12, probability),
-    0,
-  );
+  const probabilities = rows.map(routeRiskRowProbability);
+  const retry = completionExpectedRetryFailures(evaluation, rows);
   const geometric = probabilities.length
     ? Math.exp(
         probabilities.reduce(
