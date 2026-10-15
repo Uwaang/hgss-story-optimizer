@@ -1,0 +1,126 @@
+name: research-v2-m2-e4-scheduler-states
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-e4-scheduler-states]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - label: first-story-min
+            chain: first
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: first-red25-min
+            chain: first
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: first-red50-min
+            chain: first
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+          - label: second-story-min
+            chain: second
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: second-red25-min
+            chain: second
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: second-red50-min
+            chain: second
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJMYW5jZSJ9"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: E4 scheduler-state validation
+        env:
+          LABEL: ${{ matrix.label }}
+          CHAIN: ${{ matrix.chain }}
+          SCHEDULE_B64: ${{ matrix.schedule_b64 }}
+        run: |
+          mkdir -p results/m2-schedules
+          node src/cli.mjs e4-sequential-compare             --chain="$CHAIN"             --team-preset=d-quagsire             --recipient-schedule-base64="$SCHEDULE_B64"             --runs=500             > "results/m2-schedules/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m2-schedules/'+label+'.json','utf8'));
+          console.log(JSON.stringify({
+            label,
+            chain:d.chain,
+            recipientSchedule:d.recipientSchedule,
+            runs:d.runs,
+            legacyIndependentProduct:d.independent.productWinRate,
+            policyMarginalProduct:d.policyMarginal.productWinRate,
+            inventoryDpClear:d.inventoryDp?.clearProbability ?? null,
+            literalSequentialClear:d.sequential.clearRate,
+            literalSequentialClears:d.sequential.clears,
+            marginalRows:d.policyMarginal.rows,
+            sequentialRows:d.sequential.rows.map(r=>({
+              boss:r.boss,reached:r.reached,cleared:r.cleared,
+              conditionalWinRate:r.conditionalWinRate
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-scheduler-${{ matrix.label }}
+          path: hgss_story_sim/results/m2-schedules/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m2-e4-scheduler-*
+          path: hgss_story_sim/results/m2-schedules
+          merge-multiple: true
+      - run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m2-schedules';
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            return {
+              label:file.replace(/\.json$/,''),
+              chain:d.chain,
+              recipientSchedule:d.recipientSchedule,
+              policyMarginalProduct:d.policyMarginal.productWinRate,
+              inventoryDpClear:d.inventoryDp?.clearProbability ?? null,
+              literalSequentialClear:d.sequential.clearRate,
+              literalSequentialClears:d.sequential.clears
+            };
+          });
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify({schemaVersion:1,rows},null,2));
+          console.log(JSON.stringify({rows},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-scheduler-states-summary
+          path: hgss_story_sim/results/m2-schedules/summary.json
+          if-no-files-found: error
