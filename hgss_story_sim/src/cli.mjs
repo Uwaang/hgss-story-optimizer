@@ -16760,6 +16760,7 @@ async function cmdE4SequentialCompare() {
   });
 
   const policyMarginalRows = [];
+  const policyMarginalResults = [];
   for (let index = 0; index < prepared.length; index += 1) {
     const row = prepared[index];
     const freshInventory = sequentialHeldItemInventory();
@@ -16789,11 +16790,110 @@ async function cmdE4SequentialCompare() {
       winRate: Number(marginal.winRate || 0),
       heldItems: held.policy?.selected || {},
     });
+    policyMarginalResults.push(marginal);
   }
   const policyMarginalProduct = policyMarginalRows.reduce(
     (product, row) => product * Number(row.winRate || 0),
     1,
   );
+
+  function aggregateTrueConsumedItemCount(result, item, winningOnly = false) {
+    const source = winningOnly
+      ? result?.p1WinningEndItemEventCounts || {}
+      : result?.p1EndItemEventCounts || {};
+    let total = 0;
+    for (const [signature, count] of Object.entries(source)) {
+      let parsed;
+      try {
+        parsed = JSON.parse(signature);
+      } catch {
+        continue;
+      }
+      if (String(parsed?.item || '') !== String(item)) continue;
+      const tags = (parsed?.tags || []).map(String);
+      if (tags.some(tag => /knock off/i.test(tag))) continue;
+      total += Number(count || 0);
+    }
+    return total;
+  }
+
+  let inventoryDp = null;
+  if (normalizedChain === 'second') {
+    const transitions = [];
+    for (let index = 0; index < prepared.length; index += 1) {
+      const row = prepared[index];
+      const withSash = policyMarginalResults[index];
+      const zeroInventory = sequentialHeldItemInventory();
+      zeroInventory.finite['Focus Sash'] = 0;
+      const heldZero = optimizeSequentialHeldItemTeam(
+        row.playerTeam,
+        row.enemyTeam,
+        row.boss,
+        zeroInventory,
+      );
+      const withoutSash = await simulateMatchup(
+        heldZero.team,
+        row.enemyTeam,
+        runs,
+        8950001 + seedOffset + index * 100000,
+        {
+          p2Trainer: row.boss,
+          p1AiMode: 'smart',
+          e4SequentialInventoryState: 0,
+          e4Chain: normalizedChain,
+          e4ChainIndex: index,
+        },
+      );
+      const winConsumeCount = aggregateTrueConsumedItemCount(
+        withSash,
+        'Focus Sash',
+        true,
+      );
+      const winWithSash = Number(withSash.wins || 0);
+      const runsWithSash = Math.max(1, Number(withSash.runs || runs));
+      transitions.push({
+        boss: String(row.boss.label),
+        state1: {
+          heldItems: policyMarginalRows[index]?.heldItems || {},
+          winNoConsume: Math.max(0, winWithSash - winConsumeCount) / runsWithSash,
+          winConsume: winConsumeCount / runsWithSash,
+          winRate: winWithSash / runsWithSash,
+          winningSashConsumptions: winConsumeCount,
+        },
+        state0: {
+          heldItems: heldZero.policy?.selected || {},
+          winRate: Number(withoutSash.winRate || 0),
+          wins: Number(withoutSash.wins || 0),
+          runs: Number(withoutSash.runs || runs),
+        },
+      });
+    }
+    let pSash1 = 1;
+    let pSash0 = 0;
+    const checkpoints = [];
+    for (const transition of transitions) {
+      const nextSash1 = pSash1 * transition.state1.winNoConsume;
+      const nextSash0 =
+        pSash1 * transition.state1.winConsume +
+        pSash0 * transition.state0.winRate;
+      pSash1 = nextSash1;
+      pSash0 = nextSash0;
+      checkpoints.push({
+        boss: transition.boss,
+        clearProbabilityWithSashRemaining: pSash1,
+        clearProbabilitySashConsumed: pSash0,
+        cumulativeClearProbability: pSash1 + pSash0,
+      });
+    }
+    inventoryDp = {
+      initialFocusSash: 1,
+      transitions,
+      checkpoints,
+      clearProbability: pSash1 + pSash0,
+      interpretation:
+        'two-state dynamic program over one finite Focus Sash; renewable berries are outside the finite state',
+    };
+  }
 
   const reached = Object.fromEntries(labels.map(label => [label, 0]));
   const cleared = Object.fromEntries(labels.map(label => [label, 0]));
@@ -16925,6 +17025,7 @@ async function cmdE4SequentialCompare() {
         ? 'same frozen E4-entry move/item policy as sequential; full recovery makes the product the exact chain model under independent battle RNG'
         : 'same frozen E4-entry move policy and fresh initial consumable inventory at every boss; comparison baseline for persistent-inventory penalty',
     },
+    inventoryDp,
     sequential: {
       clears: chainClears,
       clearRate: chainClears / runs,
