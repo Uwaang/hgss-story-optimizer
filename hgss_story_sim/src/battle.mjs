@@ -2602,6 +2602,8 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP2Faints = 0;
   let totalBattleProgress = 0;
   const p1Usage = {};
+  const p1EndItemEventCounts = {};
+  const p1WinningEndItemEventCounts = {};
   let p1AiMode = options.p1AiMode || 'greedy';
   const p1SmartDecisionTrace = [];
   let p2AiMode = options.p2Trainer ? (options.p2AiMode || 'hgss') : (options.p2AiMode || 'greedy');
@@ -2619,6 +2621,18 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP1Faints += Number(result.p1Faints || 0);
     totalP2Faints += Number(result.p2Faints || 0);
     totalBattleProgress += Number(result.battleProgressScore || 0);
+    for (const event of result.p1EndItemEvents || []) {
+      const signature = JSON.stringify({
+        item: String(event?.item || ''),
+        key: event?.key || null,
+        tags: (event?.tags || []).map(String),
+      });
+      p1EndItemEventCounts[signature] = Number(p1EndItemEventCounts[signature] || 0) + 1;
+      if (result.winner === 'Player') {
+        p1WinningEndItemEventCounts[signature] =
+          Number(p1WinningEndItemEventCounts[signature] || 0) + 1;
+      }
+    }
     if (options.p1SmartTrace && Array.isArray(result.p1SmartDecisionTrace)) {
       for (const decision of result.p1SmartDecisionTrace) {
         p1SmartDecisionTrace.push({ run: i, ...decision });
@@ -2689,6 +2703,8 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     averageOpponentFaints: totalP2Faints / runs,
     battleProgressScore: totalBattleProgress / runs,
     p1Usage,
+    p1EndItemEventCounts,
+    p1WinningEndItemEventCounts,
     p1AiMode,
     p1SmartDecisionTrace,
     p2AiMode,
