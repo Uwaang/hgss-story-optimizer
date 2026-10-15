@@ -181,6 +181,73 @@ function routeRiskExpectedRetryFailures(evaluation) {
   }, 0);
 }
 
+const ROUTE_E4_CHAIN_GROUPS = [
+  {
+    key: 'first',
+    labels: ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'],
+  },
+  {
+    key: 'second',
+    labels: ['Will 2', 'Koga 2', 'Bruno 2', 'Karen 2', 'Lance 2'],
+  },
+];
+
+function routeRiskE4GroupedRetryDiagnostics(evaluation, chainOverrides = {}) {
+  const rows = routeRiskActiveRows(evaluation);
+  const byLabel = new Map(rows.map(row => [String(row.boss), row]));
+  const groupedLabels = new Set();
+  const chains = [];
+  let groupedRetry = 0;
+
+  for (const group of ROUTE_E4_CHAIN_GROUPS) {
+    const groupRows = group.labels.map(label => byLabel.get(label)).filter(Boolean);
+    if (groupRows.length !== group.labels.length) continue;
+    for (const label of group.labels) groupedLabels.add(label);
+    const marginalProduct = groupRows.reduce(
+      (product, row) => product * routeRiskRowProbability(row),
+      1,
+    );
+    const override = Number(chainOverrides?.[group.key]);
+    const probability = Number.isFinite(override) && override > 0
+      ? Math.max(1e-12, Math.min(1, override))
+      : Math.max(1e-12, Math.min(1, marginalProduct));
+    const legacyContribution = groupRows.reduce((sum, row) => {
+      const p = routeRiskRowProbability(row);
+      return sum + (1 - p) / p;
+    }, 0);
+    const groupedContribution = (1 - probability) / probability;
+    groupedRetry += groupedContribution;
+    chains.push({
+      key: group.key,
+      labels: group.labels,
+      marginalProduct,
+      probability,
+      probabilitySource:
+        Number.isFinite(override) && override > 0 ? 'override' : 'marginal-product',
+      legacyRetryContribution: legacyContribution,
+      groupedRetryContribution: groupedContribution,
+      deltaRetry: groupedContribution - legacyContribution,
+    });
+  }
+
+  let nonChainRetry = 0;
+  for (const row of rows) {
+    if (groupedLabels.has(String(row.boss))) continue;
+    const p = routeRiskRowProbability(row);
+    nonChainRetry += (1 - p) / p;
+  }
+  const legacyRetry = routeRiskExpectedRetryFailures(evaluation);
+  return {
+    legacyRetry,
+    nonChainRetry,
+    groupedRetry: nonChainRetry + groupedRetry,
+    deltaRetry: nonChainRetry + groupedRetry - legacyRetry,
+    chains,
+    note:
+      'second-E4 marginal-product is a fresh-inventory approximation unless an inventory-DP override is supplied',
+  };
+}
+
 function routeRiskMeanRetryFailures(evaluation) {
   const rows = routeRiskActiveRows(evaluation);
   if (!rows.length) return Number.POSITIVE_INFINITY;
@@ -1558,6 +1625,7 @@ function searchResultRow(team, evaluation) {
     storyClearGeometricScore: evaluation.storyClearGeometricScore,
     storyClearCoverageScore: evaluation.storyClearCoverageScore,
     routeExpectedRetryFailures: routeRiskExpectedRetryFailures(evaluation),
+    e4GroupedRetryDiagnostic: routeRiskE4GroupedRetryDiagnostics(evaluation),
     routeRiskGeometricScore: routeRiskGeometricScore(evaluation),
     routeRiskMeanWinRate: routeRiskMeanWinRate(evaluation),
     storyClearTargetWinRate: evaluation.storyClearTargetWinRate,
