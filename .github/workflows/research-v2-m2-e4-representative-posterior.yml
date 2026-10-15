@@ -1,0 +1,182 @@
+name: research-v2-m2-e4-representative-posterior
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-e4-representative-posterior]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        include:
+          - label: staged-fallback-first
+            state: staged-fallback
+            chain: first
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            schedule_b64: ""
+          - label: staged-fallback-second
+            state: staged-fallback
+            chain: second
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Poliwag::Poliwag->Politoed#2,Combee::Combee->Vespiquen#1,Wynaut::Wobbuffet->Wobbuffet#1,Onix::Steelix->Steelix#1,Sneasel::Sneasel->Weavile#1"
+            schedule_b64: ""
+          - label: coordinate-best-first
+            state: coordinate-best
+            chain: first
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            schedule_b64: ""
+          - label: coordinate-best-second
+            state: coordinate-best
+            chain: second
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Aipom::Aipom->Ambipom#1,Rhyhorn::Rhyhorn->Rhyperior#1,Horsea::Seadra->Kingdra#1,Ditto::Ditto->Ditto#1,Wynaut::Wobbuffet->Wobbuffet#1"
+            schedule_b64: ""
+          - label: scheduler-story-min-first
+            state: scheduler-story-min
+            chain: first
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: scheduler-story-min-second
+            state: scheduler-story-min
+            chain: second
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJNYWduZXRvbiI6IlJlZCIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: scheduler-red25-min-first
+            state: scheduler-red25-min
+            chain: first
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: scheduler-red25-min-second
+            state: scheduler-red25-min
+            chain: second
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJRdWFnc2lyZSI6Ikx0LiBTdXJnZSIsIlJoeXBlcmlvciI6Ik1pc3R5In0="
+          - label: scheduler-red50-min-first
+            state: scheduler-red50-min
+            chain: first
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+          - label: scheduler-red50-min-second
+            state: scheduler-red50-min
+            chain: second
+            team_keys: "Cyndaquil::Cyndaquil->Typhlosion#1,Magnemite::Magnemite->Magneton#1,Magikarp::Magikarp->Gyarados#1,Gastly::Gastly->Gengar#1,Rhyhorn::Rhyhorn->Rhyperior#1,Wooper::Wooper->Quagsire#1"
+            schedule_b64: "eyJHZW5nYXIiOiJMYW5jZSIsIlF1YWdzaXJlIjoiTGFuY2UiLCJSaHlwZXJpb3IiOiJNaXN0eSJ9"
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Representative E4 posterior validation
+        env:
+          LABEL: ${{ matrix.label }}
+          STATE: ${{ matrix.state }}
+          CHAIN: ${{ matrix.chain }}
+          TEAM_KEYS: ${{ matrix.team_keys }}
+          SCHEDULE_B64: ${{ matrix.schedule_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p results/m2-representative
+          args=(
+            src/cli.mjs e4-sequential-compare
+            --chain="$CHAIN"
+            --team-keys="$TEAM_KEYS"
+            --runs=500
+          )
+          if [[ -n "$SCHEDULE_B64" ]]; then
+            args+=(--recipient-schedule-base64="$SCHEDULE_B64")
+          fi
+          node "${args[@]}" > "results/m2-representative/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m2-representative/'+label+'.json','utf8'));
+          const p=d.chain==='second'
+            ? d.inventoryDp?.posteriorClearProbability
+            : d.policyMarginal?.posteriorProductWinRate;
+          console.log(JSON.stringify({
+            label,
+            state:process.env.STATE,
+            chain:d.chain,
+            recipientSchedule:d.recipientSchedule,
+            rawMarginalProduct:d.policyMarginal.productWinRate,
+            posteriorMarginalProduct:d.policyMarginal.posteriorProductWinRate,
+            rawInventoryDp:d.inventoryDp?.clearProbability??null,
+            posteriorInventoryDp:d.inventoryDp?.posteriorClearProbability??null,
+            scoringClearProbability:p,
+            scoringRetry:p>0?(1-p)/p:null,
+            literalSequential:d.sequential.clearRate,
+            marginalRows:d.policyMarginal.rows
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-representative-${{ matrix.label }}
+          path: hgss_story_sim/results/m2-representative/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m2-e4-representative-*
+          path: hgss_story_sim/results/m2-representative
+          merge-multiple: true
+      - run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m2-representative';
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            const state=file.replace(/-(first|second)\.json$/,'');
+            const p=d.chain==='second'
+              ? d.inventoryDp?.posteriorClearProbability
+              : d.policyMarginal?.posteriorProductWinRate;
+            return {
+              file,
+              state,
+              chain:d.chain,
+              clearProbability:p,
+              retry:p>0?(1-p)/p:null,
+              rawMarginalProduct:d.policyMarginal.productWinRate,
+              rawInventoryDp:d.inventoryDp?.clearProbability??null
+            };
+          });
+          const by={};
+          for(const r of rows)(by[r.state]??={state:r.state})[r.chain]=r;
+          const states=Object.values(by).map(x=>({
+            ...x,
+            combinedE4Retry:(x.first?.retry??0)+(x.second?.retry??0)
+          })).sort((a,b)=>a.combinedE4Retry-b.combinedE4Retry);
+          const out={schemaVersion:1,rows,states};
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify({states},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-representative-posterior-summary
+          path: hgss_story_sim/results/m2-representative/summary.json
+          if-no-files-found: error
