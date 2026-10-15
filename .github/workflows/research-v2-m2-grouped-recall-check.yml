@@ -50,7 +50,7 @@ jobs:
           mkdir -p results/grouped-recall
           CHECKPOINT="$(find results/legacy-endpoints -name checkpoint.json -type f | head -n 1)"
           test -n "$CHECKPOINT"
-          node --input-type=module "$CHECKPOINT" <<'NODE'
+          node --input-type=module - "$CHECKPOINT" <<'NODE'
           import fs from 'node:fs';
           const input=process.argv[2];
           const doc=JSON.parse(fs.readFileSync(input,'utf8'));
