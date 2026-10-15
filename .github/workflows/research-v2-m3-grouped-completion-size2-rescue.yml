@@ -1,0 +1,344 @@
+name: research-v2-m3-grouped-completion-size2-rescue
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=false
+    --e4-grouped-route-risk=true
+
+jobs:
+  reconstruct:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-grouped-completion-size2-rescue]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-checkpoint1
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-0
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-1
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-2
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-3
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-4
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-5
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-6
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-7
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-8
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-9
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-10
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-11
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - name: Reconstruct all grouped size2 projected states
+        run: |
+          set -euo pipefail
+          INPUTS="$(find results/selective2 -name 'selective2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-projected-zero-select-merge \
+            --checkpoint=results/base/checkpoint1.json \
+            --inputs="$INPUTS" --target-runs=64 --beam-width=10000 --selection=beam \
+            $SEARCH_ARGS > results/all-size2.json
+          jq '{stage,sourceStates:.projectedZeroSelect.sourceStates,selectedCount:.projectedZeroSelect.selectedCount,totalZeroRows:.projectedZeroSelect.totalZeroRows,beamCount:(.beam|length)}' results/all-size2.json
+          test "$(jq '.beam|length' results/all-size2.json)" -ge 100
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/all-size2.json
+          if-no-files-found: error
+
+  rollout:
+    needs: reconstruct
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/input
+      - name: Sharded one-step completion rollout
+        run: |
+          node src/cli.mjs route-exp-story-completion-rollout \
+            --input=results/input/all-size2.json \
+            --runs=1 --confirm-runs=1 --child-candidate-limit=64 \
+            --parent-shard-count=24 --parent-shard-index=${{ matrix.shard }} \
+            $SEARCH_ARGS > "results/rollout-${{ matrix.shard }}.json"
+          jq '{parentShardIndex,parentShardCount,evaluatedParentCount,rolloutCandidateCount,uniqueChildren,wallMs}' "results/rollout-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-rollout-${{ matrix.shard }}
+          path: hgss_story_sim/results/rollout-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: rollout
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      confirm_matrix: ${{ steps.matrix.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-grouped-completion-size2-rollout-*
+          path: hgss_story_sim/results/rollouts
+          merge-multiple: true
+      - name: Merge low-sample completion ranks to rescue32
+        run: |
+          INPUTS="$(find results/rollouts -name 'rollout-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-completion-rollout-merge \
+            --input=results/base/all-size2.json --inputs="$INPUTS" --beam-width=32 \
+            $SEARCH_ARGS > results/rescue32.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/rescue32.json','utf8'));
+          const targets=[
+            ['Politoed','Poliwag::Poliwag->Politoed#2'],
+            ['Vespiquen','Combee::Combee->Vespiquen#1'],
+            ['Wobbuffet','Wynaut::Wobbuffet->Wobbuffet#1'],
+            ['Steelix','Onix::Steelix->Steelix#1'],
+            ['Weavile','Sneasel::Sneasel->Weavile#1'],
+            ['Kingdra','Horsea::Horsea->Kingdra#1'],
+          ];
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const key=xs=>[...xs].sort().join('|');
+          const rows=d.completionAwareSelection?.rows||[];
+          console.log(JSON.stringify({
+            policy:d.completionAwareSelection?.policy,
+            sourceParentCount:d.completionAwareSelection?.sourceParentCount,
+            rolloutParentCount:d.completionAwareSelection?.rolloutParentCount,
+            selectedCount:d.beam?.length,
+            targets:targets.map(([name,candidate])=>{
+              const row=rows.find(r=>r.key===key([starter,candidate]));
+              return {name,currentRank:row?.currentRank??null,completionRank:row?.completionRank??null,selected:row?.selected??false,addedKey:row?.requestedAddedKey??null};
+            })
+          },null,2));
+          NODE
+      - name: Build confirmation matrix
+        id: matrix
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/rescue32.json','utf8'));
+          const include=(d.beam||[]).map((row,index)=>({
+            label:'p'+String(index+1).padStart(2,'0'),
+            prefix:Buffer.from(JSON.stringify(row.teamKeys),'utf8').toString('base64'),
+            added_key:String(row.completionSelection?.requestedAddedKey||'')
+          }));
+          if(include.length!==32) throw new Error('expected rescue32 beam');
+          if(include.some(x=>!x.added_key)) throw new Error('missing rollout best-child key');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\n');
+          fs.writeFileSync('results/confirm-matrix.json',JSON.stringify({include},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-rescue32
+          path: |
+            hgss_story_sim/results/rescue32.json
+            hgss_story_sim/results/confirm-matrix.json
+          if-no-files-found: error
+
+  confirm8:
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.merge.outputs.confirm_matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Confirm parent and selected best child at 8 runs
+        run: |
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64="${{ matrix.prefix }}" \
+            --added-key="${{ matrix.added_key }}" --runs=8 \
+            $SEARCH_ARGS > "results/confirm-${{ matrix.label }}.json"
+          jq '{prefixKeys,requestedAddedKey,parentMetrics,bestChild,improvement}' "results/confirm-${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-confirm-${{ matrix.label }}
+          path: hgss_story_sim/results/confirm-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  select:
+    needs: confirm8
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-rescue32
+          path: hgss_story_sim/results/base
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-grouped-completion-size2-confirm-*
+          path: hgss_story_sim/results/confirms
+          merge-multiple: true
+      - name: Select confirmed completion-aware beam16
+        run: |
+          INPUTS="$(find results/confirms -name 'confirm-p*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-completion-select \
+            --input=results/base/rescue32.json --confirm-inputs="$INPUTS" --beam-width=16 \
+            $SEARCH_ARGS > results/beam2-completion16.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/beam2-completion16.json','utf8'));
+          const targets=[
+            ['Politoed','Poliwag::Poliwag->Politoed#2'],
+            ['Vespiquen','Combee::Combee->Vespiquen#1'],
+            ['Wobbuffet','Wynaut::Wobbuffet->Wobbuffet#1'],
+            ['Steelix','Onix::Steelix->Steelix#1'],
+            ['Weavile','Sneasel::Sneasel->Weavile#1'],
+            ['Kingdra','Horsea::Horsea->Kingdra#1'],
+          ];
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const key=xs=>[...xs].sort().join('|');
+          const rows=d.completionAwareSelection?.rows||[];
+          console.log(JSON.stringify({
+            policy:d.completionAwareSelection?.policy,
+            beamCount:d.beam?.length,
+            targets:targets.map(([name,candidate])=>{
+              const row=rows.find(r=>r.key===key([starter,candidate]));
+              return {name,currentRank:row?.currentRank??null,completionRank:row?.completionRank??null,selected:row?.selected??false,addedKey:row?.requestedAddedKey??null};
+            }),
+            beam:(d.beam||[]).map(r=>({teamKeys:r.teamKeys,completionSelection:r.completionSelection}))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-beam16
+          path: hgss_story_sim/results/beam2-completion16.json
+          if-no-files-found: error
