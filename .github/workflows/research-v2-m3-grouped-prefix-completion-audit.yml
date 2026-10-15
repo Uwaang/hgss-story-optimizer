@@ -1,0 +1,122 @@
+name: research-v2-m3-grouped-prefix-completion-audit
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=false
+    --e4-grouped-route-risk=true
+
+jobs:
+  probe:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-grouped-prefix-completion-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: politoed
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Poliwag::Poliwag->Politoed#2"]'
+          - label: vespiquen
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Combee::Combee->Vespiquen#1"]'
+          - label: wobbuffet
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Wynaut::Wobbuffet->Wobbuffet#1"]'
+          - label: steelix
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Onix::Steelix->Steelix#1"]'
+          - label: weavile
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Sneasel::Sneasel->Weavile#1"]'
+          - label: kingdra_control
+            prefix_json: '["Cyndaquil::Cyndaquil->Typhlosion#1","Horsea::Horsea->Kingdra#1"]'
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: One-step grouped completion probe
+        run: |
+          mkdir -p results
+          PREFIX_B64="$(printf '%s' "$PREFIX_JSON" | base64 -w0)"
+          node src/cli.mjs completion-aware-prefix-probe \
+            --prefix-base64="$PREFIX_B64" --runs=2 \
+            $SEARCH_ARGS > "results/${{ matrix.label }}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/'+label+'.json','utf8'));
+          console.log(JSON.stringify({
+            label,
+            grouped:d.config?.e4GroupedRouteRisk,
+            prefix:d.prefixKeys,
+            parent:d.parentMetrics,
+            legalChildCount:d.legalChildCount,
+            bestChild:d.bestChild,
+            improvement:d.improvement
+          },null,2));
+          NODE
+        env:
+          LABEL: ${{ matrix.label }}
+          PREFIX_JSON: ${{ matrix.prefix_json }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-prefix-completion-${{ matrix.label }}
+          path: hgss_story_sim/results/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-grouped-prefix-completion-*
+          path: hgss_story_sim/results/all
+          merge-multiple: true
+      - name: Summarize completion recovery
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/all';
+          const rows=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).map(file=>{
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            return {
+              label:file.replace('.json',''),
+              prefix:d.prefixKeys,
+              parent:d.parentMetrics,
+              bestChild:d.bestChild,
+              improvement:d.improvement,
+              legalChildCount:d.legalChildCount
+            };
+          }).sort((a,b)=>
+            Number(b.improvement?.retry||0)-Number(a.improvement?.retry||0) ||
+            String(a.label).localeCompare(String(b.label))
+          );
+          const out={schemaVersion:1,purpose:'SCRUM-423 grouped size2 one-step completion audit',runs:2,rows};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-prefix-completion-summary
+          path: hgss_story_sim/results/summary.json
+          if-no-files-found: error
