@@ -43,9 +43,85 @@ jobs:
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: research-v2-m3-grouped-staged-selective2-*
+          name: research-v2-m3-grouped-staged-selective2-0
           path: hgss_story_sim/results/selective2
-          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-1
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-2
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-3
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-4
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-5
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-6
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-7
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-8
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-9
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-10
+          path: hgss_story_sim/results/selective2
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-selective2-11
+          path: hgss_story_sim/results/selective2
           repository: Uwaang/hgss-story-optimizer
           run-id: 38758534875
           github-token: ${{ github.token }}
