@@ -1,0 +1,103 @@
+name: research-v2-m3-grouped-prefix-recall-audit
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-grouped-prefix-recall-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-staged-checkpoint1
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-grouped-staged-selective2-*
+          path: hgss_story_sim/results/selective2
+          merge-multiple: true
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38758534875
+          github-token: ${{ github.token }}
+      - name: Reconstruct full projected64 size2 ordering
+        run: |
+          set -euo pipefail
+          INPUTS="$(find results/selective2 -name 'selective2-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs route-exp-story-projected-zero-select-merge \
+            --checkpoint=results/base/checkpoint1.json \
+            --inputs="$INPUTS" --target-runs=64 --beam-width=10000 --selection=beam \
+            $SEARCH_ARGS > results/all-size2.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/all-size2.json','utf8'));
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const targets=[
+            ['Politoed','Poliwag::Poliwag->Politoed#2'],
+            ['Vespiquen','Combee::Combee->Vespiquen#1'],
+            ['Wobbuffet','Wynaut::Wobbuffet->Wobbuffet#1'],
+            ['Steelix','Onix::Steelix->Steelix#1'],
+            ['Weavile','Sneasel::Sneasel->Weavile#1'],
+          ];
+          const key=xs=>[...xs].sort().join('|');
+          const rows=d.beam||[];
+          const report=targets.map(([terminal,candidate])=>{
+            const k=key([starter,candidate]);
+            const idx=rows.findIndex(r=>key(r.teamKeys||[])===k);
+            const row=idx>=0?rows[idx]:null;
+            return {
+              terminal,
+              rank:idx>=0?idx+1:null,
+              selectedAt16:idx>=0&&idx<16,
+              selectedAt24:idx>=0&&idx<24,
+              selectedAt32:idx>=0&&idx<32,
+              selectedAt48:idx>=0&&idx<48,
+              selectedAt64:idx>=0&&idx<64,
+              teamKeys:row?.teamKeys||[starter,candidate],
+            };
+          });
+          const out={
+            schemaVersion:1,
+            purpose:'SCRUM-423 grouped prefix recall audit at size2',
+            sourceRun:38758534875,
+            totalProjectedStates:rows.length,
+            report,
+            top32:rows.slice(0,32).map((r,i)=>({rank:i+1,teamKeys:r.teamKeys})),
+          };
+          fs.writeFileSync('results/prefix-recall-audit.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-grouped-prefix-recall-audit
+          path: hgss_story_sim/results/prefix-recall-audit.json
+          if-no-files-found: error
