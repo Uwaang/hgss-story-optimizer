@@ -1,0 +1,72 @@
+name: research-v2-m2-e4-rematch-sequential-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: 8
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  compare:
+    if: contains(github.event.head_commit.message, '[research-v2-m2-e4-rematch-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: staged-fallback
+            team_preset: staged-fallback
+          - label: scheduler-d-quagsire
+            team_preset: d-quagsire
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Rematch E4 sequential smoke
+        env:
+          LABEL: ${{ matrix.label }}
+          TEAM_PRESET: ${{ matrix.team_preset }}
+        run: |
+          mkdir -p results/m2-rematch
+          node src/cli.mjs held-item-consumption-smoke
+          node src/cli.mjs e4-sequential-compare             --chain=second             --team-preset="$TEAM_PRESET"             --runs=32             > "results/m2-rematch/${LABEL}.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const label=process.env.LABEL;
+          const d=JSON.parse(fs.readFileSync('results/m2-rematch/'+label+'.json','utf8'));
+          const focusEvents=[];
+          for(const rr of d.runDetails||[]) for(const b of rr.battles||[]) {
+            for(const e of b.consumed||[]) if(e.item==='Focus Sash') {
+              focusEvents.push({run:rr.run,boss:b.boss,...e});
+            }
+          }
+          console.log(JSON.stringify({
+            label,team:d.team,runs:d.runs,
+            independentProduct:d.independent.productWinRate,
+            sequentialClearRate:d.sequential.clearRate,
+            delta:d.deltaClearRate,
+            sequentialRows:d.sequential.rows.map(r=>({
+              boss:r.boss,reached:r.reached,cleared:r.cleared,
+              conditionalWinRate:r.conditionalWinRate,levels:r.levels
+            })),
+            focusSashConsumptions:focusEvents
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m2-e4-rematch-smoke-${{ matrix.label }}
+          path: hgss_story_sim/results/m2-rematch/${{ matrix.label }}.json
+          if-no-files-found: error
