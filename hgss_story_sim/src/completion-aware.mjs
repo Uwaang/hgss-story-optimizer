@@ -111,7 +111,12 @@ function childContainsParent(childKeys, parentKeys) {
   return (parentKeys || []).every(key => child.has(key));
 }
 
-export function rankParentCompletions(parents = [], children = []) {
+export function rankParentCompletions(
+  parents = [],
+  children = [],
+  { topK = 3 } = {},
+) {
+  const normalizedTopK = Math.max(1, Math.floor(Number(topK || 1)));
   const childMap = new Map();
   for (const child of children) {
     const key = completionTeamKey(child?.teamKeys || []);
@@ -133,6 +138,15 @@ export function rankParentCompletions(parents = [], children = []) {
         compareCompletionMetrics(a.metrics, b.metrics) ||
         a.key.localeCompare(b.key)
       );
+    const describeChild = child => child
+      ? {
+          key: child.key,
+          teamKeys: child.teamKeys,
+          addedKeys: child.teamKeys.filter(key => !parentSet.has(key)),
+          addedKey: child.teamKeys.find(key => !parentSet.has(key)) || null,
+          metrics: child.metrics,
+        }
+      : null;
     const best = compatible[0] || null;
     const currentMetrics = parent.currentMetrics ||
       (parent.evaluation ? completionEvaluationMetrics(parent.evaluation) : null);
@@ -141,15 +155,8 @@ export function rankParentCompletions(parents = [], children = []) {
       key: parentKey,
       currentMetrics,
       childCount: compatible.length,
-      bestChild: best
-        ? {
-            key: best.key,
-            teamKeys: best.teamKeys,
-            addedKeys: best.teamKeys.filter(key => !parentSet.has(key)),
-            addedKey: best.teamKeys.find(key => !parentSet.has(key)) || null,
-            metrics: best.metrics,
-          }
-        : null,
+      bestChild: describeChild(best),
+      topChildren: compatible.slice(0, normalizedTopK).map(describeChild),
     };
   });
 
