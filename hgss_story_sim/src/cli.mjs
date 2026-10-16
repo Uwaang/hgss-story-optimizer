@@ -20,6 +20,7 @@ import {
   recipientScheduleStateKey,
 } from './recipient-scheduler.mjs';
 import {
+  compareCompletionMetrics,
   completionEvaluationMetrics,
   completionRecallSummary,
   completionTeamKey,
@@ -4283,6 +4284,10 @@ async function cmdRouteExpStoryCompletionRollout() {
 
   const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
   const confirmRuns = Math.max(runs, Math.floor(Number(arg('confirm-runs', String(runs)))));
+  const confirmTopK = Math.max(
+    1,
+    Math.floor(Number(arg('confirm-top-k', '1'))),
+  );
   const parentLimitRaw = Math.floor(Number(arg('parent-limit', '0')));
   const parentLimit = Number.isFinite(parentLimitRaw) && parentLimitRaw > 0
     ? parentLimitRaw
@@ -4376,24 +4381,49 @@ async function cmdRouteExpStoryCompletionRollout() {
   }
 
   const children = [...childMap.values()];
-  const ranked = rankParentCompletions(parents, children);
+  const ranked = rankParentCompletions(
+    parents,
+    children,
+    { topK: Math.max(confirmTopK, 3) },
+  );
   const confirmedRows = [];
   if (confirmRuns > runs) {
     for (const row of ranked.rows) {
-      if (!row?.bestChild) continue;
+      const candidates = (row?.topChildren || [])
+        .filter(Boolean)
+        .slice(0, confirmTopK);
+      if (!candidates.length) continue;
       const parentTeam = stagedTeamFromKeys(row.teamKeys, byKey);
-      const childTeam = stagedTeamFromKeys(row.bestChild.teamKeys, byKey);
       const parentEvaluation = await stagedEvaluateTeam(ctx, parentTeam, confirmRuns);
-      const childEvaluation = await stagedEvaluateTeam(ctx, childTeam, confirmRuns);
       const parentMetrics = completionEvaluationMetrics(parentEvaluation);
-      const childMetrics = completionEvaluationMetrics(childEvaluation);
+      const confirmedChildren = [];
+      for (const child of candidates) {
+        const childTeam = stagedTeamFromKeys(child.teamKeys, byKey);
+        const childEvaluation = await stagedEvaluateTeam(ctx, childTeam, confirmRuns);
+        confirmedChildren.push({
+          key: child.key,
+          teamKeys: child.teamKeys,
+          addedKeys: child.addedKeys,
+          addedKey: child.addedKey,
+          lowSampleMetrics: child.metrics,
+          metrics: completionEvaluationMetrics(childEvaluation),
+        });
+      }
+      confirmedChildren.sort((a, b) =>
+        compareCompletionMetrics(a.metrics, b.metrics) ||
+        a.key.localeCompare(b.key)
+      );
+      const bestConfirmedChild = confirmedChildren[0];
+      const childMetrics = bestConfirmedChild.metrics;
       confirmedRows.push({
         key: row.key,
         teamKeys: row.teamKeys,
         lowSampleCompletionRank: row.completionRank,
-        selectedAddedKey: row.bestChild.addedKey,
+        selectedAddedKey: bestConfirmedChild.addedKey,
         parentMetrics,
         childMetrics,
+        bestChild: bestConfirmedChild,
+        confirmedChildren,
         improvement: {
           retry: Number(parentMetrics.retry) - Number(childMetrics.retry),
           geometric: Number(childMetrics.geometric) - Number(parentMetrics.geometric),
@@ -4415,6 +4445,7 @@ async function cmdRouteExpStoryCompletionRollout() {
     childSize: parentSize + 1,
     runs,
     confirmRuns,
+    confirmTopK,
     sourceParentCount: sourceParents.length,
     selectedParentPoolCount: parentPool.length,
     evaluatedParentCount: parents.length,
@@ -4451,6 +4482,7 @@ async function cmdRouteExpStoryCompletionRolloutMerge() {
     sourceBeam.map(row => [completionTeamKey(row.teamKeys || []), row])
   );
   const rowsByKey = new Map();
+  const confirmedByKey = new Map();
   let shardUniqueChildren = 0;
   const shardAudit = [];
 
@@ -4485,6 +4517,20 @@ async function cmdRouteExpStoryCompletionRolloutMerge() {
       }
       rowsByKey.set(key, row);
     }
+    for (const row of doc?.confirmedRows || []) {
+      const key = completionTeamKey(row?.teamKeys || []);
+      if (!key) continue;
+      if (!sourceByKey.has(key)) {
+        throw new Error('completion-rollout confirmation returned unknown parent: ' + key);
+      }
+      if (!row?.parentMetrics || !row?.childMetrics) {
+        throw new Error('completion-rollout confirmation missing metrics: ' + key);
+      }
+      if (confirmedByKey.has(key)) {
+        throw new Error('completion-rollout duplicate confirmation across shards: ' + key);
+      }
+      confirmedByKey.set(key, row);
+    }
   }
 
   const missing = [...sourceByKey.keys()].filter(key => !rowsByKey.has(key));
@@ -4494,27 +4540,54 @@ async function cmdRouteExpStoryCompletionRolloutMerge() {
     );
   }
 
+  const useConfirmed = confirmedByKey.size === sourceByKey.size;
+  if (confirmedByKey.size && !useConfirmed) {
+    const missingConfirmed = [...sourceByKey.keys()]
+      .filter(key => !confirmedByKey.has(key));
+    throw new Error(
+      'completion-rollout-merge partial confirmation coverage: ' +
+      missingConfirmed.join(', ')
+    );
+  }
+
   const selection = selectCompletionAwareParents(
     [...sourceByKey.entries()].map(([key, source]) => {
-      const row = rowsByKey.get(key);
-      const currentMetrics = row.currentMetrics;
-      const completionMetrics = row.bestChild.metrics;
+      const lowSample = rowsByKey.get(key);
+      const confirmed = confirmedByKey.get(key);
+      const currentMetrics = useConfirmed
+        ? confirmed.parentMetrics
+        : lowSample.currentMetrics;
+      const completionMetrics = useConfirmed
+        ? confirmed.childMetrics
+        : lowSample.bestChild.metrics;
+      const requestedAddedKey = useConfirmed
+        ? confirmed.selectedAddedKey
+        : lowSample.bestChild.addedKey || null;
+      const improvement = useConfirmed
+        ? confirmed.improvement
+        : {
+            retry:
+              Number(currentMetrics.retry) - Number(completionMetrics.retry),
+            geometric:
+              Number(completionMetrics.geometric) - Number(currentMetrics.geometric),
+            mean:
+              Number(completionMetrics.mean) - Number(currentMetrics.mean),
+            progress:
+              Number(completionMetrics.progress) - Number(currentMetrics.progress || 0),
+          };
       return {
         key,
         teamKeys: source.teamKeys,
         currentMetrics,
         completionMetrics,
-        requestedAddedKey: row.bestChild.addedKey || null,
-        improvement: {
-          retry:
-            Number(currentMetrics.retry) - Number(completionMetrics.retry),
-          geometric:
-            Number(completionMetrics.geometric) - Number(currentMetrics.geometric),
-          mean:
-            Number(completionMetrics.mean) - Number(currentMetrics.mean),
-          progress:
-            Number(completionMetrics.progress) - Number(currentMetrics.progress || 0),
-        },
+        requestedAddedKey,
+        improvement,
+        confirmation: useConfirmed
+          ? {
+              bestChild: confirmed.bestChild || null,
+              confirmedChildren: confirmed.confirmedChildren || [],
+            }
+          : null,
       };
     }),
     beamWidth,
@@ -4559,6 +4632,8 @@ async function cmdRouteExpStoryCompletionRolloutMerge() {
       beamWidth,
       sourceParentCount: sourceBeam.length,
       rolloutParentCount: rowsByKey.size,
+      confirmedParentCount: confirmedByKey.size,
+      usedConfirmedMetrics: useConfirmed,
       shardUniqueChildren,
       shardAudit,
       selectedKeys: selection.selectedKeys,
