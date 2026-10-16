@@ -1,0 +1,49 @@
+name: research-v2-m3-completion-topk-smoke
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-completion-topk-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Syntax check
+        run: |
+          node --check src/completion-aware.mjs
+          node --check src/cli.mjs
+      - name: Selector smoke
+        run: node src/cli.mjs completion-aware-selector-smoke
+      - name: Top-k helper smoke
+        run: |
+          node --input-type=module <<'NODE'
+          import { rankParentCompletions } from './src/completion-aware.mjs';
+          const evalWith=(wins)=>({
+            rows:[{boss:'X',runs:2,wins,losses:2-wins,ties:0,winRate:wins/2}],
+            e4GroupedRouteRisk:false
+          });
+          const parents=[{teamKeys:['A'],evaluation:evalWith(1)}];
+          const children=[
+            {teamKeys:['A','B'],evaluation:evalWith(2)},
+            {teamKeys:['A','C'],evaluation:evalWith(1)},
+            {teamKeys:['A','D'],evaluation:evalWith(0)},
+          ];
+          const r=rankParentCompletions(parents,children,{topK:3});
+          if(r.rows[0].topChildren?.length!==3) throw new Error('topChildren length mismatch');
+          if(r.rows[0].topChildren[0].addedKey!=='B') throw new Error('best top-k child mismatch');
+          console.log(JSON.stringify(r.rows[0],null,2));
+          NODE
