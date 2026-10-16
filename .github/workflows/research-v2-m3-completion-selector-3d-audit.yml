@@ -1,0 +1,183 @@
+name: research-v2-m3-completion-selector-3d-audit
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-completion-selector-3d-audit]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-top3-confirm12-final
+          path: results/confirmed
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38880249395
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: results/all
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Compare 2D vs 3D delayed-synergy selector
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const confirmed=JSON.parse(fs.readFileSync('results/confirmed/confirmed-beam32.json','utf8'));
+          const all=JSON.parse(fs.readFileSync('results/all/all-size2.json','utf8'));
+          const rows=(confirmed.completionAwareSelection?.rows||[]).map(r=>({
+            ...r,
+            improvementFraction:
+              Number(r.currentMetrics?.retry)>0
+                ? (Number(r.currentMetrics.retry)-Number(r.completionMetrics?.retry))/
+                  Number(r.currentMetrics.retry)
+                : 0,
+          }));
+          const byMetric=(arr,fn,desc=false)=>[...arr].sort((a,b)=>{
+            const av=fn(a), bv=fn(b);
+            return (desc?bv-av:av-bv)||String(a.key).localeCompare(String(b.key));
+          });
+          byMetric(rows,r=>Number(r.currentMetrics?.retry??Infinity)).forEach((r,i)=>r.currentRank3=i+1);
+          byMetric(rows,r=>Number(r.completionMetrics?.retry??Infinity)).forEach((r,i)=>r.completionRank3=i+1);
+          byMetric(rows,r=>Number(r.improvementFraction??-Infinity),true).forEach((r,i)=>r.improvementRank=i+1);
+
+          const dominates=(a,b)=>
+            a.currentRank3<=b.currentRank3 &&
+            a.completionRank3<=b.completionRank3 &&
+            a.improvementRank<=b.improvementRank &&
+            (a.currentRank3<b.currentRank3 ||
+             a.completionRank3<b.completionRank3 ||
+             a.improvementRank<b.improvementRank);
+
+          const layers=[];
+          const remaining=[...rows];
+          while(remaining.length){
+            const front=remaining.filter((x,i)=>!remaining.some((y,j)=>i!==j&&dominates(y,x)));
+            if(!front.length){ layers.push([...remaining]); break; }
+            layers.push(front);
+            const set=new Set(front);
+            for(let i=remaining.length-1;i>=0;i--) if(set.has(remaining[i])) remaining.splice(i,1);
+          }
+          const crowd=(items)=>{
+            const dist=new Map(items.map(x=>[x,0]));
+            for(const field of ['currentRank3','completionRank3','improvementRank']){
+              const o=[...items].sort((a,b)=>a[field]-b[field]||a.key.localeCompare(b.key));
+              if(o.length<2) continue;
+              const lo=o[0][field], hi=o.at(-1)[field];
+              if(hi<=lo) continue;
+              dist.set(o[0],Infinity); dist.set(o.at(-1),Infinity);
+              for(let i=1;i<o.length-1;i++){
+                if(!Number.isFinite(dist.get(o[i]))) continue;
+                dist.set(o[i],dist.get(o[i])+(o[i+1][field]-o[i-1][field])/(hi-lo));
+              }
+            }
+            return [...items].sort((a,b)=>
+              (dist.get(b)-dist.get(a)) ||
+              Math.min(a.currentRank3,a.completionRank3,a.improvementRank)-
+                Math.min(b.currentRank3,b.completionRank3,b.improvementRank) ||
+              a.key.localeCompare(b.key)
+            );
+          };
+          const select=(width)=>{
+            const out=[];
+            const seen=new Set();
+            for(const layer of layers){
+              if(out.length>=width) break;
+              const left=width-out.length;
+              const ordered=layer.length<=left
+                ? [...layer].sort((a,b)=>
+                    Math.min(a.currentRank3,a.completionRank3,a.improvementRank)-
+                    Math.min(b.currentRank3,b.completionRank3,b.improvementRank) ||
+                    a.currentRank3-b.currentRank3 ||
+                    a.completionRank3-b.completionRank3 ||
+                    a.improvementRank-b.improvementRank ||
+                    a.key.localeCompare(b.key))
+                : crowd(layer);
+              for(const r of ordered){
+                if(out.length>=width) break;
+                if(seen.has(r.key)) continue;
+                seen.add(r.key); out.push(r);
+              }
+            }
+            return out;
+          };
+          const s16=select(16), s32=select(32), s48=select(48);
+          const key=xs=>[...xs].sort().join('|');
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const targets=[
+            ['Politoed','Poliwag::Poliwag->Politoed#2'],
+            ['Vespiquen','Combee::Combee->Vespiquen#1'],
+            ['Wobbuffet','Wynaut::Wobbuffet->Wobbuffet#1'],
+            ['Steelix','Onix::Steelix->Steelix#1'],
+            ['Weavile','Sneasel::Sneasel->Weavile#1'],
+            ['Kingdra','Horsea::Horsea->Kingdra#1'],
+          ];
+          const set16=new Set(s16.map(r=>r.key)), set32=new Set(s32.map(r=>r.key)), set48=new Set(s48.map(r=>r.key));
+          const controls=targets.map(([name,c])=>{
+            const k=key([starter,c]); const r=rows.find(x=>x.key===k);
+            return {
+              name,
+              currentRank:r?.currentRank3??null,
+              completionRank:r?.completionRank3??null,
+              improvementRank:r?.improvementRank??null,
+              improvementFraction:r?.improvementFraction??null,
+              selected16:set16.has(k),
+              selected32:set32.has(k),
+              selected48:set48.has(k),
+            };
+          });
+          const sourceByKey=new Map((all.beam||[]).map(r=>[key(r.teamKeys),r]));
+          const makeCheckpoint=(selected,width)=>({
+            ...all,
+            stage:String(all.stage||'size2')+'-completion-3d-'+width,
+            beam:selected.map(r=>{
+              const src=sourceByKey.get(r.key);
+              if(!src) throw new Error('missing source state '+r.key);
+              return {
+                ...src,
+                completion3dSelection:{
+                  currentRank:r.currentRank3,
+                  completionRank:r.completionRank3,
+                  improvementRank:r.improvementRank,
+                  improvementFraction:r.improvementFraction,
+                }
+              };
+            }),
+            completion3dSelection:{
+              policy:'current-rank-x-completion-rank-x-improvement-fraction-rank-pareto-v1',
+              width,
+              controls,
+              selectedKeys:selected.map(r=>r.key),
+            }
+          });
+          fs.writeFileSync('results/beam32-3d.json',JSON.stringify(makeCheckpoint(s32,32),null,2));
+          fs.writeFileSync('results/beam48-3d.json',JSON.stringify(makeCheckpoint(s48,48),null,2));
+          const out={
+            policy:'current-rank-x-completion-rank-x-improvement-fraction-rank-pareto-v1',
+            controls,
+            beam16:s16.map(r=>({key:r.key,ranks:[r.currentRank3,r.completionRank3,r.improvementRank],improvementFraction:r.improvementFraction})),
+            beam32:s32.map(r=>({key:r.key,ranks:[r.currentRank3,r.completionRank3,r.improvementRank],improvementFraction:r.improvementFraction})),
+            beam48:s48.map(r=>({key:r.key,ranks:[r.currentRank3,r.completionRank3,r.improvementRank],improvementFraction:r.improvementFraction})),
+          };
+          fs.writeFileSync('results/summary-3d.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-completion-selector-3d-audit
+          path: |
+            results/summary-3d.json
+            results/beam32-3d.json
+            results/beam48-3d.json
+          if-no-files-found: error
