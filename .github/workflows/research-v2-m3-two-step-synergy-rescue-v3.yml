@@ -1,0 +1,587 @@
+name: research-v2-m3-two-step-synergy-rescue-v3
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-two-step-synergy-rescue-v3]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Inject bounded two-step probe command
+        run: |
+          node <<'PATCH'
+          const fs=require('fs');
+          const p='src/cli.mjs';
+          let s=fs.readFileSync(p,'utf8');
+          const anchor='async function cmdRouteExpStoryCompletionRollout() {';
+          if(!s.includes(anchor)) throw new Error('rollout anchor missing');
+          const fn=String.raw`
+          async function cmdCompletionAwareTwoStepProbe() {
+            const startedAt = Date.now();
+            const ctx = await loadStagedRouteContext();
+            const checkpoint = await readJsonPath(arg('input', ''));
+            stagedCheckpointCompatibility(checkpoint, ctx);
+            const encoded = String(arg('prefix-base64', '')).trim();
+            const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
+            const confirmRuns = Math.max(screenRuns, Math.floor(Number(arg('confirm-runs', '16'))));
+            const firstTopK = Math.max(1, Math.floor(Number(arg('first-top-k', '4'))));
+            const secondTopK = Math.max(1, Math.floor(Number(arg('second-top-k', '4'))));
+            const candidateLimitRaw = Math.floor(Number(arg('candidate-limit', '100')));
+            const candidateLimit = Number.isFinite(candidateLimitRaw) && candidateLimitRaw > 0 ? candidateLimitRaw : null;
+            if (!encoded) throw new Error('completion-aware-two-step-probe requires --prefix-base64');
+            let prefixKeys;
+            try { prefixKeys = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')); }
+            catch (error) { throw new Error('invalid two-step prefix-base64: ' + error.message); }
+            if (!Array.isArray(prefixKeys) || prefixKeys.length < 1 || prefixKeys.length > 4) {
+              throw new Error('two-step prefix must have team size 1..4');
+            }
+            const byKey = stagedCandidateMap(ctx);
+            const missing = prefixKeys.filter(key => !byKey.has(String(key)));
+            if (missing.length) throw new Error('two-step prefix missing candidate(s): ' + missing.join(', '));
+            const prefixTeam = stagedTeamFromKeys(prefixKeys, byKey);
+            if (!validateCandidateTeam(prefixTeam) || !teamRespectsExclusiveGroups(prefixTeam)) {
+              throw new Error('two-step prefix violates team constraints');
+            }
+            if (prefixTeam.length + 2 > 6) throw new Error('two-step probe would exceed team size 6');
+            const screened = (checkpoint.screenedKeys || []).map(key => {
+              const candidate = byKey.get(key);
+              if (!candidate) throw new Error('screened candidate missing: ' + key);
+              return candidate;
+            });
+            if (!screened.length) throw new Error('two-step probe requires checkpoint.screenedKeys');
+            const candidatePool = candidateLimit ? screened.slice(0, candidateLimit) : screened;
+            const existing = new Set(prefixKeys);
+            const firstRows = [];
+            for (const candidate of candidatePool) {
+              const addedKey = candidateIdentity(candidate);
+              if (existing.has(addedKey)) continue;
+              const team = [...prefixTeam, candidate];
+              if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+              const evaluation = await stagedEvaluateTeam(ctx, team, screenRuns);
+              firstRows.push({
+                key: completionTeamKey(team.map(candidateIdentity)),
+                teamKeys: team.map(candidateIdentity),
+                addedKey,
+                metrics: completionEvaluationMetrics(evaluation),
+              });
+            }
+            firstRows.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const firstSelected = firstRows.slice(0, firstTopK);
+            const secondByKey = new Map();
+            const shortlistedKeys = new Set();
+            for (const first of firstSelected) {
+              const firstTeam = stagedTeamFromKeys(first.teamKeys, byKey);
+              const firstExisting = new Set(first.teamKeys);
+              const branchRows = [];
+              for (const candidate of candidatePool) {
+                const secondAddedKey = candidateIdentity(candidate);
+                if (firstExisting.has(secondAddedKey)) continue;
+                const team = [...firstTeam, candidate];
+                if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+                const childKey = completionTeamKey(team.map(candidateIdentity));
+                let child = secondByKey.get(childKey);
+                if (!child) {
+                  const evaluation = await stagedEvaluateTeam(ctx, team, screenRuns);
+                  child = {
+                    key: childKey,
+                    teamKeys: team.map(candidateIdentity),
+                    metrics: completionEvaluationMetrics(evaluation),
+                    paths: [],
+                  };
+                  secondByKey.set(childKey, child);
+                }
+                child.paths.push({firstAddedKey:first.addedKey, secondAddedKey});
+                branchRows.push(child);
+              }
+              branchRows.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+              for (const child of branchRows.slice(0, secondTopK)) shortlistedKeys.add(child.key);
+            }
+            const shortlisted=[...shortlistedKeys].map(key=>secondByKey.get(key)).filter(Boolean)
+              .sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const parentEvaluation = await stagedEvaluateTeam(ctx, prefixTeam, confirmRuns);
+            const parentMetrics = completionEvaluationMetrics(parentEvaluation);
+            const confirmedChildren = [];
+            for (const child of shortlisted) {
+              const team = stagedTeamFromKeys(child.teamKeys, byKey);
+              const evaluation = await stagedEvaluateTeam(ctx, team, confirmRuns);
+              confirmedChildren.push({
+                key: child.key,
+                teamKeys: child.teamKeys,
+                lowSampleMetrics: child.metrics,
+                paths: child.paths,
+                metrics: completionEvaluationMetrics(evaluation),
+              });
+            }
+            confirmedChildren.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const bestChild = confirmedChildren[0] || null;
+            const improvement = bestChild ? {
+              retry:Number(parentMetrics.retry)-Number(bestChild.metrics.retry),
+              geometric:Number(bestChild.metrics.geometric)-Number(parentMetrics.geometric),
+              mean:Number(bestChild.metrics.mean)-Number(parentMetrics.mean),
+              progress:Number(bestChild.metrics.progress)-Number(parentMetrics.progress||0),
+            } : null;
+            await flushBattleCache();
+            console.log(JSON.stringify({
+              schemaVersion:1,
+              type:'completion-aware-two-step-probe',
+              purpose:'SCRUM-423 bounded generic two-step delayed-synergy rescue',
+              fingerprint:stagedRouteSearchFingerprint(ctx),
+              config:stagedConfigSnapshot(ctx),
+              prefixKeys,
+              parentSize:prefixKeys.length,
+              completionSize:prefixKeys.length+2,
+              screenRuns,confirmRuns,firstTopK,secondTopK,
+              candidateLimit:candidatePool.length,
+              firstCandidateCount:firstRows.length,
+              firstSelected,
+              uniqueSecondChildren:secondByKey.size,
+              shortlistedSecondChildren:shortlisted.length,
+              parentMetrics,bestChild,improvement,confirmedChildren,
+              wallMs:Date.now()-startedAt,
+              battleCache:battleCacheStats(),
+            },null,2));
+          }
+          `;
+          s=s.replace(anchor,fn+'\\n'+anchor);
+          const cmdAnchor="  'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,\\n";
+          if(!s.includes(cmdAnchor)) throw new Error('command anchor missing');
+          s=s.replace(cmdAnchor,cmdAnchor+"  'completion-aware-two-step-probe': cmdCompletionAwareTwoStepProbe,\\n");
+          fs.writeFileSync(p,s);
+          PATCH
+          node --check src/cli.mjs
+      - name: Tiny functional smoke
+        run: |
+          PREFIX="$(node -e "process.stdout.write(Buffer.from(JSON.stringify(['Cyndaquil::Cyndaquil->Typhlosion#1','Combee::Combee->Vespiquen#1'])).toString('base64'))")"
+          node src/cli.mjs completion-aware-two-step-probe \
+            --input=results/base/all-size2.json \
+            --prefix-base64="$PREFIX" \
+            --screen-runs=1 --confirm-runs=2 \
+            --first-top-k=2 --second-top-k=2 --candidate-limit=8 \
+            $SEARCH_ARGS > results/smoke.json
+          jq '{prefixKeys,firstCandidateCount,firstSelected:(.firstSelected|length),uniqueSecondChildren,shortlistedSecondChildren,bestChild,wallMs}' results/smoke.json
+
+  prepare:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-top3-confirm12-final
+          path: results/confirmed
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38880249395
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: results/all
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Build generic improvement-rescue parent48
+        id: build
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const confirmed=JSON.parse(fs.readFileSync('results/confirmed/confirmed-beam32.json','utf8'));
+          const all=JSON.parse(fs.readFileSync('results/all/all-size2.json','utf8'));
+          const key=xs=>[...xs].sort().join('|');
+          const source=new Map((all.beam||[]).map(r=>[key(r.teamKeys),r]));
+          const rows=(confirmed.completionAwareSelection?.rows||[]).map(r=>({
+            ...r,
+            improvementFraction:Number(r.currentMetrics?.retry)>0
+              ? (Number(r.currentMetrics.retry)-Number(r.completionMetrics?.retry))/Number(r.currentMetrics.retry)
+              : 0,
+          })).sort((a,b)=>
+            Number(b.improvementFraction)-Number(a.improvementFraction) ||
+            Number(a.completionMetrics?.retry??Infinity)-Number(b.completionMetrics?.retry??Infinity) ||
+            a.key.localeCompare(b.key)
+          );
+          const selected=rows.slice(0,48);
+          const controls=[
+            'Poliwag::Poliwag->Politoed#2',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+          ];
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          for(const c of controls){
+            const k=key([starter,c]);
+            if(!selected.some(r=>r.key===k)) throw new Error('required generic control fell outside top48 improvement reserve: '+c);
+          }
+          const include=selected.map((r,i)=>{
+            const src=source.get(r.key);
+            if(!src) throw new Error('missing source parent '+r.key);
+            return {
+              label:'p'+String(i+1).padStart(2,'0'),
+              prefix:Buffer.from(JSON.stringify(src.teamKeys),'utf8').toString('base64'),
+              improvement_rank:i+1,
+            };
+          });
+          const audit=selected.map((r,i)=>({
+            improvementRank:i+1,
+            teamKeys:r.teamKeys,
+            improvementFraction:r.improvementFraction,
+            currentRetry:r.currentMetrics?.retry,
+            oneStepRetry:r.completionMetrics?.retry,
+          }));
+          fs.writeFileSync('results/rescue48.json',JSON.stringify({audit,include},null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\\n');
+          console.log(JSON.stringify(audit,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-two-step-rescue48
+          path: results/rescue48.json
+          if-no-files-found: error
+
+  probe:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 450
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Inject bounded two-step probe command
+        run: |
+          node <<'PATCH'
+          const fs=require('fs');
+          const p='src/cli.mjs';
+          let s=fs.readFileSync(p,'utf8');
+          const anchor='async function cmdRouteExpStoryCompletionRollout() {';
+          if(!s.includes(anchor)) throw new Error('rollout anchor missing');
+          const fn=String.raw`
+          async function cmdCompletionAwareTwoStepProbe() {
+            const startedAt = Date.now();
+            const ctx = await loadStagedRouteContext();
+            const checkpoint = await readJsonPath(arg('input', ''));
+            stagedCheckpointCompatibility(checkpoint, ctx);
+            const encoded = String(arg('prefix-base64', '')).trim();
+            const screenRuns = Math.max(1, Math.floor(Number(arg('screen-runs', '1'))));
+            const confirmRuns = Math.max(screenRuns, Math.floor(Number(arg('confirm-runs', '16'))));
+            const firstTopK = Math.max(1, Math.floor(Number(arg('first-top-k', '4'))));
+            const secondTopK = Math.max(1, Math.floor(Number(arg('second-top-k', '4'))));
+            const candidateLimitRaw = Math.floor(Number(arg('candidate-limit', '100')));
+            const candidateLimit = Number.isFinite(candidateLimitRaw) && candidateLimitRaw > 0 ? candidateLimitRaw : null;
+            if (!encoded) throw new Error('completion-aware-two-step-probe requires --prefix-base64');
+            let prefixKeys;
+            try { prefixKeys = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')); }
+            catch (error) { throw new Error('invalid two-step prefix-base64: ' + error.message); }
+            if (!Array.isArray(prefixKeys) || prefixKeys.length < 1 || prefixKeys.length > 4) throw new Error('two-step prefix must have team size 1..4');
+            const byKey = stagedCandidateMap(ctx);
+            const missing = prefixKeys.filter(key => !byKey.has(String(key)));
+            if (missing.length) throw new Error('two-step prefix missing candidate(s): ' + missing.join(', '));
+            const prefixTeam = stagedTeamFromKeys(prefixKeys, byKey);
+            if (!validateCandidateTeam(prefixTeam) || !teamRespectsExclusiveGroups(prefixTeam)) throw new Error('two-step prefix violates team constraints');
+            if (prefixTeam.length + 2 > 6) throw new Error('two-step probe would exceed team size 6');
+            const screened = (checkpoint.screenedKeys || []).map(key => {
+              const candidate = byKey.get(key);
+              if (!candidate) throw new Error('screened candidate missing: ' + key);
+              return candidate;
+            });
+            if (!screened.length) throw new Error('two-step probe requires checkpoint.screenedKeys');
+            const candidatePool = candidateLimit ? screened.slice(0, candidateLimit) : screened;
+            const existing = new Set(prefixKeys);
+            const firstRows = [];
+            for (const candidate of candidatePool) {
+              const addedKey = candidateIdentity(candidate);
+              if (existing.has(addedKey)) continue;
+              const team = [...prefixTeam, candidate];
+              if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+              const evaluation = await stagedEvaluateTeam(ctx, team, screenRuns);
+              firstRows.push({key:completionTeamKey(team.map(candidateIdentity)),teamKeys:team.map(candidateIdentity),addedKey,metrics:completionEvaluationMetrics(evaluation)});
+            }
+            firstRows.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const firstSelected = firstRows.slice(0, firstTopK);
+            const secondByKey = new Map();
+            const shortlistedKeys = new Set();
+            for (const first of firstSelected) {
+              const firstTeam = stagedTeamFromKeys(first.teamKeys, byKey);
+              const firstExisting = new Set(first.teamKeys);
+              const branchRows = [];
+              for (const candidate of candidatePool) {
+                const secondAddedKey = candidateIdentity(candidate);
+                if (firstExisting.has(secondAddedKey)) continue;
+                const team = [...firstTeam, candidate];
+                if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+                const childKey = completionTeamKey(team.map(candidateIdentity));
+                let child = secondByKey.get(childKey);
+                if (!child) {
+                  const evaluation = await stagedEvaluateTeam(ctx, team, screenRuns);
+                  child={key:childKey,teamKeys:team.map(candidateIdentity),metrics:completionEvaluationMetrics(evaluation),paths:[]};
+                  secondByKey.set(childKey,child);
+                }
+                child.paths.push({firstAddedKey:first.addedKey,secondAddedKey});
+                branchRows.push(child);
+              }
+              branchRows.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+              for(const child of branchRows.slice(0,secondTopK)) shortlistedKeys.add(child.key);
+            }
+            const shortlisted=[...shortlistedKeys].map(k=>secondByKey.get(k)).filter(Boolean)
+              .sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const parentEvaluation=await stagedEvaluateTeam(ctx,prefixTeam,confirmRuns);
+            const parentMetrics=completionEvaluationMetrics(parentEvaluation);
+            const confirmedChildren=[];
+            for(const child of shortlisted){
+              const team=stagedTeamFromKeys(child.teamKeys,byKey);
+              const evaluation=await stagedEvaluateTeam(ctx,team,confirmRuns);
+              confirmedChildren.push({key:child.key,teamKeys:child.teamKeys,lowSampleMetrics:child.metrics,paths:child.paths,metrics:completionEvaluationMetrics(evaluation)});
+            }
+            confirmedChildren.sort((a,b)=>compareCompletionMetrics(a.metrics,b.metrics)||a.key.localeCompare(b.key));
+            const bestChild=confirmedChildren[0]||null;
+            const improvement=bestChild?{
+              retry:Number(parentMetrics.retry)-Number(bestChild.metrics.retry),
+              geometric:Number(bestChild.metrics.geometric)-Number(parentMetrics.geometric),
+              mean:Number(bestChild.metrics.mean)-Number(parentMetrics.mean),
+              progress:Number(bestChild.metrics.progress)-Number(parentMetrics.progress||0),
+            }:null;
+            await flushBattleCache();
+            console.log(JSON.stringify({
+              schemaVersion:1,type:'completion-aware-two-step-probe',purpose:'SCRUM-423 bounded generic two-step delayed-synergy rescue',
+              fingerprint:stagedRouteSearchFingerprint(ctx),config:stagedConfigSnapshot(ctx),
+              prefixKeys,parentSize:prefixKeys.length,completionSize:prefixKeys.length+2,
+              screenRuns,confirmRuns,firstTopK,secondTopK,candidateLimit:candidatePool.length,
+              firstCandidateCount:firstRows.length,firstSelected,uniqueSecondChildren:secondByKey.size,
+              shortlistedSecondChildren:shortlisted.length,parentMetrics,bestChild,improvement,confirmedChildren,
+              wallMs:Date.now()-startedAt,battleCache:battleCacheStats(),
+            },null,2));
+          }
+          `;
+          s=s.replace(anchor,fn+'\\n'+anchor);
+          const cmdAnchor="  'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,\\n";
+          if(!s.includes(cmdAnchor)) throw new Error('command anchor missing');
+          s=s.replace(cmdAnchor,cmdAnchor+"  'completion-aware-two-step-probe': cmdCompletionAwareTwoStepProbe,\\n");
+          fs.writeFileSync(p,s);
+          PATCH
+          node --check src/cli.mjs
+      - name: Two-step rescue parent
+        run: |
+          set -euo pipefail
+          OUT="results/two-step-${{ matrix.label }}.json"
+          node src/cli.mjs completion-aware-two-step-probe \
+            --input=results/base/all-size2.json \
+            --prefix-base64="${{ matrix.prefix }}" \
+            --screen-runs=1 --confirm-runs=16 \
+            --first-top-k=4 --second-top-k=4 --candidate-limit=100 \
+            $SEARCH_ARGS > "$OUT"
+          jq '{prefixKeys,candidateLimit,firstCandidateCount,firstSelected:(.firstSelected|map(.addedKey)),uniqueSecondChildren,shortlistedSecondChildren,parentMetrics,bestChild:{teamKeys:.bestChild.teamKeys,metrics:.bestChild.metrics,paths:.bestChild.paths},improvement,wallMs}' "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-two-step-probe-${{ matrix.label }}
+          path: hgss_story_sim/results/two-step-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      final_matrix: ${{ steps.rank.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-two-step-probe-*
+          path: results/probes
+          merge-multiple: true
+      - name: Rank confirmed size4 candidates
+        id: rank
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files=fs.readdirSync('results/probes').filter(x=>x.endsWith('.json')).sort();
+          if(files.length!==48) throw new Error('expected 48 probe artifacts, got '+files.length);
+          const docs=files.map(f=>JSON.parse(fs.readFileSync('results/probes/'+f,'utf8')));
+          const cmp=(a,b)=>
+            Number(a.metrics?.retry??Infinity)-Number(b.metrics?.retry??Infinity) ||
+            Number(b.metrics?.geometric??0)-Number(a.metrics?.geometric??0) ||
+            Number(b.metrics?.mean??0)-Number(a.metrics?.mean??0) ||
+            Number(b.metrics?.progress??0)-Number(a.metrics?.progress??0) ||
+            String(a.key).localeCompare(String(b.key));
+          const key=xs=>[...xs].sort().join('|');
+          const allChildren=new Map();
+          for(const d of docs){
+            for(const c of d.confirmedChildren||[]){
+              const k=key(c.teamKeys);
+              const row={...c,key:k,parentPrefix:d.prefixKeys,parentMetrics:d.parentMetrics};
+              const prev=allChildren.get(k);
+              if(!prev || cmp(row,prev)<0) allChildren.set(k,row);
+            }
+          }
+          const ranked=[...allChildren.values()].sort(cmp);
+          const top32=ranked.slice(0,32);
+          const fallback=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+          ];
+          const fallbackKey=key(fallback);
+          const matrix=top32.map((r,i)=>({
+            label:'r'+String(i+1).padStart(2,'0'),
+            team:Buffer.from(JSON.stringify(r.teamKeys),'utf8').toString('base64'),
+            source:'search',
+          }));
+          if(!top32.some(r=>r.key===fallbackKey)){
+            matrix.push({
+              label:'control-fallback4',
+              team:Buffer.from(JSON.stringify(fallback),'utf8').toString('base64'),
+              source:'control',
+            });
+          }
+          const controls=[
+            'Poliwag::Poliwag->Politoed#2',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+          ];
+          const starter='Cyndaquil::Cyndaquil->Typhlosion#1';
+          const parentAudit=controls.map(c=>{
+            const d=docs.find(x=>key(x.prefixKeys)===key([starter,c]));
+            return d?{
+              prefixKeys:d.prefixKeys,
+              firstSelected:(d.firstSelected||[]).map(x=>x.addedKey),
+              parentRetry:d.parentMetrics?.retry,
+              bestTwoStep:d.bestChild,
+              improvement:d.improvement,
+            }:null;
+          });
+          const out={probeCount:docs.length,uniqueConfirmedSize4:ranked.length,parentAudit,top32};
+          fs.writeFileSync('results/two-step-merge16.json',JSON.stringify(out,null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include:matrix})+'\\n');
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-two-step-merge16
+          path: results/two-step-merge16.json
+          if-no-files-found: error
+
+  final64:
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.merge.outputs.final_matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    env:
+      FINAL_ARGS: >-
+        --route-profile=complete
+        --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+        --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+        --entry-level=expected --same-stage-join=map-order
+        --resources=all --spend-policy=natural
+        --objective=route-risk
+        --route-grind-proxy=false
+        --e4-grouped-route-risk=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Confirm selected size4 at 64 runs
+        run: |
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=64 \
+            $FINAL_ARGS > "results/final64-${{ matrix.label }}.json"
+          jq '{teamKeys,metrics}' "results/final64-${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-two-step-final64-${{ matrix.label }}
+          path: hgss_story_sim/results/final64-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: final64
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-two-step-final64-*
+          path: results
+          merge-multiple: true
+      - name: Summarize final64
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files=fs.readdirSync('results').filter(x=>x.endsWith('.json')).sort();
+          const rows=files.map(f=>{
+            const d=JSON.parse(fs.readFileSync('results/'+f,'utf8'));
+            return {file:f,teamKeys:d.teamKeys,...d.metrics};
+          }).sort((a,b)=>
+            Number(a.retry)-Number(b.retry) ||
+            Number(b.geometric)-Number(a.geometric) ||
+            Number(b.mean)-Number(a.mean) ||
+            a.file.localeCompare(b.file)
+          );
+          rows.forEach((r,i)=>r.rank=i+1);
+          const fallbackKey=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+          ].sort().join('|');
+          const fallback=rows.find(r=>[...r.teamKeys].sort().join('|')===fallbackKey)||null;
+          const out={runs:64,count:rows.length,fallbackControl:fallback,top10:rows.slice(0,10),rows};
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-two-step-final64-summary
+          path: results/summary.json
+          if-no-files-found: error
