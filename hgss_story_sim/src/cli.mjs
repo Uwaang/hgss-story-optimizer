@@ -4188,6 +4188,133 @@ async function cmdCompletionAwareExplicitEvaluate() {
 }
 
 
+
+async function cmdCompletionAwareE4EntrySwapRescue() {
+  const ctx = await loadStagedRouteContext();
+  const encoded = String(arg('team-base64', '')).trim();
+  const runs = Math.max(1, Math.floor(Number(arg('runs', '2'))));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const shardIndex = Math.max(0, Math.floor(Number(arg('shard-index', '0'))));
+  const entryBossLabel = String(arg('entry-boss', 'Will')).trim();
+  if (shardIndex >= shardCount) {
+    throw new Error('shard-index must be < shard-count');
+  }
+  if (!encoded) {
+    throw new Error('completion-aware-e4-entry-swap-rescue requires --team-base64');
+  }
+
+  let baseKeys;
+  try {
+    baseKeys = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  } catch (error) {
+    throw new Error('invalid e4-entry rescue team-base64: ' + error.message);
+  }
+  if (!Array.isArray(baseKeys) || baseKeys.length !== 6) {
+    throw new Error('e4-entry rescue requires an exact six-member base team');
+  }
+
+  const byKey = stagedCandidateMap(ctx);
+  const missing = baseKeys.filter(key => !byKey.has(String(key)));
+  if (missing.length) {
+    throw new Error('e4-entry rescue missing candidate(s): ' + missing.join(', '));
+  }
+  const baseTeam = stagedTeamFromKeys(baseKeys, byKey);
+  if (!validateCandidateTeam(baseTeam) || !teamRespectsExclusiveGroups(baseTeam)) {
+    throw new Error('e4-entry rescue base team violates team constraints');
+  }
+
+  const entryBoss = ctx.story.bosses.find(boss => String(boss.label) === entryBossLabel);
+  if (!entryBoss) {
+    throw new Error('e4-entry rescue cannot find entry boss: ' + entryBossLabel);
+  }
+  const entryStage = Number(entryBoss.stage);
+  if (!Number.isFinite(entryStage)) {
+    throw new Error('e4-entry rescue entry boss has invalid stage');
+  }
+
+  const availableAtEntry = candidate =>
+    Number.isFinite(Number(candidate.availableFrom)) &&
+    Number(candidate.availableFrom) <= entryStage;
+  const earlyCandidates = ctx.pool.candidates.filter(availableAtEntry);
+  const lateBase = baseTeam.filter(candidate => !availableAtEntry(candidate));
+  if (!lateBase.length) {
+    throw new Error('e4-entry rescue base team has no post-entry members to replace');
+  }
+
+  const baseKeySet = new Set(baseKeys.map(String));
+  const variantMap = new Map();
+  for (const removed of lateBase) {
+    const removedKey = candidateIdentity(removed);
+    for (const added of earlyCandidates) {
+      const addedKey = candidateIdentity(added);
+      if (baseKeySet.has(addedKey)) continue;
+      const team = baseTeam.map(candidate =>
+        candidateIdentity(candidate) === removedKey ? added : candidate
+      );
+      if (!validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) continue;
+      const teamKeys = team.map(candidateIdentity);
+      const key = completionTeamKey(teamKeys);
+      if (variantMap.has(key)) continue;
+      if (stagedShardIndex(key, shardCount) !== shardIndex) continue;
+      variantMap.set(key, { team, teamKeys, removedKey, addedKey });
+    }
+  }
+
+  const rows = [];
+  for (const variant of variantMap.values()) {
+    const evaluation = await stagedEvaluateTeam(ctx, variant.team, runs);
+    const metrics = completionEvaluationMetrics(evaluation);
+    const bossRow = label => (evaluation?.rows || []).find(row => String(row.boss) === label);
+    const entryEligibleKeys = variant.team
+      .filter(availableAtEntry)
+      .map(candidateIdentity)
+      .sort();
+    rows.push({
+      teamKeys: variant.teamKeys,
+      removedKey: variant.removedKey,
+      addedKey: variant.addedKey,
+      addedAvailableFrom: byKey.get(variant.addedKey)?.availableFrom ?? null,
+      e4EntryStage: entryStage,
+      e4EntryEligibleKeys: entryEligibleKeys,
+      e4EntryEligibleCount: entryEligibleKeys.length,
+      metrics,
+      checkpoints: {
+        clair: bossRow('Clair')?.winRate ?? null,
+        will1: bossRow('Will')?.winRate ?? null,
+        lance1: bossRow('Lance')?.winRate ?? null,
+        will2: bossRow('Will 2')?.winRate ?? null,
+        lance2: bossRow('Lance 2')?.winRate ?? null,
+        red: bossRow('Red')?.winRate ?? null,
+      },
+    });
+  }
+  rows.sort((a, b) =>
+    compareCompletionMetrics(a.metrics, b.metrics) ||
+    b.e4EntryEligibleCount - a.e4EntryEligibleCount ||
+    completionTeamKey(a.teamKeys).localeCompare(completionTeamKey(b.teamKeys))
+  );
+  await flushBattleCache();
+
+  console.log(JSON.stringify({
+    schemaVersion: 1,
+    purpose: 'SCRUM-423 generic E4-entry one-slot rescue around a complete team',
+    fingerprint: stagedRouteSearchFingerprint(ctx),
+    config: stagedConfigSnapshot(ctx),
+    runs,
+    shardCount,
+    shardIndex,
+    entryBoss: entryBossLabel,
+    entryStage,
+    baseKeys,
+    baseEntryEligibleKeys: baseTeam.filter(availableAtEntry).map(candidateIdentity).sort(),
+    lateBaseKeys: lateBase.map(candidateIdentity).sort(),
+    earlyCandidateCount: earlyCandidates.length,
+    variantCount: rows.length,
+    rows,
+    battleCache: battleCacheStats(),
+  }, null, 2));
+}
+
 async function cmdCompletionAwarePrefixProbe() {
   const ctx = await loadStagedRouteContext();
   const encoded = String(arg('prefix-base64', '')).trim();
@@ -17844,6 +17971,7 @@ const commands = {
   'route-exp-story-screen-merge': cmdRouteExpStoryScreenMerge,
   'completion-aware-artifact-rank': cmdCompletionAwareArtifactRank,
   'completion-aware-explicit-evaluate': cmdCompletionAwareExplicitEvaluate,
+  'completion-aware-e4-entry-swap-rescue': cmdCompletionAwareE4EntrySwapRescue,
   'completion-aware-prefix-probe': cmdCompletionAwarePrefixProbe,
   'completion-aware-selector-smoke': cmdCompletionAwareSelectorSmoke,
   'route-risk-grind-selector-smoke': cmdRouteRiskGrindSelectorSmoke,
