@@ -1,0 +1,456 @@
+name: research-v2-m3-size4-to-size6-terminal-search-v2
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-size4-to-size6-terminal-search-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Inject proven two-step probe from v5
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('../.github/workflows/research-v2-m3-two-step-synergy-rescue-v5.yml').read_text()
+          marker="          node <<'PATCH'\n"
+          block=s.split(marker,1)[1].split("\n          PATCH",1)[0]
+          lines=[]
+          for line in block.splitlines():
+              lines.append(line[10:] if line.startswith("          ") else line)
+          Path('/tmp/inject-two-step.js').write_text('\n'.join(lines)+'\n')
+          PY
+          node /tmp/inject-two-step.js
+          node - <<'PATCH'
+          const fs=require('fs');
+          const p='src/cli.mjs';
+          let s=fs.readFileSync(p,'utf8');
+          const start=s.indexOf('confirmedChildren.push({');
+          if(start<0) throw new Error('confirmedChildren.push block missing');
+          const end=s.indexOf('});',start);
+          if(end<0) throw new Error('confirmedChildren.push block end missing');
+          const block=s.slice(start,end+3);
+          if(!block.includes('metrics: completionEvaluationMetrics(evaluation),')) throw new Error('confirmed-child metrics line missing');
+          const patched=block.replace(
+            'metrics: completionEvaluationMetrics(evaluation),',
+            'metrics: completionEvaluationMetrics(evaluation),\n                routeGrindProxy: evaluation.routeGrindProxy || null,'
+          );
+          s=s.slice(0,start)+patched+s.slice(end+3);
+          fs.writeFileSync(p,s);
+          PATCH
+          node --check src/cli.mjs
+      - name: Tiny size4-to-size6 smoke
+        run: |
+          PREFIX="$(node -e "process.stdout.write(Buffer.from(JSON.stringify(['Cyndaquil::Cyndaquil->Typhlosion#1','Ponyta::Rapidash->Rapidash#1','Horsea::Horsea->Kingdra#1','Seel::Dewgong->Dewgong#1'])).toString('base64'))")"
+          node src/cli.mjs completion-aware-two-step-probe \
+            --input=results/base/all-size2.json \
+            --prefix-base64="$PREFIX" \
+            --screen-runs=1 --confirm-runs=2 \
+            --first-top-k=2 --second-top-k=2 --candidate-limit=8 \
+            $SEARCH_ARGS > results/smoke.json
+          jq '{prefixKeys,completionSize,confirmed:(.confirmedChildren|length),grind:[.confirmedChildren[].routeGrindProxy]}' results/smoke.json
+
+  prepare:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-two-step-final64-summary
+          path: results/size4
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38949368840
+          github-token: ${{ github.token }}
+      - id: m
+        name: Select 16 terminal-composition-diverse size4 basins
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('results/size4/summary.json','utf8'));
+          const terminal=k=>{
+            const rhs=String(k).split('::')[1]||String(k);
+            const tail=rhs.includes('->')?rhs.split('->').at(-1):rhs;
+            return tail.split('#')[0];
+          };
+          const seen=new Set();
+          const selected=[];
+          for(const row of d.rows||[]){
+            if(String(row.file).includes('control-fallback4')) continue;
+            const tk=[...row.teamKeys].map(terminal).sort().join('|');
+            if(seen.has(tk)) continue;
+            seen.add(tk);
+            selected.push(row);
+            if(selected.length>=16) break;
+          }
+          if(selected.length<8) throw new Error('too few diverse size4 basins: '+selected.length);
+          const include=selected.map((r,i)=>({
+            label:'s'+String(i+1).padStart(2,'0'),
+            source:'search',
+            rank:r.rank,
+            team:Buffer.from(JSON.stringify(r.teamKeys),'utf8').toString('base64')
+          }));
+          const fallback=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+          ];
+          include.push({
+            label:'control-fallback4',
+            source:'control',
+            rank:999,
+            team:Buffer.from(JSON.stringify(fallback),'utf8').toString('base64')
+          });
+          fs.writeFileSync('results/selected-size4.json',JSON.stringify({selected,include},null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\n');
+          console.log(JSON.stringify({selectedCount:selected.length,selected:selected.map(r=>({rank:r.rank,teamKeys:r.teamKeys,retry:r.retry}))},null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-size6-parent-basins
+          path: results/selected-size4.json
+          if-no-files-found: error
+
+  probe:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-grouped-completion-size2-all
+          path: hgss_story_sim/results/base
+          repository: Uwaang/hgss-story-optimizer
+          run-id: 38786162546
+          github-token: ${{ github.token }}
+      - name: Inject proven two-step probe from v5
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('../.github/workflows/research-v2-m3-two-step-synergy-rescue-v5.yml').read_text()
+          marker="          node <<'PATCH'\n"
+          block=s.split(marker,1)[1].split("\n          PATCH",1)[0]
+          lines=[]
+          for line in block.splitlines():
+              lines.append(line[10:] if line.startswith("          ") else line)
+          Path('/tmp/inject-two-step.js').write_text('\n'.join(lines)+'\n')
+          PY
+          node /tmp/inject-two-step.js
+          node - <<'PATCH'
+          const fs=require('fs');
+          const p='src/cli.mjs';
+          let s=fs.readFileSync(p,'utf8');
+          const start=s.indexOf('confirmedChildren.push({');
+          if(start<0) throw new Error('confirmedChildren.push block missing');
+          const end=s.indexOf('});',start);
+          if(end<0) throw new Error('confirmedChildren.push block end missing');
+          const block=s.slice(start,end+3);
+          if(!block.includes('metrics: completionEvaluationMetrics(evaluation),')) throw new Error('confirmed-child metrics line missing');
+          const patched=block.replace(
+            'metrics: completionEvaluationMetrics(evaluation),',
+            'metrics: completionEvaluationMetrics(evaluation),\n                routeGrindProxy: evaluation.routeGrindProxy || null,'
+          );
+          s=s.slice(0,start)+patched+s.slice(end+3);
+          fs.writeFileSync(p,s);
+          PATCH
+          node --check src/cli.mjs
+      - name: Search two remaining terminal slots
+        run: |
+          set -euo pipefail
+          node src/cli.mjs completion-aware-two-step-probe \
+            --input=results/base/all-size2.json \
+            --prefix-base64="${{ matrix.team }}" \
+            --screen-runs=2 --confirm-runs=16 \
+            --first-top-k=12 --second-top-k=6 --candidate-limit=100 \
+            $SEARCH_ARGS > results/raw.json
+          jq --arg source "${{ matrix.source }}" --arg label "${{ matrix.label }}" \
+            '. + {parentSource:$source,parentLabel:$label}' results/raw.json > "results/probe-${{ matrix.label }}.json"
+          jq '{parentLabel,parentSource,prefixKeys,firstSelected:(.firstSelected|map(.addedKey)),shortlistedSecondChildren,confirmedCount:(.confirmedChildren|length),bestChild,wallMs}' "results/probe-${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-size6-probe-${{ matrix.label }}
+          path: hgss_story_sim/results/probe-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      final_matrix: ${{ steps.sel.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-size6-probe-*
+          path: results/probes
+          merge-multiple: true
+      - id: sel
+        name: Terminal retry-grind Pareto selection
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files=fs.readdirSync('results/probes').filter(x=>x.endsWith('.json')).sort();
+          if(files.length<9) throw new Error('too few completed probes: '+files.length);
+          const docs=files.map(f=>JSON.parse(fs.readFileSync('results/probes/'+f,'utf8')));
+          const key=xs=>[...xs].sort().join('|');
+          const byKey=new Map();
+          for(const d of docs.filter(x=>x.parentSource==='search')){
+            for(const c of d.confirmedChildren||[]){
+              const k=key(c.teamKeys);
+              const row={
+                key:k,teamKeys:c.teamKeys,metrics:c.metrics,
+                routeGrindProxy:c.routeGrindProxy||null,
+                parentLabel:d.parentLabel,parentPrefix:d.prefixKeys,
+              };
+              const prev=byKey.get(k);
+              if(!prev || Number(row.metrics.retry)<Number(prev.metrics.retry)) byKey.set(k,row);
+            }
+          }
+          const rows=[...byKey.values()];
+          const grind=r=>{
+            const v=Number(r.routeGrindProxy?.expectedBattles);
+            return Number.isFinite(v)?v:Number.POSITIVE_INFINITY;
+          };
+          const unknown=r=>Number(r.routeGrindProxy?.unknownCheckpoints||0);
+          const dominates=(a,b)=>{
+            const ar=Number(a.metrics.retry), br=Number(b.metrics.retry);
+            const ag=Number(a.metrics.geometric), bg=Number(b.metrics.geometric);
+            const am=Number(a.metrics.mean), bm=Number(b.metrics.mean);
+            const ax=grind(a), bx=grind(b);
+            const au=unknown(a), bu=unknown(b);
+            const atleast=ar<=br && ag>=bg && am>=bm && ax<=bx && au<=bu;
+            const strict=ar<br || ag>bg || am>bm || ax<bx || au<bu;
+            return atleast&&strict;
+          };
+          const remaining=[...rows], layers=[];
+          while(remaining.length){
+            const front=remaining.filter((x,i)=>!remaining.some((y,j)=>i!==j&&dominates(y,x)));
+            if(!front.length){layers.push([...remaining]);break;}
+            layers.push(front);
+            const set=new Set(front);
+            for(let i=remaining.length-1;i>=0;i--) if(set.has(remaining[i])) remaining.splice(i,1);
+          }
+          function crowd(items){
+            const dist=new Map(items.map(x=>[x,0]));
+            const dims=[
+              r=>Number(r.metrics.retry),
+              r=>-Number(r.metrics.geometric),
+              r=>-Number(r.metrics.mean),
+              r=>grind(r),
+              r=>unknown(r),
+            ];
+            for(const fn of dims){
+              const finite=items.filter(x=>Number.isFinite(fn(x))).sort((a,b)=>fn(a)-fn(b)||a.key.localeCompare(b.key));
+              if(finite.length<2) continue;
+              const lo=fn(finite[0]), hi=fn(finite.at(-1));
+              if(!(hi>lo)) continue;
+              dist.set(finite[0],Infinity); dist.set(finite.at(-1),Infinity);
+              for(let i=1;i<finite.length-1;i++){
+                if(!Number.isFinite(dist.get(finite[i]))) continue;
+                dist.set(finite[i],dist.get(finite[i])+(fn(finite[i+1])-fn(finite[i-1]))/(hi-lo));
+              }
+            }
+            return [...items].sort((a,b)=>
+              (dist.get(b)-dist.get(a)) ||
+              Number(a.metrics.retry)-Number(b.metrics.retry) ||
+              grind(a)-grind(b) ||
+              a.key.localeCompare(b.key)
+            );
+          }
+          const selected=[];
+          const seen=new Set();
+          const elite=[...rows].sort((a,b)=>Number(a.metrics.retry)-Number(b.metrics.retry)||grind(a)-grind(b)||a.key.localeCompare(b.key))[0];
+          if(elite){selected.push(elite);seen.add(elite.key);}
+          for(const layer of layers){
+            const eligible=layer.filter(x=>!seen.has(x.key));
+            const left=24-selected.length;
+            if(left<=0) break;
+            const ordered=eligible.length<=left
+              ? [...eligible].sort((a,b)=>Number(a.metrics.retry)-Number(b.metrics.retry)||grind(a)-grind(b)||a.key.localeCompare(b.key))
+              : crowd(eligible);
+            for(const r of ordered){
+              if(selected.length>=24) break;
+              if(seen.has(r.key)) continue;
+              seen.add(r.key); selected.push(r);
+            }
+          }
+          const include=selected.map((r,i)=>({
+            label:'r'+String(i+1).padStart(2,'0'),
+            source:'search',
+            team:Buffer.from(JSON.stringify(r.teamKeys),'utf8').toString('base64')
+          }));
+
+          const controlDoc=docs.find(x=>x.parentSource==='control');
+          const controlChildren=[...(controlDoc?.confirmedChildren||[])]
+            .sort((a,b)=>Number(a.metrics.retry)-Number(b.metrics.retry))
+            .slice(0,2);
+          controlChildren.forEach((r,i)=>include.push({
+            label:'control-core-completion-'+(i+1),
+            source:'control',
+            team:Buffer.from(JSON.stringify(r.teamKeys),'utf8').toString('base64')
+          }));
+          const fallback6=[
+            'Cyndaquil::Cyndaquil->Typhlosion#1',
+            'Poliwag::Poliwag->Politoed#2',
+            'Combee::Combee->Vespiquen#1',
+            'Wynaut::Wobbuffet->Wobbuffet#1',
+            'Onix::Steelix->Steelix#1',
+            'Sneasel::Sneasel->Weavile#1',
+          ];
+          include.push({
+            label:'control-historical-fallback6',
+            source:'control',
+            team:Buffer.from(JSON.stringify(fallback6),'utf8').toString('base64')
+          });
+          const out={
+            probeCount:docs.length,
+            uniqueSearchFullTeams:rows.length,
+            firstParetoSize:layers[0]?.length||0,
+            selectedCount:selected.length,
+            selected,
+            controlCoreCompletions:controlChildren,
+          };
+          fs.writeFileSync('results/terminal-select16.json',JSON.stringify(out,null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\n');
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-size6-terminal-select16
+          path: results/terminal-select16.json
+          if-no-files-found: error
+
+  final100:
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.merge.outputs.final_matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Tier1 confirm terminal team
+        run: |
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=100 \
+            $SEARCH_ARGS > "results/final100-${{ matrix.label }}.json"
+          jq '{teamKeys,metrics,routeGrindProxy:.evaluation.routeGrindProxy}' "results/final100-${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-size6-final100-${{ matrix.label }}
+          path: hgss_story_sim/results/final100-${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: final100
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-size6-final100-*
+          path: results
+          merge-multiple: true
+      - name: Summarize Tier1 retry-grind Pareto
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files=fs.readdirSync('results').filter(x=>x.endsWith('.json')).sort();
+          const rows=files.map(file=>{
+            const d=JSON.parse(fs.readFileSync('results/'+file,'utf8'));
+            return {
+              file,teamKeys:d.teamKeys,
+              retry:Number(d.metrics.retry),
+              geometric:Number(d.metrics.geometric),
+              mean:Number(d.metrics.mean),
+              progress:Number(d.metrics.progress),
+              grind:Number(d.evaluation?.routeGrindProxy?.expectedBattles),
+              grindUnknown:Number(d.evaluation?.routeGrindProxy?.unknownCheckpoints||0),
+              control:file.includes('control-'),
+            };
+          });
+          const dominates=(a,b)=>{
+            const ax=Number.isFinite(a.grind)?a.grind:Infinity;
+            const bx=Number.isFinite(b.grind)?b.grind:Infinity;
+            const atleast=a.retry<=b.retry&&a.geometric>=b.geometric&&a.mean>=b.mean&&ax<=bx&&a.grindUnknown<=b.grindUnknown;
+            const strict=a.retry<b.retry||a.geometric>b.geometric||a.mean>b.mean||ax<bx||a.grindUnknown<b.grindUnknown;
+            return atleast&&strict;
+          };
+          const searchRows=rows.filter(r=>!r.control);
+          const pareto=searchRows.filter((r,i)=>!searchRows.some((o,j)=>i!==j&&dominates(o,r)))
+            .sort((a,b)=>a.retry-b.retry||a.grind-b.grind||a.file.localeCompare(b.file));
+          const ranked=[...rows].sort((a,b)=>a.retry-b.retry||a.grind-b.grind||a.file.localeCompare(b.file));
+          ranked.forEach((r,i)=>r.retryRank=i+1);
+          const historical=ranked.find(r=>r.file.includes('control-historical-fallback6'))||null;
+          const out={
+            runs:100,
+            count:rows.length,
+            searchCount:searchRows.length,
+            historicalFallback6:historical,
+            pareto,
+            top10:ranked.slice(0,10),
+            rows:ranked,
+          };
+          fs.writeFileSync('results/summary.json',JSON.stringify(out,null,2));
+          console.log(JSON.stringify(out,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-size6-final100-summary
+          path: results/summary.json
+          if-no-files-found: error
