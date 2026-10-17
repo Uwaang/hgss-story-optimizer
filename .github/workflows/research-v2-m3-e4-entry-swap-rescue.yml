@@ -1,0 +1,267 @@
+name: research-v2-m3-e4-entry-swap-rescue
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+  BASE_TEAM: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWlzZHJlYXZ1czo6TWlzZHJlYXZ1cy0+TWlzbWFnaXVzIzEiLCJIb3JzZWE6OkhvcnNlYS0+S2luZ2RyYSMxIiwiTmF0dTo6TmF0dS0+WGF0dSMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIiwiU2VlbDo6RGV3Z29uZy0+RGV3Z29uZyMxIl0=
+  FALLBACK_TEAM: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUG9saXdhZzo6UG9saXdhZy0+UG9saXRvZWQjMiIsIkNvbWJlZTo6Q29tYmVlLT5WZXNwaXF1ZW4jMSIsIld5bmF1dDo6V29iYnVmZmV0LT5Xb2JidWZmZXQjMSIsIk9uaXg6OlN0ZWVsaXgtPlN0ZWVsaXgjMSIsIlNuZWFzZWw6OlNuZWFzZWwtPldlYXZpbGUjMSJd
+  HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-e4-entry-rescue]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Semantic rescue smoke
+        run: |
+          set -euo pipefail
+          node src/cli.mjs completion-aware-e4-entry-swap-rescue \
+            --team-base64="$BASE_TEAM" --entry-boss=Will \
+            --runs=1 --shard-count=256 --shard-index=0 \
+            $SEARCH_ARGS > /tmp/e4-entry-smoke.json
+          jq -e '.entryStage == 8 and (.baseEntryEligibleKeys|length) == 1 and (.lateBaseKeys|length) == 5' /tmp/e4-entry-smoke.json
+          jq '{entryStage,earlyCandidateCount,variantCount,baseEntryEligibleKeys,lateBaseKeys}' /tmp/e4-entry-smoke.json
+
+  screen:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Screen all one-slot E4-entry rescues
+        run: |
+          set -euo pipefail
+          mkdir -p results/e4-entry-screen
+          node src/cli.mjs completion-aware-e4-entry-swap-rescue \
+            --team-base64="$BASE_TEAM" --entry-boss=Will \
+            --runs=2 --shard-count=16 --shard-index="${{ matrix.shard }}" \
+            $SEARCH_ARGS > "results/e4-entry-screen/shard-${{ matrix.shard }}.json"
+          jq -e '.entryStage == 8 and (.rows|type=="array")' "results/e4-entry-screen/shard-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-e4-entry-screen-${{ matrix.shard }}
+          path: hgss_story_sim/results/e4-entry-screen/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-e4-entry-screen-*
+          path: hgss_story_sim/results/e4-entry-screen
+          merge-multiple: true
+      - id: select
+        name: Merge screen and select 32
+        run: |
+          set -euo pipefail
+          mkdir -p results/e4-entry-selected
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/e4-entry-screen';
+          const files=fs.readdirSync(dir).filter(x=>x.endsWith('.json')).sort();
+          if(files.length!==16) throw new Error('expected 16 screen shards, got '+files.length);
+          const key=xs=>[...(xs||[])].sort().join('|');
+          const by=new Map();
+          let metadata=null;
+          for(const file of files){
+            const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+            metadata ||= {
+              entryStage:d.entryStage,
+              earlyCandidateCount:d.earlyCandidateCount,
+              baseEntryEligibleKeys:d.baseEntryEligibleKeys,
+              lateBaseKeys:d.lateBaseKeys,
+            };
+            for(const r of d.rows||[]){
+              const k=key(r.teamKeys);
+              if(!by.has(k)) by.set(k,r);
+            }
+          }
+          const rows=[...by.values()];
+          const cmp=(a,b)=>
+            Number(a.metrics?.retry??1e99)-Number(b.metrics?.retry??1e99) ||
+            Number(b.metrics?.geometric??-1)-Number(a.metrics?.geometric??-1) ||
+            Number(b.metrics?.mean??-1)-Number(a.metrics?.mean??-1) ||
+            Number(b.metrics?.progress??-1)-Number(a.metrics?.progress??-1) ||
+            key(a.teamKeys).localeCompare(key(b.teamKeys));
+          rows.sort(cmp);
+          const selected=rows.slice(0,32).map((r,i)=>({
+            label:'r'+String(i+1).padStart(2,'0'),
+            teamKeys:r.teamKeys,
+            removedKey:r.removedKey,
+            addedKey:r.addedKey,
+            screenMetrics:r.metrics,
+            screenCheckpoints:r.checkpoints,
+          }));
+          const enc=xs=>Buffer.from(JSON.stringify(xs),'utf8').toString('base64');
+          const include=selected.map(r=>({label:r.label,team:enc(r.teamKeys)}));
+          include.push({label:'control-base',team:process.env.BASE_TEAM});
+          include.push({label:'control-fallback',team:process.env.FALLBACK_TEAM});
+          const out={schemaVersion:1,purpose:'SCRUM-423 E4-entry one-slot rescue screen selection',screenRuns:2,totalVariants:rows.length,...metadata,selected};
+          fs.writeFileSync('results/e4-entry-selected/selection.json',JSON.stringify(out,null,2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify({include})+'\n');
+          console.log(JSON.stringify({totalVariants:rows.length,selected:selected.length,...metadata,top:selected.slice(0,10)},null,2));
+          NODE
+        env:
+          BASE_TEAM: ${{ env.BASE_TEAM }}
+          FALLBACK_TEAM: ${{ env.FALLBACK_TEAM }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-e4-entry-selection
+          path: hgss_story_sim/results/e4-entry-selected/selection.json
+          if-no-files-found: error
+
+  confirm64:
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.merge.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Confirm rescue candidate at 64 runs
+        run: |
+          set -euo pipefail
+          mkdir -p results/e4-entry-confirm64
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=64 \
+            $SEARCH_ARGS > "results/e4-entry-confirm64/${{ matrix.label }}.json"
+          jq -e '.evaluation.e4GroupedRouteRisk == true' "results/e4-entry-confirm64/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-e4-entry-confirm64-${{ matrix.label }}
+          path: hgss_story_sim/results/e4-entry-confirm64/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    needs: confirm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: research-v2-m3-e4-entry-selection
+          path: hgss_story_sim/results/e4-entry-summary
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-e4-entry-confirm64-*
+          path: hgss_story_sim/results/e4-entry-summary/confirm
+          merge-multiple: true
+      - name: Summarize confirmed rescue frontier
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const root='results/e4-entry-summary';
+          const selection=JSON.parse(fs.readFileSync(root+'/selection.json','utf8'));
+          const meta=new Map((selection.selected||[]).map(x=>[x.label,x]));
+          const rows=fs.readdirSync(root+'/confirm').filter(x=>x.endsWith('.json')).sort().map(file=>{
+            const d=JSON.parse(fs.readFileSync(root+'/confirm/'+file,'utf8'));
+            const label=file.replace(/\.json$/,'');
+            const e=d.evaluation||{};
+            const boss=n=>(e.rows||[]).find(r=>String(r.boss)===n);
+            return {
+              label,
+              teamKeys:d.teamKeys,
+              removedKey:meta.get(label)?.removedKey??null,
+              addedKey:meta.get(label)?.addedKey??null,
+              retry:d.metrics?.retry??null,
+              geometric:d.metrics?.geometric??null,
+              mean:d.metrics?.mean??null,
+              progress:d.metrics?.progress??null,
+              grindBattles:e.routeGrindProxy?.expectedBattles??null,
+              grindExp:e.routeGrindProxy?.cumulativeGrindExp??null,
+              will1:boss('Will')?.winRate??null,
+              lance1:boss('Lance')?.winRate??null,
+              will2:boss('Will 2')?.winRate??null,
+              lance2:boss('Lance 2')?.winRate??null,
+              red:boss('Red')?.winRate??null,
+              availableAtWill:boss('Will')?.availableMons??[],
+            };
+          });
+          const dominates=(a,b)=>{
+            const weak=a.retry<=b.retry && a.geometric>=b.geometric && a.mean>=b.mean && a.grindBattles<=b.grindBattles;
+            const strict=a.retry<b.retry || a.geometric>b.geometric || a.mean>b.mean || a.grindBattles<b.grindBattles;
+            return weak&&strict;
+          };
+          const pareto=rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b)));
+          const byRetry=[...rows].sort((a,b)=>a.retry-b.retry || b.lance1-a.lance1 || a.grindBattles-b.grindBattles);
+          const byLance=[...rows].sort((a,b)=>b.lance1-a.lance1 || a.retry-b.retry);
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-423 E4-entry semantic one-slot rescue confirm64',
+            sourceTier2Run:39053743780,
+            screen:selection,
+            confirmedCount:rows.length,
+            paretoLabels:pareto.map(x=>x.label),
+            byRetry,
+            byLance,
+            rows
+          };
+          fs.writeFileSync(root+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify({
+            confirmedCount:rows.length,
+            paretoLabels:summary.paretoLabels,
+            topRetry:byRetry.slice(0,12),
+            topLance:byLance.slice(0,12)
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-e4-entry-rescue-summary
+          path: hgss_story_sim/results/e4-entry-summary/summary.json
+          if-no-files-found: error
