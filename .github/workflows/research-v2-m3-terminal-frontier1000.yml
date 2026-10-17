@@ -1,0 +1,155 @@
+name: research-v2-m3-terminal-frontier1000
+
+on:
+  push:
+    branches:
+      - research/v2-consolidated
+
+permissions:
+  contents: read
+
+env:
+  SEARCH_ARGS: >-
+    --route-profile=complete
+    --version=HEARTGOLD --starter=Cyndaquil --evolution-policy=trade-aware
+    --exp-profile=normal-route --grind-policy=none --exp-allocator=boss-aware-soft
+    --entry-level=expected --same-stage-join=map-order
+    --resources=all --spend-policy=natural
+    --objective=route-risk
+    --route-grind-proxy=true --route-grind-proxy-target=0.5
+    --e4-grouped-route-risk=true
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-terminal-frontier1000]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - label: reliability_xatu
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWlzZHJlYXZ1czo6TWlzZHJlYXZ1cy0+TWlzbWFnaXVzIzEiLCJIb3JzZWE6OkhvcnNlYS0+S2luZ2RyYSMxIiwiTmF0dTo6TmF0dS0+WGF0dSMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIiwiU2VlbDo6RGV3Z29uZy0+RGV3Z29uZyMxIl0=
+          - label: reliability_steelix
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWlzZHJlYXZ1czo6TWlzZHJlYXZ1cy0+TWlzbWFnaXVzIzEiLCJIb3JzZWE6OkhvcnNlYS0+S2luZ2RyYSMxIiwiT25peDo6U3RlZWxpeC0+U3RlZWxpeCMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIiwiU2VlbDo6RGV3Z29uZy0+RGV3Z29uZyMxIl0=
+          - label: mid_weavile
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIiwiSG9yc2VhOjpIb3JzZWEtPktpbmdkcmEjMSIsIk9uaXg6OlN0ZWVsaXgtPlN0ZWVsaXgjMSIsIlNlZWw6OkRld2dvbmctPkRld2dvbmcjMSIsIlNuZWFzZWw6OlNuZWFzZWwtPldlYXZpbGUjMSJd
+          - label: mid_xatu_steelix
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiTWlzZHJlYXZ1czo6TWlzZHJlYXZ1cy0+TWlzbWFnaXVzIzEiLCJIb3JzZWE6OkhvcnNlYS0+S2luZ2RyYSMxIiwiTmF0dTo6TmF0dS0+WGF0dSMxIiwiT25peDo6U3RlZWxpeC0+U3RlZWxpeCMxIiwiTGFydml0YXI6OlB1cGl0YXItPlR5cmFuaXRhciMxIl0=
+          - label: fallback
+            team: WyJDeW5kYXF1aWw6OkN5bmRhcXVpbC0+VHlwaGxvc2lvbiMxIiwiUG9saXdhZzo6UG9saXdhZy0+UG9saXRvZWQjMiIsIkNvbWJlZTo6Q29tYmVlLT5WZXNwaXF1ZW4jMSIsIld5bmF1dDo6V29iYnVmZmV0LT5Xb2JidWZmZXQjMSIsIk9uaXg6OlN0ZWVsaXgtPlN0ZWVsaXgjMSIsIlNuZWFzZWw6OlNuZWFzZWwtPldlYXZpbGUjMSJd
+    env:
+      HGSS_BATTLE_CACHE_PATH: results/m3-frontier1000-${{ matrix.label }}-cache.json
+      HGSS_BATTLE_CACHE_NAMESPACE: hgss-battle-cache-v5-p1-enditem
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Validate grouped-E4 terminal finalist at 1000 runs per boss
+        run: |
+          set -euo pipefail
+          mkdir -p results/m3-frontier1000
+          node src/cli.mjs completion-aware-explicit-evaluate \
+            --prefix-base64="${{ matrix.team }}" --runs=1000 \
+            $SEARCH_ARGS \
+            > "results/m3-frontier1000/${{ matrix.label }}.json"
+          jq -e '.evaluation.e4GroupedRouteRisk == true' "results/m3-frontier1000/${{ matrix.label }}.json"
+          jq '{
+            runs,
+            teamKeys,
+            metrics,
+            grindBattles:.evaluation.routeGrindProxy.expectedBattles,
+            grindExp:.evaluation.routeGrindProxy.cumulativeGrindExp,
+            worstBoss:.evaluation.worstBossWinRate
+          }' "results/m3-frontier1000/${{ matrix.label }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-terminal-frontier1000-${{ matrix.label }}
+          path: hgss_story_sim/results/m3-frontier1000/${{ matrix.label }}.json
+          if-no-files-found: error
+
+  summarize:
+    if: contains(github.event.head_commit.message, '[research-v2-m3-terminal-frontier1000]')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-v2-m3-terminal-frontier1000-*
+          path: hgss_story_sim/results/m3-frontier1000
+          merge-multiple: true
+      - name: Summarize grouped-E4 high-sample terminal frontier
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const dir='results/m3-frontier1000';
+          const rows=fs.readdirSync(dir)
+            .filter(x=>x.endsWith('.json'))
+            .sort()
+            .map(file=>{
+              const d=JSON.parse(fs.readFileSync(dir+'/'+file,'utf8'));
+              const e=d.evaluation||{};
+              if(e.e4GroupedRouteRisk!==true) throw new Error('non-grouped result: '+file);
+              return {
+                label:file.replace(/\.json$/,''),
+                teamKeys:d.teamKeys,
+                runs:d.runs,
+                retry:d.metrics?.retry??null,
+                geometric:d.metrics?.geometric??null,
+                mean:d.metrics?.mean??null,
+                progress:d.metrics?.progress??null,
+                grindBattles:e.routeGrindProxy?.expectedBattles??null,
+                grindExp:e.routeGrindProxy?.cumulativeGrindExp??null,
+                worstBossWinRate:e.worstBossWinRate??null,
+                bosses:(e.rows||[]).filter(r=>!r.skipped).map(r=>({
+                  boss:r.boss,
+                  wins:r.wins,
+                  losses:r.losses,
+                  ties:r.ties,
+                  runs:r.runs,
+                  winRate:r.winRate,
+                  progress:r.battleProgressScore??r.winRate
+                }))
+              };
+            });
+          const dominates=(a,b)=>{
+            const weak=a.retry<=b.retry && a.geometric>=b.geometric && a.mean>=b.mean && a.grindBattles<=b.grindBattles;
+            const strict=a.retry<b.retry || a.geometric>b.geometric || a.mean>b.mean || a.grindBattles<b.grindBattles;
+            return weak&&strict;
+          };
+          const pareto=rows.filter((b,i)=>!rows.some((a,j)=>i!==j&&dominates(a,b)));
+          const byRetry=[...rows].sort((a,b)=>a.retry-b.retry || a.grindBattles-b.grindBattles || a.label.localeCompare(b.label));
+          const byGrind=[...rows].sort((a,b)=>a.grindBattles-b.grindBattles || a.retry-b.retry || a.label.localeCompare(b.label));
+          const summary={
+            schemaVersion:1,
+            purpose:'SCRUM-423 grouped-E4 terminal Pareto Tier2 validation after run 39001325764',
+            sourceRun:39001325764,
+            runsPerBoss:1000,
+            groupedMode:true,
+            candidateCount:rows.length,
+            objectives:{minimize:['retry','grindBattles'],maximize:['geometric','mean']},
+            paretoLabels:pareto.map(r=>r.label),
+            byRetry,
+            byGrind,
+            rows
+          };
+          fs.writeFileSync(dir+'/summary.json',JSON.stringify(summary,null,2));
+          console.log(JSON.stringify(summary,null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-v2-m3-terminal-frontier1000-summary
+          path: hgss_story_sim/results/m3-frontier1000/summary.json
+          if-no-files-found: error
