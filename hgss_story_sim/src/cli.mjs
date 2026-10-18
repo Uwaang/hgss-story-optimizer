@@ -4,10 +4,11 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
-import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
+import { applyPlayerRouteBuild, routeMovesetScore, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { comparisonAxes, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
+import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
 import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -1158,6 +1159,9 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
   );
   let weightedWins = 0;
   let weightedRuns = 0;
+  // Field HM state walks the route in battle order; with a boss subset it
+  // only sees the evaluated checkpoints (reported as partialRoute).
+  const fieldHmState = createFieldHmRouteState(battleOptions?.hmPolicy || 'ignore');
   for (const [battleIndex, boss] of routeBosses.entries()) {
     if (requestedBossLabels && !requestedBossLabels.has(String(boss.label))) continue;
     const levelsByCandidate = expSchedule?.battles?.[battleIndex]?.levelsBefore || null;
@@ -1215,6 +1219,26 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
         }
         return built;
       });
+      const frozenHmStage = e4MoveAccessStages.get(String(boss.label));
+      const hmMoveStage = Number.isFinite(Number(frozenHmStage)) ? Number(frozenHmStage) : Number(boss.stage);
+      playerTeam = fieldHmState.applyAtCheckpoint({
+        boss,
+        moveStage: hmMoveStage,
+        team: playerTeam,
+        legalMoves: mon => {
+          const key = mon._candidateKey || mon.species;
+          const candidate = candidatesByKey.get(key);
+          return new Set(candidateMovePool(
+            mon.species,
+            mon.level,
+            hmMoveStage,
+            moveAccess,
+            [...(singleUsePlan[key] || []), ...(purchasablePlan[key] || [])],
+            candidate?.species || mon.species,
+          ));
+        },
+        score: (mon, moves) => routeMovesetScore(mon, moves, [enemyTeam]),
+      });
       const heldItems = optimizeEqualLevelHeldItemTeam(playerTeam, enemyTeam, boss);
       playerTeam = heldItems.team;
       heldItemPolicy = heldItems.policy;
@@ -1248,7 +1272,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             key !== 'routeBuildScope' &&
             key !== 'bossLabels' &&
             key !== 'routeGrindProxy' &&
-            key !== 'routeGrindProxyTarget'
+            key !== 'routeGrindProxyTarget' &&
+            key !== 'hmPolicy'
           )
         ),
       },
@@ -1348,7 +1373,8 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     resourceBudget,
     memberUsage,
     routeGrindProxy,
-    comparisonAxes: comparisonAxes({ rows, expSchedule }),
+    fieldHm: { ...fieldHmState.summary(), partialRoute: Boolean(requestedBossLabels) },
+    comparisonAxes: comparisonAxes({ rows, expSchedule, fieldHm: fieldHmState.summary() }),
     rows,
   };
 }
@@ -3807,6 +3833,7 @@ async function loadStagedRouteContext() {
   const expAllocator = normalizeExpAllocator(arg('exp-allocator', 'boss-aware-soft'));
   const objective = normalizeSearchObjective(arg('objective', 'route-risk'));
   const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
+  const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -3851,10 +3878,12 @@ async function loadStagedRouteContext() {
     p1AiMode: 'smart',
     routeBuildOptimization: true,
     e4GroupedRouteRisk,
+    hmPolicy,
     routeGrindProxy,
     routeGrindProxyTarget,
   };
   return {
+    hmPolicy,
     routeProfile,
     version,
     starterName,
@@ -3903,6 +3932,8 @@ function stagedConfigSnapshot(ctx) {
     e4GroupedRouteRisk: Boolean(ctx.e4GroupedRouteRisk),
     routeGrindProxy: ctx.routeGrindProxy,
     routeGrindProxyTarget: ctx.routeGrindProxyTarget,
+    // Only stamped when active so earlier fingerprints stay valid.
+    ...(ctx.hmPolicy && ctx.hmPolicy !== 'ignore' ? { hmPolicy: ctx.hmPolicy } : {}),
     ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
       ? {
           excludedOrigins: ctx.excludedOrigins,
@@ -6850,6 +6881,7 @@ async function cmdRouteExpStoryEvaluate() {
   const spendPolicy = normalizeSpendPolicy(arg('spend-policy', 'natural'));
   const runs = Math.max(1, Math.floor(Number(arg('runs', '4'))));
   const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
+  const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -6973,6 +7005,7 @@ async function cmdRouteExpStoryEvaluate() {
       routeBuildOptimization: true,
       routeBuildScope: buildScope,
       e4GroupedRouteRisk,
+      hmPolicy,
       bossLabels: bossLabels.length ? bossLabels : null,
       routeGrindProxy,
       routeGrindProxyTarget,
@@ -7008,6 +7041,9 @@ async function cmdRouteExpStoryEvaluate() {
       joinedAfterMapExp: ledger.joinedAfterMapExp || [],
       mapSegments: ledger.mapSegments || [],
       trainerWindowSegments: ledger.trainerWindowSegments || [],
+      playerMoves: Object.fromEntries(
+        Object.values(row.playerBuilds || {}).map(build => [build.species, build.moves])
+      ),
     };
   });
 
@@ -7082,6 +7118,8 @@ async function cmdRouteExpStoryEvaluate() {
     finalTeam: evaluation.finalTeam,
     finalLevels: evaluation.finalLevels,
     routeGrindProxy: evaluation.routeGrindProxy || null,
+    fieldHm: evaluation.fieldHm || null,
+    comparisonAxes: evaluation.comparisonAxes || null,
     performance: {
       score: Number(evaluation.score || 0),
       worstBossWinRate: Number(evaluation.worstBossWinRate || 0),
@@ -8408,6 +8446,62 @@ async function cmdExpSegmentSmoke() {
   }, null, 2));
 }
 
+
+// CHARTER.md v1: field HM requirement + Move Deleter rule.
+async function cmdFieldHmSmoke() {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error('field-hm-smoke: ' + message);
+  };
+  // Toy score: each move is worth its listed value; HMs are worth little.
+  const value = { Tackle: 1, Ember: 5, Flamethrower: 9, 'Fire Blast': 8, Cut: 0.5, Surf: 6, Strength: 2 };
+  const score = (_mon, moves) => moves.reduce((sum, move) => sum + (value[move] || 0), 0);
+  const learn = { a: new Set(['Cut', 'Surf']), b: new Set(['Surf']) };
+  const legalMoves = mon => new Set([...mon.moves, ...(learn[mon._candidateKey] || [])]);
+  const team = () => [
+    { _candidateKey: 'a', species: 'A', moves: ['Ember', 'Flamethrower', 'Fire Blast', 'Tackle'] },
+    { _candidateKey: 'b', species: 'B', moves: ['Ember', 'Flamethrower', 'Fire Blast', 'Strength'] },
+  ];
+
+  const ignore = createFieldHmRouteState('ignore');
+  const untouched = ignore.applyAtCheckpoint({ boss: { label: 'Whitney' }, moveStage: 2, team: team(), legalMoves, score });
+  assert(!untouched.some(mon => mon.moves.includes('Cut')), 'ignore mode must not teach Cut');
+
+  const required = createFieldHmRouteState('required');
+  const atWhitney = required.applyAtCheckpoint({ boss: { label: 'Whitney' }, moveStage: 2, team: team(), legalMoves, score });
+  const carrier = atWhitney.find(mon => mon.moves.includes('Cut'));
+  assert(carrier?._candidateKey === 'a', 'only a can learn Cut, so a must carry it');
+  assert(!carrier.moves.includes('Tackle'), 'Cut must replace the cheapest move (Tackle)');
+
+  // Before the Move Deleter an HM cannot be dropped, even if the route set omits it.
+  const atMorty = required.applyAtCheckpoint({ boss: { label: 'Morty' }, moveStage: 3, team: team(), legalMoves, score });
+  assert(atMorty.find(mon => mon._candidateKey === 'a').moves.includes('Cut'), 'Cut must be kept before the Move Deleter');
+  // b's Strength is an HM too: once known it is kept as well.
+  assert(atMorty.find(mon => mon._candidateKey === 'b').moves.includes('Strength'), 'Strength must be kept before the Move Deleter');
+
+  // Surf at Chuck: b keeps Strength, so the cheaper slot overall is chosen.
+  const atChuck = required.applyAtCheckpoint({ boss: { label: 'Chuck' }, moveStage: 4, team: team(), legalMoves, score });
+  assert(atChuck.some(mon => mon.moves.includes('Surf')), 'someone must know Surf at Chuck');
+
+  // From the Move Deleter stage on, HMs may be forgotten.
+  const atClair = required.applyAtCheckpoint({ boss: { label: 'Clair' }, moveStage: 7, team: team(), legalMoves, score });
+  assert(!atClair.find(mon => mon._candidateKey === 'a').moves.includes('Cut'), 'Cut may be forgotten after the Move Deleter');
+  assert(required.summary().feasible, 'feasible route must report feasible');
+
+  // Nobody can learn Cut -> infeasible, and infeasible plans are never compared.
+  const blocked = createFieldHmRouteState('required');
+  blocked.applyAtCheckpoint({ boss: { label: 'Whitney' }, moveStage: 2, team: team(), legalMoves: mon => new Set(mon.moves), score });
+  const blockedSummary = blocked.summary();
+  assert(!blockedSummary.feasible && blockedSummary.violations.length === 1, 'missing Cut learner must be a violation');
+  const axes = comparisonAxes({ rows: [], expSchedule: { totalExpectedGrindBattles: 0, battles: [] }, fieldHm: blockedSummary });
+  assert(axes.feasible === false, 'infeasible evaluation must carry feasible=false');
+  const kept = nondominated([
+    { axes: { ...axes, grindBattles: 0, expectedRetries: 0, levelCv: 0 } },
+    { axes: { feasible: true, grindBattles: 10, expectedRetries: 10, levelCv: 0.1 } },
+  ]);
+  assert(kept.length === 1 && kept[0].axes.feasible === true, 'infeasible plans must not survive comparison');
+
+  console.log(JSON.stringify({ ok: true, actions: required.summary().actions, violations: blockedSummary.violations }, null, 2));
+}
 
 // CHARTER.md v1: comparison axes + member-targeted grind plans.
 async function cmdComparisonAxesSmoke() {
@@ -18158,6 +18252,7 @@ const commands = {
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
   'comparison-axes-smoke': cmdComparisonAxesSmoke,
+  'field-hm-smoke': cmdFieldHmSmoke,
   'exp-scheduler-v1-evolution-trigger-smoke': cmdExpSchedulerV1EvolutionTriggerSmoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,

@@ -1626,7 +1626,7 @@ export function enumeratePlayerRouteMovesetsV2(
   };
 }
 
-function routeMovesetScore(mon, moves, foeTeams) {
+export function routeMovesetScore(mon, moves, foeTeams) {
   const bossScores = [];
   for (const foes of foeTeams || []) {
     const foeScores = [];

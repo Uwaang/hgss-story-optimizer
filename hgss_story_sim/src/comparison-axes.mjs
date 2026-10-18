@@ -138,8 +138,12 @@ export function bagItemsUsed(evaluation) {
 export function comparisonAxes(evaluation, options = {}) {
   const retries = expectedRetries(evaluation, options);
   const spread = levelSpread(evaluation, options);
+  // A plan that breaks a hard route rule (e.g. no one can learn a required
+  // field HM) cannot be played and is never compared.
+  const feasible = evaluation?.fieldHm ? evaluation.fieldHm.feasible !== false : true;
   return {
     version: COMPARISON_AXES_VERSION,
+    feasible,
     grindBattles: grindBattles(evaluation),
     expectedRetries: retries.total,
     levelCv: spread.max,
@@ -167,8 +171,9 @@ export function axesDominate(a, b, axes = SEARCH_AXES) {
 
 // Keeps every entry that no other entry dominates.
 export function nondominated(entries, { axes = SEARCH_AXES, axesOf = entry => entry.axes } = {}) {
-  return entries.filter(entry =>
-    !entries.some(other => other !== entry && axesDominate(axesOf(other), axesOf(entry), axes))
+  const playable = entries.filter(entry => axesOf(entry)?.feasible !== false);
+  return playable.filter(entry =>
+    !playable.some(other => other !== entry && axesDominate(axesOf(other), axesOf(entry), axes))
   );
 }
 

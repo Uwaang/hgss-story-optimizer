@@ -1,0 +1,89 @@
+{
+  "source": "pret/pokeheartgold@9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "notes": [
+    "Only entries with status 'confirmed' are enforced under --hm-policy=required (CHARTER.md v1).",
+    "'review' entries are kept as evidence for a later decision and are never enforced.",
+    "A requirement means: at that checkpoint some party member present must know the move, because an obstacle on the only path before it needs it in the field.",
+    "Field-use badges are from src/field_move.c (FieldMove_Check*)."
+  ],
+  "hmMoves": ["Cut", "Fly", "Surf", "Strength", "Whirlpool", "Rock Smash", "Waterfall", "Rock Climb"],
+  "moveDeleter": {
+    "availableFromStage": 7,
+    "map": "T30R0601",
+    "evidence": "Blackthorn move tutor house script scr_seq_0948_T30R0601.s; Blackthorn is reached in the stage-7 route window (before Clair)."
+  },
+  "requirements": [
+    {
+      "id": "cut-ilex-forest",
+      "move": "Cut",
+      "beforeBoss": "Whitney",
+      "status": "confirmed",
+      "maps": ["D36R0101"],
+      "fieldBadge": "BADGE_HIVE",
+      "evidence": "Ilex Forest (D36R0101) has one std_field_cut tree in zone_event/114_D36R0101.json and HM01 is given in the same map (scr_seq_0092_D36R0101.s). Ilex Forest is the Azalea-Goldenrod road in the Whitney route window."
+    },
+    {
+      "id": "surf-cianwood",
+      "move": "Surf",
+      "beforeBoss": "Chuck",
+      "status": "confirmed",
+      "maps": ["W40", "W41"],
+      "fieldBadge": "BADGE_FOG",
+      "evidence": "The Chuck route window crosses sea routes W40 and W41 to reach Cianwood (T24)."
+    },
+    {
+      "id": "strength-ice-path",
+      "move": "Strength",
+      "beforeBoss": "Clair",
+      "status": "review",
+      "maps": ["D39R0102"],
+      "fieldBadge": "BADGE_PLAIN",
+      "evidence": "Ice Path D39R0102 has 5 std_field_strength boulders; whether they block the only path is not shown by the data."
+    },
+    {
+      "id": "strength-victory-road",
+      "move": "Strength",
+      "beforeBoss": "Silver (Victory Road)",
+      "status": "review",
+      "maps": ["D43R0101", "D43R0102"],
+      "fieldBadge": "BADGE_PLAIN",
+      "evidence": "Victory Road has 3 + 2 std_field_strength boulders."
+    },
+    {
+      "id": "strength-seafoam",
+      "move": "Strength",
+      "beforeBoss": "Blaine",
+      "status": "review",
+      "maps": ["D11R0102", "D11R0104"],
+      "fieldBadge": "BADGE_PLAIN",
+      "evidence": "Seafoam Islands have 6 + 1 std_field_strength boulders."
+    },
+    {
+      "id": "whirlpool-dragons-den",
+      "move": "Whirlpool",
+      "beforeBoss": "Silver (Victory Road)",
+      "status": "review",
+      "maps": [],
+      "fieldBadge": "BADGE_GLACIER",
+      "evidence": "Community walkthroughs say Whirlpool is needed in Dragon's Den after Clair; whirlpools are terrain, not checked in pret here."
+    },
+    {
+      "id": "waterfall-tohjo",
+      "move": "Waterfall",
+      "beforeBoss": "Silver (Victory Road)",
+      "status": "review",
+      "maps": [],
+      "fieldBadge": "BADGE_RISING",
+      "evidence": "Waterfalls are terrain; not checked in pret here."
+    },
+    {
+      "id": "mt-silver",
+      "move": "Rock Climb",
+      "beforeBoss": "Red",
+      "status": "review",
+      "maps": ["D41R0101"],
+      "fieldBadge": "BADGE_EARTH",
+      "evidence": "HM08 is given by Prof. Oak (scr_seq_0740_T01R0301.s) after the 16 badges; Mt. Silver terrain not checked."
+    }
+  ]
+}

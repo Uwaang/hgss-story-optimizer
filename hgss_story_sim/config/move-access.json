@@ -22,8 +22,8 @@
     {
       "machine": "HM04",
       "move": "Strength",
-      "availableFrom": 4,
-      "note": "Olivine City, reachable after Morty and before Chuck."
+      "availableFrom": 6,
+      "note": "Route 42 (pret scr_seq_0252_R42.s GiveItemNoCheck ITEM_HM04), stage 6. Earlier Olivine timing was not supported by pret scripts (corrected 2026-10-18)."
     },
     {
       "machine": "HM02",
@@ -42,6 +42,12 @@
       "move": "Waterfall",
       "availableFrom": 7,
       "note": "Ice Path pickup before Clair."
+    },
+    {
+      "machine": "HM08",
+      "move": "Rock Climb",
+      "availableFrom": 21,
+      "note": "Prof. Oak in Pallet Town after all 16 badges (pret scr_seq_0740_T01R0301.s GiveItemNoCheck ITEM_HM08); usable for Red only (added 2026-10-18)."
     }
   ],
   "singleUseMachines": [
