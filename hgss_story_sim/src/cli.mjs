@@ -7243,7 +7243,7 @@ async function cmdRouteExpStoryEvaluate() {
 // alone or by one member with another holding the Exp. Share. Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7417,6 +7417,20 @@ function grindPlanSeen(state) {
   return seen;
 }
 
+// Nondominated plans with exactly the same three axis values: only the first
+// (lowest id) is expanded; the others stay listed with tieOf (CHARTER.md,
+// 2026-10-18 decision).
+function grindPlanMarkTies(frontier) {
+  const representative = new Map();
+  const order = plan => Number(String(plan.id).slice(1));
+  for (const plan of [...frontier].sort((a, b) => order(a) - order(b))) {
+    const key = JSON.stringify([plan.axes.grindBattles, plan.axes.expectedRetries, plan.axes.levelCv]);
+    if (!representative.has(key)) representative.set(key, plan.id);
+    else if (!plan.tieOf) plan.tieOf = representative.get(key);
+  }
+  return frontier.filter(plan => !plan.tieOf);
+}
+
 // Children of every nondominated plan still marked expandable. Marks those
 // parents expanded. Returns null when nothing is left to expand.
 function prepareGrindPlanStep(state) {
@@ -7425,7 +7439,7 @@ function prepareGrindPlanStep(state) {
     const base = { id: 'p0', parent: null, depth: 0, plan: {}, canonical: grindPlanCanonical({}), expandable: true, expanded: false };
     return { step: 0, expandedPlans: 0, children: [base] };
   }
-  const toExpand = grindPlanFrontier(state).filter(plan => plan.expandable && !plan.expanded);
+  const toExpand = grindPlanMarkTies(grindPlanFrontier(state)).filter(plan => plan.expandable && !plan.expanded);
   if (!toExpand.length) return null;
   const children = [];
   for (const parent of toExpand) {
@@ -7466,7 +7480,8 @@ function mergeGrindPlanStep(state, prepared, results, stats) {
     ...stats,
     errors: results.filter(result => result.error).length,
     frontier: frontier.length,
-    frontierExpandable: frontier.filter(plan => plan.expandable && !plan.expanded).length,
+    frontierTies: frontier.length - grindPlanMarkTies(frontier).length,
+    frontierExpandable: grindPlanMarkTies(frontier).filter(plan => plan.expandable && !plan.expanded).length,
     bestRetries: Math.min(...frontier.map(plan => plan.axes.expectedRetries)),
     maxGrindOnFrontier: Math.max(...frontier.map(plan => plan.axes.grindBattles)),
   });
@@ -7481,7 +7496,7 @@ function grindPlanSummary(state, extra = {}) {
     errors: state.plans.filter(plan => plan.error).length,
     ...extra,
     steps: state.steps,
-    frontier: grindPlanFrontier(state).map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan })),
+    frontier: grindPlanFrontier(state).map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan, ...(plan.tieOf ? { tieOf: plan.tieOf } : {}) })),
   };
 }
 
@@ -7542,13 +7557,24 @@ async function cmdGrindPlanPrepare() {
   const outDir = String(arg('out-dir', ''));
   if (!outDir) throw new Error('grind-plan-prepare requires --out-dir');
   requirePlannedGrind('grind-plan-prepare');
-  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const minShards = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  // Shards grow with the step so no job nears the 6-hour Actions limit.
+  const targetShardChildren = Number(arg('target-shard-children', 'Infinity'));
   const stepBattles = Math.max(1, Math.floor(Number(arg('step-battles', '25'))));
   const state = statePath ? await readGrindPlanState(statePath, stepBattles) : newGrindPlanState(stepBattles);
+  // Resuming from a saved step artifact: its parents were marked expanded for
+  // children that were never evaluated, so prepare them again.
+  const undoPending = String(arg('undo-pending', ''));
+  if (undoPending) {
+    const pending = JSON.parse(await fs.readFile(undoPending, 'utf8'));
+    const parents = new Set((pending?.children || []).map(child => child.parent).filter(Boolean));
+    for (const plan of state.plans) if (parents.has(plan.id)) plan.expanded = false;
+  }
   await fs.mkdir(outDir, { recursive: true });
   const prepared = prepareGrindPlanStep(state);
   if (!prepared) state.done = true;
   const children = prepared ? prepared.children : [];
+  const shardCount = Math.min(256, Math.max(minShards, Math.ceil(children.length / targetShardChildren) || 0));
   const size = Math.ceil(children.length / shardCount) || 0;
   for (let index = 0; index < shardCount; index += 1) {
     const slice = children.slice(index * size, (index + 1) * size).map(({ id, plan }) => ({ id, plan }));
@@ -7556,7 +7582,9 @@ async function cmdGrindPlanPrepare() {
   }
   await fs.writeFile(path.join(outDir, 'state.json'), JSON.stringify(state));
   await fs.writeFile(path.join(outDir, 'pending.json'), JSON.stringify(prepared));
-  console.log(JSON.stringify({ done: Boolean(state.done), step: prepared?.step ?? null, children: children.length, shardSize: size }));
+  const shards = Array.from({ length: shardCount }, (_, index) => index);
+  await fs.writeFile(path.join(outDir, 'shards.json'), JSON.stringify(shards));
+  console.log(JSON.stringify({ done: Boolean(state.done), step: prepared?.step ?? null, children: children.length, shardCount, shardSize: size, shards }));
 }
 
 async function cmdGrindPlanShard() {

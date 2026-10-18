@@ -1,7 +1,8 @@
 name: grind-plan-step-v1
 
 # One step of the CHARTER.md grind plan builder: evaluate the pending children
-# of artifact gp-step-<step> in 20 shards, merge them into the state and
+# of artifact gp-step-<step> in shards (at least 20, at most 600 children each),
+# merge them into the state and
 # prepare the next step's children as gp-step-<step+1>.
 
 on:
@@ -13,12 +14,18 @@ on:
       next_step:
         required: true
         type: number
+      shards:
+        description: JSON array of shard indices from the previous prepare
+        required: true
+        type: string
       args:
         required: true
         type: string
     outputs:
       done:
         value: ${{ jobs.merge.outputs.done }}
+      shards:
+        value: ${{ jobs.merge.outputs.shards }}
 
 permissions:
   contents: read
@@ -35,7 +42,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        shard: ${{ fromJSON(inputs.shards) }}
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -66,6 +73,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       done: ${{ steps.prepare.outputs.done }}
+      shards: ${{ steps.prepare.outputs.shards }}
     defaults:
       run:
         working-directory: hgss_story_sim
@@ -91,10 +99,11 @@ jobs:
             --state=results/in/state.json --pending=results/in/pending.json \
             --inputs="$INPUTS" --state-out=results/state.json ${{ inputs.args }}
           node src/cli.mjs grind-plan-prepare \
-            --state=results/state.json --out-dir=results/next --shard-count=20 \
+            --state=results/state.json --out-dir=results/next             --shard-count=20 --target-shard-children=600 \
             ${{ inputs.args }} | tee results/prepare.json
           node src/cli.mjs grind-plan-summary --state=results/next/state.json > results/next/summary.json
           echo "done=$(jq -r .done results/prepare.json)" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq -c .shards results/prepare.json)" >> "$GITHUB_OUTPUT"
           {
             echo "### Grind plan step ${{ inputs.step }}"
             echo '```json'
