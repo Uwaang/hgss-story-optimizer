@@ -1162,13 +1162,31 @@ export function buildTeamExpSchedule({
     throw new Error(`Unknown grind policy: ${grindPolicy}`);
   }
   const normalizedGrindBudget = Math.max(0, Math.floor(Number(grindBudget || 0)));
+  // A planned grind entry is either a battle count (EXP split by the
+  // allocator, kept for reproducing earlier runs) or, per CHARTER.md v1, a
+  // map of member key -> battles so the plan itself decides who earns it.
+  const normalizeGrindBattleCount = (key, value) => {
+    const count = Math.max(0, Math.floor(Number(value || 0)));
+    if (!Number.isFinite(count)) {
+      throw new Error(`Invalid planned grind battle count for ${key}: ${JSON.stringify(value)}`);
+    }
+    return count;
+  };
   const normalizedGrindPlanBattles = Object.fromEntries(
     Object.entries(grindPlanBattles || {}).map(([key, value]) => {
-      const count = Math.max(0, Math.floor(Number(value || 0)));
-      if (!Number.isFinite(count)) {
-        throw new Error(`Invalid planned grind battle count for ${key}: ${value}`);
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const byMember = Object.fromEntries(
+          Object.entries(value)
+            .map(([memberKey, battles]) => [
+              String(memberKey),
+              normalizeGrindBattleCount(`${key}/${memberKey}`, battles),
+            ])
+            .filter(([, battles]) => battles > 0)
+            .sort(([a], [b]) => a.localeCompare(b))
+        );
+        return [String(key), byMember];
       }
-      return [String(key), count];
+      return [String(key), normalizeGrindBattleCount(key, value)];
     })
   );
   if (!Number.isFinite(normalizedGrindBudget)) {
@@ -1579,6 +1597,50 @@ export function buildTeamExpSchedule({
     return { ...result, byKey };
   }
 
+  // Gives planned grind EXP to the named members directly, bypassing the
+  // allocator. Gen 4 wild EXP does not scale with the recipient's level, so a
+  // battle is worth the source's expected EXP whoever earns it.
+  function grantPlannedGrindToMembers(
+    battlesByKey,
+    expPerBattle,
+    boss,
+    battleIndex,
+    evolutionCheckpointIndex = battleIndex,
+  ) {
+    refreshEvolutionStates(boss, evolutionCheckpointIndex);
+    const beforeLevels = new Map(states.map(state => [state.key, Number(state.level)]));
+    const byKey = {};
+    let allocated = 0;
+    let unallocated = 0;
+    let battles = 0;
+    for (const [key, count] of Object.entries(battlesByKey)) {
+      const state = states.find(item => item.key === key);
+      if (!state) {
+        throw new Error(
+          `Planned grind before ${boss.label} names ${key}, which has not joined the party yet`
+        );
+      }
+      if (state.unknown) {
+        throw new Error(`Planned grind before ${boss.label} names ${key}, whose entry level is unknown`);
+      }
+      const requested = Math.max(0, Math.floor(count * Number(expPerBattle)));
+      const before = Number(state.exp || 0);
+      const cap = expAtLevel(state.growthRate, 100);
+      state.exp = cap === null ? before + requested : Math.min(cap, before + requested);
+      state.level = levelAtExp(state.growthRate, state.exp);
+      const delta = state.exp - before;
+      allocated += delta;
+      unallocated += requested - delta;
+      battles += count;
+      if (delta > 0) {
+        byKey[key] = delta;
+        grindAllocatedByKey.set(key, Number(grindAllocatedByKey.get(key) || 0) + delta);
+      }
+    }
+    applyEvolutionAfterLevelChanges(beforeLevels, boss, evolutionCheckpointIndex);
+    return { allocated, unallocated, byKey, battles };
+  }
+
   function totalNaturalExpAvailableBeforeFinalBoss() {
     let total = 0;
     if (profile !== 'major') {
@@ -1826,13 +1888,37 @@ export function buildTeamExpSchedule({
       totalGrindExp += grindExpBefore;
       if (expectedGrindBattles !== null) totalExpectedGrindBattles += expectedGrindBattles;
     } else if (grindPolicy === 'planned') {
-      const plannedBattles = Number(
+      const plannedEntry =
         normalizedGrindPlanBattles[String(boss.label)] ??
         normalizedGrindPlanBattles[String(boss.key)] ??
         normalizedGrindPlanBattles[String(battleIndex)] ??
-        0
-      );
-      if (plannedBattles > 0) {
+        0;
+      const plannedByMember = plannedEntry && typeof plannedEntry === 'object'
+        ? plannedEntry
+        : null;
+      const plannedBattles = plannedByMember
+        ? Object.values(plannedByMember).reduce((sum, count) => sum + count, 0)
+        : Number(plannedEntry);
+      if (plannedByMember && plannedBattles > 0) {
+        if (!(wild?.expectedExpPerBattle > 0)) {
+          throw new Error(
+            `Planned grind before ${boss.label} requires a modeled wild EXP source`
+          );
+        }
+        const applied = grantPlannedGrindToMembers(
+          plannedByMember,
+          wild.expectedExpPerBattle,
+          boss,
+          battleIndex,
+          evolutionCheckpointIndex,
+        );
+        grindExpBefore = Number(applied.allocated || 0);
+        grindAllocatedThisCheckpoint = applied.byKey || {};
+        totalReleasedGrindBudget += grindExpBefore;
+        totalGrindExp += grindExpBefore;
+        expectedGrindBattles = applied.battles;
+        totalExpectedGrindBattles += applied.battles;
+      } else if (plannedBattles > 0) {
         if (!(wild?.expectedExpPerBattle > 0)) {
           throw new Error(
             `Planned grind before ${boss.label} requires a modeled wild EXP source`

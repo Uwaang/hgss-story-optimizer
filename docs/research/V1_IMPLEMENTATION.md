@@ -13,6 +13,10 @@
 - 기존 형식(`{체크포인트: 전투 수}`)은 이전 실험 재현용으로 그대로 둔다.
 - 레벨 변동계수는 같은 평가 결과에서 사천왕 1차·2차·Red 진입 레벨로 계산한다 (비교 축 모듈 한 곳).
 
+상태 (2026-10-18): 구현됨. `src/comparison-axes.mjs`(비교 축 모듈)와 `grindPlanBattles`의 멤버 지정 형식, 검사 `npm run comparison-axes-smoke`. 기존 EXP 검사 4개(segment, allocator, scheduler-v1, budget) 통과.
+
+확인 필요: 체크포인트에 아직 합류하지 않은 멤버는 레벨 0으로 계산한다. 그래서 사천왕에 멤버가 적게 들어가면 쏠린 파티로 읽힌다.
+
 ## 2. 사천왕 사이 회복을 가방 아이템 비용으로 세기
 
 현재: 사천왕 5연전은 사이 회복을 무료로 가정한다 (`cli.mjs` 17573–17586, 17905–17926행 `betweenBattles`, `bagInBattle: 'forbidden'`).

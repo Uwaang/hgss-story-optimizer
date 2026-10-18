@@ -7,6 +7,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
+import { comparisonAxes, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -1347,6 +1348,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
     resourceBudget,
     memberUsage,
     routeGrindProxy,
+    comparisonAxes: comparisonAxes({ rows, expSchedule }),
     rows,
   };
 }
@@ -7105,10 +7107,7 @@ function parseRateTargets(value, fallback) {
 }
 
 function practicalGrindPlanTotalBattles(plan) {
-  return Object.values(plan || {}).reduce(
-    (sum, value) => sum + Math.max(0, Math.floor(Number(value || 0))),
-    0,
-  );
+  return grindPlanTotalBattles(plan);
 }
 
 function practicalGrindScheduleRow(evaluation, label) {
@@ -8409,6 +8408,121 @@ async function cmdExpSegmentSmoke() {
   }, null, 2));
 }
 
+
+// CHARTER.md v1: comparison axes + member-targeted grind plans.
+async function cmdComparisonAxesSmoke() {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error('comparison-axes-smoke: ' + message);
+  };
+  const near = (a, b, eps = 1e-3) => Math.abs(Number(a) - Number(b)) <= eps;
+
+  // Level coefficient of variation, examples from CHARTER.md.
+  const cvCases = [
+    [[60, 60, 60, 60, 60, 60], 0],
+    [[73, 72, 73, 68, 69, 57], 0.081],
+    [[60, 60, 60, 60, 60, 40], 0.132],
+    [[65, 65, 65, 65, 45, 45], 0.162],
+    [[70, 70, 70, 50, 50, 50], 0.167],
+    [[100, 50, 50, 50, 50, 50], 0.319],
+  ];
+  for (const [levels, expected] of cvCases) {
+    const cv = levelCoefficientOfVariation(levels);
+    assert(near(cv, expected), `CV ${levels.join('/')} = ${cv}, expected ${expected}`);
+  }
+  assert(
+    near(levelCoefficientOfVariation([60]), levelCoefficientOfVariation([60, 0, 0, 0, 0, 0])),
+    'a missing member must count as level 0',
+  );
+
+  // Expected retries: an E4 chain is one restart unit.
+  const e4 = ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'];
+  const rows = [
+    { boss: 'Falkner', wins: 8, losses: 0, ties: 0, runs: 8 },
+    ...e4.map(boss => ({ boss, wins: 8, losses: 0, ties: 0, runs: 8 })),
+  ];
+  const p = 9 / 10;
+  const axes = comparisonAxes({ rows, expSchedule: { totalExpectedGrindBattles: 12, battles: [] } });
+  const expectedRetry = (1 - p) / p + (1 - p ** 5) / p ** 5;
+  assert(near(axes.expectedRetries, expectedRetry, 1e-9), `retries ${axes.expectedRetries} != ${expectedRetry}`);
+  assert(axes.grindBattles === 12, 'grind battles must come from the schedule');
+  assert(axes.bagItemsUsed === null, 'bag items are not modeled yet and must read as unknown');
+  const tieRow = { boss: 'Falkner', wins: 1, losses: 0, ties: 1, runs: 2 };
+  assert(near(comparisonAxes({ rows: [tieRow] }).expectedRetries, (1 - 2 / 4) / (2 / 4)), 'ties count as runs');
+
+  // Both grind plan shapes.
+  assert(practicalGrindPlanTotalBattles({ Falkner: 5, Clair: 7 }) === 12, 'count plan total');
+  assert(practicalGrindPlanTotalBattles({ Falkner: { a: 2, b: 3 }, Clair: 7 }) === 12, 'member plan total');
+
+  // Team comparison: keep a team when any of its plans is nondominated.
+  const plans = [
+    { teamKey: 'A', axes: { grindBattles: 100, expectedRetries: 10, levelCv: 0.1 } },
+    { teamKey: 'A', axes: { grindBattles: 300, expectedRetries: 2, levelCv: 0.1 } },
+    { teamKey: 'B', axes: { grindBattles: 200, expectedRetries: 12, levelCv: 0.2 } },
+    { teamKey: 'C', axes: { grindBattles: 150, expectedRetries: 5, levelCv: 0.05 } },
+  ];
+  const kept = teamsWithNondominatedPlan(plans).sort();
+  assert(JSON.stringify(kept) === JSON.stringify(['A', 'C']), 'kept teams ' + kept.join(','));
+  assert(nondominated(plans).length === 3, 'B is dominated by A');
+
+  // Member-targeted grind on a real schedule.
+  const story = await loadStory();
+  const pool = await loadCanonicalPool('HEARTGOLD', story);
+  const names = ['Cyndaquil', 'Mareep', 'Geodude', 'Zubat', 'Lapras', 'Wooper'];
+  const team = names.map(name => {
+    const candidate = pool.candidates.find(mon => mon.species === name);
+    if (!candidate) throw new Error('Missing comparison-axes smoke candidate: ' + name);
+    return candidate;
+  });
+  const route = storyBattlesForCandidates(story.bosses, team);
+  const expContext = await loadExpContext(
+    story, 'normal-route', 'HEARTGOLD', 'planned', 'midpoint', 'map-order', 'balanced',
+  );
+  const starterKey = candidateIdentity(team[0]);
+  const laprasKey = candidateIdentity(team.find(mon => mon.species === 'Lapras'));
+  const schedule = plan => buildTeamExpSchedule({
+    candidates: team,
+    routeBosses: route,
+    expWorld: expContext.world,
+    profile: 'normal-route',
+    grindPolicy: 'planned',
+    grindPlanBattles: plan,
+    entryLevelPolicy: 'midpoint',
+    sameStageJoinPolicy: 'map-order',
+    allocator: 'balanced',
+  });
+  const clair = route.find(boss => String(boss.label) === 'Clair');
+  assert(clair, 'route has no Clair checkpoint');
+  const legacy = schedule({ Clair: 30 });
+  const targeted = schedule({ Clair: { [starterKey]: 30 } });
+  const legacyRow = legacy.battles.find(battle => battle.label === 'Clair');
+  const targetedRow = targeted.battles.find(battle => battle.label === 'Clair');
+  assert(targetedRow.expectedGrindBattles === 30, 'targeted plan must record 30 battles');
+  assert(legacy.totalExpectedGrindBattles === targeted.totalExpectedGrindBattles, 'battle totals differ');
+  assert(legacyRow.grindExpBefore === targetedRow.grindExpBefore, 'same battles must give the same EXP');
+  const receivers = Object.keys(targetedRow.grindAllocatedThisCheckpoint || {});
+  assert(receivers.length === 1 && receivers[0] === starterKey, 'targeted EXP went to ' + receivers.join(','));
+  const targetedAxes = comparisonAxes({ rows: [], expSchedule: targeted });
+  assert(targetedAxes.grindBattles === 30, 'axes grind battles from targeted plan');
+
+  let rejected = false;
+  try {
+    schedule({ Falkner: { [laprasKey]: 5 } });
+  } catch (error) {
+    rejected = /has not joined the party yet/.test(String(error?.message || error));
+  }
+  assert(rejected, 'grinding a member before it joins must be rejected');
+
+  console.log(JSON.stringify({
+    ok: true,
+    axesVersion: axes.version,
+    clairGrindExp: targetedRow.grindExpBefore,
+    starterLevelBeforeClair: {
+      legacy: legacyRow.levelsBefore[starterKey],
+      targeted: targetedRow.levelsBefore[starterKey],
+    },
+    levelSpread: targetedAxes.detail.levelSpread,
+  }, null, 2));
+}
 
 async function cmdExpSchedulerV1Smoke() {
   const story = await loadStory();
@@ -17993,6 +18107,7 @@ const commands = {
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
+  'comparison-axes-smoke': cmdComparisonAxesSmoke,
   'exp-scheduler-v1-evolution-trigger-smoke': cmdExpSchedulerV1EvolutionTriggerSmoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,
