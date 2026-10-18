@@ -41,7 +41,21 @@ function canonicalizeCacheValue(value) {
   return value;
 }
 
+// _routeBuild is a write-only record of how the build was chosen (including a
+// proxy score that shifts whenever any other checkpoint changes); the battle
+// only reads the resulting nature/EVs/ability fields, so it is left out of the
+// key. Otherwise a grind change late in the route would miss every earlier
+// cached battle.
+function battleCacheTeam(team) {
+  return (team || []).map(mon => {
+    if (!mon || typeof mon !== 'object' || !('_routeBuild' in mon)) return mon;
+    const { _routeBuild, ...rest } = mon;
+    return rest;
+  });
+}
+
 function battleCacheKey(p1Team, p2Team, seed, options) {
+  p1Team = battleCacheTeam(p1Team);
   const payload = canonicalizeCacheValue({
     namespace: BATTLE_CACHE_NAMESPACE,
     smartSemantics: {
@@ -1811,6 +1825,37 @@ function applyHgssTrainerItemTurn(battle, side, active, stats, plan) {
   return true;
 }
 
+// Player-AI lookups of Showdown stats/types run the engine's event chain on
+// every call. Within one decision the battle state does not change, so the
+// raw results are remembered per decision (decisionEpoch) and nothing else:
+// outcomes are identical, only repeated event dispatch is skipped.
+let decisionEpoch = 0;
+const aiLookupMemo = new WeakMap();
+function aiLookupEntry(mon) {
+  let entry = aiLookupMemo.get(mon);
+  if (!entry || entry.epoch !== decisionEpoch) {
+    entry = { epoch: decisionEpoch, stats: new Map(), types: undefined };
+    aiLookupMemo.set(mon, entry);
+  }
+  return entry;
+}
+function aiStat(mon, stat) {
+  if (!mon || typeof mon.getStat !== 'function') return mon?.getStat?.(stat);
+  const entry = aiLookupEntry(mon);
+  if (!entry.stats.has(stat)) entry.stats.set(stat, mon.getStat(stat));
+  return entry.stats.get(stat);
+}
+// dex.getImmunity/getEffectiveness accept a type list; passing the memoized
+// list avoids re-running the Type event for a battle Pokemon.
+function aiTypesOrSelf(target) {
+  return target && typeof target.getTypes === 'function' ? aiTypes(target) : target;
+}
+function aiTypes(mon) {
+  const entry = aiLookupEntry(mon);
+  if (entry.types === undefined) entry.types = mon.getTypes();
+  return entry.types;
+}
+
 function scoreMove(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove.move);
   if (!move.exists || requestedMove.disabled) return -Infinity;
@@ -1826,7 +1871,7 @@ function scoreMove(active, target, requestedMove) {
   if (!immunity) return 0;
   const typeMod = dex.getEffectiveness(move, target);
   const effectiveness = 2 ** typeMod;
-  const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
+  const stab = aiTypes(active).includes(move.type) ? 1.5 : 1;
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   const priority = move.priority > 0 ? 1.05 : 1;
 
@@ -1838,8 +1883,8 @@ function scoreMove(active, target, requestedMove) {
 
   const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
   const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
-  const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
-  const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
+  const attack = Math.max(1, Number(aiStat(active, attackStat) || active.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(aiStat(target, defenseStat) || target.storedStats?.[defenseStat] || 1));
   const statRatio = attack / defense;
   const power = effectiveMovePower(move);
 
@@ -1863,8 +1908,8 @@ export function battleMovePowerForState(moveName, hp, maxhp) {
 function estimateBattleDamage(active, target, requestedMove) {
   const move = dex.moves.get(requestedMove?.move);
   if (!active || !target || !move.exists || requestedMove?.disabled || move.category === 'Status') return 0;
-  if (!dex.getImmunity(move.type, target)) return 0;
-  const effectiveness = 2 ** dex.getEffectiveness(move, target);
+  if (!dex.getImmunity(move.type, aiTypesOrSelf(target))) return 0;
+  const effectiveness = 2 ** dex.getEffectiveness(move, aiTypesOrSelf(target));
   const accuracy = typeof move.accuracy === 'number' ? move.accuracy / 100 : 1;
   const priority = move.priority > 0 ? 1.03 : 1;
   const strategic = moveStrategicMultiplier(move);
@@ -1873,11 +1918,11 @@ function estimateBattleDamage(active, target, requestedMove) {
   }
   const attackStat = move.category === 'Physical' ? 'atk' : 'spa';
   const defenseStat = move.category === 'Physical' ? 'def' : 'spd';
-  const attack = Math.max(1, Number(active.getStat?.(attackStat) || active.storedStats?.[attackStat] || 1));
-  const defense = Math.max(1, Number(target.getStat?.(defenseStat) || target.storedStats?.[defenseStat] || 1));
+  const attack = Math.max(1, Number(aiStat(active, attackStat) || active.storedStats?.[attackStat] || 1));
+  const defense = Math.max(1, Number(aiStat(target, defenseStat) || target.storedStats?.[defenseStat] || 1));
   const level = Math.max(1, Number(active.level || 1));
   const power = battleMovePowerForState(move.id, active.hp, active.maxhp);
-  const stab = active.getTypes().includes(move.type) ? 1.5 : 1;
+  const stab = aiTypes(active).includes(move.type) ? 1.5 : 1;
   let damage = (((2 * level / 5 + 2) * power * attack / defense) / 50) + 2;
   damage *= stab * effectiveness * 0.925 * accuracy * priority * strategic;
   if (move.category === 'Physical' && active.status === 'brn' && active.ability !== 'Guts') damage *= 0.5;
@@ -2017,7 +2062,7 @@ export function conditionalMoveExecutionProbability(active, target, moveName, co
     const requested = activeRequest.moves[entry.moveIndex];
     const opposingMove = dex.moves.get(requested?.id || requested?.move || '');
     if (!opposingMove.exists || opposingMove.category === 'Status') continue;
-    if (!dex.getImmunity(opposingMove.type, active)) continue;
+    if (!dex.getImmunity(opposingMove.type, aiTypesOrSelf(active))) continue;
     const beforeProbability = smartMoveActsBeforeMoveProbability(
       opposingMove.id,
       move.id,
@@ -2094,8 +2139,8 @@ function smartMatchupUtility(mon, foeMon, context = {}) {
   const hpRatio = ownHp / ownMaxHp;
   const offenseFraction = outgoing / foeHp;
   const dangerFraction = incoming / ownHp;
-  const ownSpeed = Math.max(1, Number(mon.getStat?.('spe') || mon.storedStats?.spe || 1));
-  const foeSpeed = Math.max(1, Number(foeMon.getStat?.('spe') || foeMon.storedStats?.spe || 1));
+  const ownSpeed = Math.max(1, Number(aiStat(mon, 'spe') || mon.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(aiStat(foeMon, 'spe') || foeMon.storedStats?.spe || 1));
   const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
   const survivalFactor = dangerFraction >= 1 ? 0.35 : 1 / Math.max(0.35, dangerFraction);
   return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
@@ -2111,8 +2156,8 @@ function smartMatchupUtilityFromRequest(mon, foeMon, activeRequest, context = {}
   const hpRatio = ownHp / ownMaxHp;
   const offenseFraction = outgoing / foeHp;
   const dangerFraction = incoming / ownHp;
-  const ownSpeed = Math.max(1, Number(mon.getStat?.('spe') || mon.storedStats?.spe || 1));
-  const foeSpeed = Math.max(1, Number(foeMon.getStat?.('spe') || foeMon.storedStats?.spe || 1));
+  const ownSpeed = Math.max(1, Number(aiStat(mon, 'spe') || mon.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(aiStat(foeMon, 'spe') || foeMon.storedStats?.spe || 1));
   const speedFactor = ownSpeed >= foeSpeed ? 1.12 : 0.94;
   const survivalFactor = dangerFraction >= 1 ? 0.35 : 1 / Math.max(0.35, dangerFraction);
   return offenseFraction * (0.6 + hpRatio) * speedFactor * survivalFactor;
@@ -2140,8 +2185,8 @@ function bestSmartVoluntarySwitch(request, side, foeActive, active, activeReques
     ? bestSmartExpectedDamage(active, foeActive, activeRequest, context)
     : bestSmartExpectedDamage(active, foeActive, null, context);
   const currentIncoming = bestExpectedDamage(foeActive, active);
-  const currentSpeed = Math.max(1, Number(active.getStat?.('spe') || active.storedStats?.spe || 1));
-  const foeSpeed = Math.max(1, Number(foeActive.getStat?.('spe') || foeActive.storedStats?.spe || 1));
+  const currentSpeed = Math.max(1, Number(aiStat(active, 'spe') || active.storedStats?.spe || 1));
+  const foeSpeed = Math.max(1, Number(aiStat(foeActive, 'spe') || foeActive.storedStats?.spe || 1));
   if (currentDamage >= Number(foeActive.hp || 1) && currentSpeed >= foeSpeed) return null;
   const currentUtility = SMART_REQUEST_AWARE_SWITCH
     ? smartMatchupUtilityFromRequest(active, foeActive, activeRequest, context)
@@ -2195,6 +2240,7 @@ function bestVoluntarySwitch(request, side, foeActive, active, activeRequest, po
 }
 
 function selectChoice(request, battleStream, sideId, stats = null, aiOptions = null) {
+  decisionEpoch += 1;
   if (request.wait) return null;
   if (request.teamPreview) return 'default';
   const battle = battleStream.battle;
@@ -2484,6 +2530,7 @@ function playOutBattle(serialized, firstP1, rollout, ctx) {
 }
 
 function choosePlayerBagAction(request, battle, stats, aiOptions) {
+  decisionEpoch += 1;
   const bag = aiOptions?.bagHealing;
   if (!bag?.items?.length || request.wait || request.forceSwitch || request.active?.length !== 1) return null;
   const side = battle?.sides?.[0];

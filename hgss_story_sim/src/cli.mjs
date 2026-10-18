@@ -7022,6 +7022,34 @@ async function cmdRouteExpStoryEvaluate() {
     resolvedRecipientSchedule = resolved.resolvedSchedule;
   }
 
+  // --grind-plan-json: a planned grind ({checkpoint: battles | {member: battles}
+  // | [{battles, participants, expShareHolder}]}); members may be named by
+  // species or candidate key.
+  const grindPlanJson = String(arg('grind-plan-json', '')).trim();
+  if (grindPlanJson) {
+    if (grindPolicy !== 'planned') throw new Error('--grind-plan-json requires --grind-policy=planned');
+    const keyFor = name => {
+      const match = team.find(candidate => candidateIdentity(candidate) === name || candidate.species === name);
+      if (!match) throw new Error('--grind-plan-json names a member not in the team: ' + name);
+      return candidateIdentity(match);
+    };
+    const raw = JSON.parse(grindPlanJson);
+    const plan = Object.fromEntries(Object.entries(raw).map(([checkpoint, entry]) => {
+      if (Array.isArray(entry)) {
+        return [checkpoint, entry.map(block => ({
+          ...block,
+          participants: (block.participants || []).map(keyFor),
+          ...(block.expShareHolder ? { expShareHolder: keyFor(block.expShareHolder) } : {}),
+        }))];
+      }
+      if (entry && typeof entry === 'object') {
+        return [checkpoint, Object.fromEntries(Object.entries(entry).map(([name, battles]) => [keyFor(name), battles]))];
+      }
+      return [checkpoint, entry];
+    }));
+    effectiveExpContext = { ...effectiveExpContext, grindPlanBattles: plan };
+  }
+
   const evaluation = await evaluateCandidatesWithMoveAccess(
     team,
     story.bosses,
@@ -7042,6 +7070,7 @@ async function cmdRouteExpStoryEvaluate() {
     },
   );
 
+  await flushBattleCache();
   const scheduleRows = evaluation.expSchedule?.battles || [];
   const scheduleByLabel = new Map(
     scheduleRows.map(row => [String(row.label), row])
@@ -7164,6 +7193,7 @@ async function cmdRouteExpStoryEvaluate() {
       e4GroupedRetryDiagnostic: routeRiskE4GroupedRetryDiagnostics(evaluation),
     },
     checkpoints,
+    battleCache: battleCacheStats(),
   }, null, 2));
 }
 
