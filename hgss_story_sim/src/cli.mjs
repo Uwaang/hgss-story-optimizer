@@ -7,7 +7,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, routeMovesetScore, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
+import { bagItemsUsed, comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
 import BAG_ITEMS from '../config/bag-items.hgss.json' with { type: 'json' };
 import { cheapestRestore, martItemsForBadges } from './bag-cost.mjs';
@@ -8557,8 +8557,9 @@ async function cmdE4HealCostSmoke() {
   const expected = (1000 * (p + p ** 2 + p ** 3 + p ** 4)) / p ** 5;
   const got = e4BetweenBattleItemCost({ rows });
   assert(Math.abs(got.total - expected) < 1e-6, `chain cost ${got.total} != ${expected}`);
-  assert(Math.abs(comparisonAxes({ rows, expSchedule: { battles: [] } }).bagItemsUsed - expected) < 1e-6, 'item axis must use the chain cost');
-  assert(comparisonAxes({ rows: rows.map(({ restoreCostPerWin, ...rest }) => rest) }).bagItemsUsed === null, 'unmodeled stays unknown');
+  assert(Math.abs(bagItemsUsed({ rows }) - expected) < 1e-6, 'item total must use the chain cost');
+  assert(bagItemsUsed({ rows: rows.map(({ restoreCostPerWin, ...rest }) => rest) }) === null, 'unmodeled stays unknown');
+  assert(!('bagItemsUsed' in comparisonAxes({ rows })), 'item cost is not a v1 comparison axis');
   console.log(JSON.stringify({ ok: true, chainCost: got }, null, 2));
 }
 
@@ -8695,7 +8696,7 @@ async function cmdComparisonAxesSmoke() {
   const expectedRetry = (1 - p) / p + (1 - p ** 5) / p ** 5;
   assert(near(axes.expectedRetries, expectedRetry, 1e-9), `retries ${axes.expectedRetries} != ${expectedRetry}`);
   assert(axes.grindBattles === 12, 'grind battles must come from the schedule');
-  assert(axes.bagItemsUsed === null, 'bag items are not modeled yet and must read as unknown');
+  assert(!('bagItemsUsed' in axes), 'item cost is not a v1 comparison axis');
   const tieRow = { boss: 'Falkner', wins: 1, losses: 0, ties: 1, runs: 2 };
   assert(near(comparisonAxes({ rows: [tieRow] }).expectedRetries, (1 - 2 / 4) / (2 / 4)), 'ties count as runs');
 

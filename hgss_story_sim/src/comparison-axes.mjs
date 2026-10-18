@@ -168,7 +168,8 @@ export function e4BetweenBattleItemCost(evaluation) {
 
 // Shop-price sum of bag items used per playthrough: in-battle use (only when
 // --bag-items=v1 modeled it) plus Elite Four between-battle healing. Unknown
-// when neither was modeled.
+// when neither was modeled. Not a comparison axis in v1 (CHARTER.md: every
+// battle starts at full HP and PP); kept for reference runs only.
 export function bagItemsUsed(evaluation) {
   const rows = activeRows(evaluation);
   const inBattleModeled = rows.some(row => row?.bagItemsModeled);
@@ -192,13 +193,12 @@ export function comparisonAxes(evaluation, options = {}) {
     grindBattles: grindBattles(evaluation),
     expectedRetries: retries.total,
     levelCv: spread.max,
-    bagItemsUsed: bagItemsUsed(evaluation),
-    detail: { retries, levelSpread: spread, e4BetweenBattleItems: e4BetweenBattleItemCost(evaluation) },
+    detail: { retries, levelSpread: spread },
   };
 }
 
 const SEARCH_AXES = ['grindBattles', 'expectedRetries', 'levelCv'];
-const FINAL_AXES = [...SEARCH_AXES, 'bagItemsUsed'];
+const FINAL_AXES = SEARCH_AXES;
 
 // a dominates b when it is no worse on every axis and better on one.
 // Unknown values (null) are never compared, so they cannot dominate.
