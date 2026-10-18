@@ -130,9 +130,16 @@ export function levelSpread(evaluation, { checkpoints = LEVEL_SPREAD_CHECKPOINTS
 
 // Bag items are not modeled yet (CHARTER.md v1, item 3); until they are this
 // axis is reported as unknown rather than zero.
+// Shop-price sum of bag items used per run through the route: in-battle use
+// (p1BagItemCostPerBattle on each checkpoint row) plus between-battle healing
+// (evaluation.betweenBattleItemCost, Elite Four chains). Unknown when the
+// evaluation did not model bag items.
 export function bagItemsUsed(evaluation) {
-  const used = evaluation?.bagItemUsage?.total;
-  return Number.isFinite(Number(used)) ? Number(used) : null;
+  const rows = activeRows(evaluation);
+  const modeled = rows.some(row => Number.isFinite(Number(row?.p1BagItemCostPerBattle)) && row?.bagItemsModeled);
+  if (!modeled) return null;
+  const inBattle = rows.reduce((sum, row) => sum + Number(row.p1BagItemCostPerBattle || 0), 0);
+  return inBattle + Number(evaluation?.betweenBattleItemCost || 0);
 }
 
 export function comparisonAxes(evaluation, options = {}) {

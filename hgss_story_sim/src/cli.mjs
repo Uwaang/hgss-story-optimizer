@@ -9,6 +9,7 @@ import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, dec
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
 import { comparisonAxes, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
+import BAG_ITEMS from '../config/bag-items.hgss.json' with { type: 'json' };
 import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -1065,6 +1066,22 @@ function summarizeMemberUsage(candidates, rows) {
   return summary;
 }
 
+// CHARTER.md v1: Poke Mart stock depends on badges earned before the
+// checkpoint (pret scrcmd_mart.c); revives are between-battle only.
+const ROUTE_GYM_LABELS = new Set([
+  'Falkner', 'Bugsy', 'Whitney', 'Morty', 'Chuck', 'Jasmine', 'Pryce', 'Clair',
+  'Lt. Surge', 'Sabrina', 'Erika', 'Janine', 'Misty', 'Brock', 'Blaine', 'Blue',
+]);
+
+function playerBagItemsForCheckpoint(routeBosses, battleIndex) {
+  const badges = routeBosses.slice(0, battleIndex).filter(boss => ROUTE_GYM_LABELS.has(String(boss.label))).length;
+  const tiers = BAG_ITEMS.tierByBadgeCount;
+  const tier = tiers[Math.min(badges, tiers.length - 1)];
+  return Object.entries(BAG_ITEMS.items)
+    .filter(([, item]) => item.tier <= tier && !item.betweenBattlesOnly && (item.healHp || item.cureStatus))
+    .map(([name]) => name);
+}
+
 async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAccess, expContext = null, grindPolicy = 'none', battleOptions = {}) {
   const rows = [];
   const routeBosses = storyBattlesForCandidates(bosses, candidates);
@@ -1273,9 +1290,13 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             key !== 'bossLabels' &&
             key !== 'routeGrindProxy' &&
             key !== 'routeGrindProxyTarget' &&
-            key !== 'hmPolicy'
+            key !== 'hmPolicy' &&
+            key !== 'bagItems'
           )
         ),
+        ...(battleOptions?.bagItems === 'v1'
+          ? { p1BagItems: playerBagItemsForCheckpoint(routeBosses, battleIndex) }
+          : {}),
       },
     );
     weightedWins += result.wins;
@@ -1301,6 +1322,7 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
       ])),
       heldItemPolicy,
       ...result,
+      bagItemsModeled: battleOptions?.bagItems === 'v1',
     });
   }
   const meanWinRate = weightedRuns ? weightedWins / weightedRuns : 0;
@@ -3834,6 +3856,8 @@ async function loadStagedRouteContext() {
   const objective = normalizeSearchObjective(arg('objective', 'route-risk'));
   const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
   const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
+  const bagItems = String(arg('bag-items', 'off')).toLowerCase();
+  if (!['off', 'v1'].includes(bagItems)) throw new Error('--bag-items must be off or v1');
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -3879,11 +3903,13 @@ async function loadStagedRouteContext() {
     routeBuildOptimization: true,
     e4GroupedRouteRisk,
     hmPolicy,
+    bagItems,
     routeGrindProxy,
     routeGrindProxyTarget,
   };
   return {
     hmPolicy,
+    bagItems,
     routeProfile,
     version,
     starterName,
@@ -3934,6 +3960,7 @@ function stagedConfigSnapshot(ctx) {
     routeGrindProxyTarget: ctx.routeGrindProxyTarget,
     // Only stamped when active so earlier fingerprints stay valid.
     ...(ctx.hmPolicy && ctx.hmPolicy !== 'ignore' ? { hmPolicy: ctx.hmPolicy } : {}),
+    ...(ctx.bagItems && ctx.bagItems !== 'off' ? { bagItems: ctx.bagItems } : {}),
     ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
       ? {
           excludedOrigins: ctx.excludedOrigins,
@@ -6882,6 +6909,8 @@ async function cmdRouteExpStoryEvaluate() {
   const runs = Math.max(1, Math.floor(Number(arg('runs', '4'))));
   const e4GroupedRouteRisk = arg('e4-grouped-route-risk', 'false') === 'true';
   const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
+  const bagItems = String(arg('bag-items', 'off')).toLowerCase();
+  if (!['off', 'v1'].includes(bagItems)) throw new Error('--bag-items must be off or v1');
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -7006,6 +7035,7 @@ async function cmdRouteExpStoryEvaluate() {
       routeBuildScope: buildScope,
       e4GroupedRouteRisk,
       hmPolicy,
+      bagItems,
       bossLabels: bossLabels.length ? bossLabels : null,
       routeGrindProxy,
       routeGrindProxyTarget,
@@ -7041,6 +7071,10 @@ async function cmdRouteExpStoryEvaluate() {
       joinedAfterMapExp: ledger.joinedAfterMapExp || [],
       mapSegments: ledger.mapSegments || [],
       trainerWindowSegments: ledger.trainerWindowSegments || [],
+      bagItemCounts: row.p1BagItemCounts || {},
+      bagItemCostPerBattle: Number(row.p1BagItemCostPerBattle || 0),
+      bagDecisionsPerBattle: Number(row.p1BagDecisionsPerBattle || 0),
+      bagRolloutsPerBattle: Number(row.p1BagRolloutsPerBattle || 0),
       playerMoves: Object.fromEntries(
         Object.values(row.playerBuilds || {}).map(build => [build.species, build.moves])
       ),
@@ -8446,6 +8480,47 @@ async function cmdExpSegmentSmoke() {
   }, null, 2));
 }
 
+
+// CHARTER.md v1: in-battle bag healing by rollouts.
+async function cmdBagItemsSmoke() {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error('bag-items-smoke: ' + message);
+  };
+  const story = await loadStory('complete');
+  const boss = story.bosses.find(entry => String(entry.label) === 'Pryce');
+  const enemy = hgssTrainerToShowdownTeam(boss.trainer, boss);
+  const player = [
+    { species: 'Quilava', level: 30, moves: ['Ember', 'Quick Attack', 'Smokescreen', 'Swift'], ability: 'Blaze', nature: 'Modest', evs: {}, ivs: {}, _candidateKey: 'q' },
+    { species: 'Flaaffy', level: 28, moves: ['Thunder Shock', 'Thunder Wave', 'Tackle', 'Cotton Spore'], ability: 'Static', nature: 'Modest', evs: {}, ivs: {}, _candidateKey: 'f' },
+  ];
+  const items = playerBagItemsForCheckpoint(story.bosses, story.bosses.indexOf(boss));
+  assert(items.includes('Super Potion') && !items.includes('Revive'), 'mart stock at Pryce: ' + items.join(','));
+  const base = { p2Trainer: boss, p1AiMode: 'smart' };
+  const plain = await simulateMatchup(player, enemy, 4, 777, base);
+  const plainAgain = await simulateMatchup(player, enemy, 4, 777, { ...base, p1BagItems: [] });
+  assert(plain.wins === plainAgain.wins && plain.averageTurns === plainAgain.averageTurns,
+    'an empty bag must reproduce the no-bag result');
+  const healed = await simulateMatchup(player, enemy, 4, 777, { ...base, p1BagItems: items });
+  const healedAgain = await simulateMatchup(player, enemy, 4, 777, { ...base, p1BagItems: items });
+  assert(JSON.stringify([healed.wins, healed.p1BagItemCounts, healed.averageTurns]) ===
+    JSON.stringify([healedAgain.wins, healedAgain.p1BagItemCounts, healedAgain.averageTurns]),
+    'bag rollouts must be deterministic for a fixed seed');
+  assert(!healed.p1AiErrors, 'player AI raised: ' + JSON.stringify(healed.p1AiErrors));
+  assert(healed.p1BagDecisionsPerBattle > 0, 'a losing low-level duel should trigger healing decisions');
+  console.log(JSON.stringify({
+    ok: true,
+    items,
+    plain: { wins: plain.wins, turns: plain.averageTurns },
+    healed: {
+      wins: healed.wins,
+      turns: healed.averageTurns,
+      itemCounts: healed.p1BagItemCounts,
+      costPerBattle: healed.p1BagItemCostPerBattle,
+      decisionsPerBattle: healed.p1BagDecisionsPerBattle,
+      rolloutsPerBattle: healed.p1BagRolloutsPerBattle,
+    },
+  }, null, 2));
+}
 
 // CHARTER.md v1: field HM requirement + Move Deleter rule.
 async function cmdFieldHmSmoke() {
@@ -18253,6 +18328,7 @@ const commands = {
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
   'comparison-axes-smoke': cmdComparisonAxesSmoke,
   'field-hm-smoke': cmdFieldHmSmoke,
+  'bag-items-smoke': cmdBagItemsSmoke,
   'exp-scheduler-v1-evolution-trigger-smoke': cmdExpSchedulerV1EvolutionTriggerSmoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,

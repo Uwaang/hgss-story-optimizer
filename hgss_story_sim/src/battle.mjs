@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import Showdown from 'pokemon-showdown';
-const { BattleStream, Dex, Teams, getPlayerStreams } = Showdown;
+const { Battle, BattleStream, Dex, PRNG, Teams, getPlayerStreams } = Showdown;
+import BAG_ITEMS_CONFIG from '../config/bag-items.hgss.json' with { type: 'json' };
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, chooseHgssVoluntarySwitch, hgssMoveChoiceDistribution, trainerAiProfile } from './trainer-ai.mjs';
 
@@ -2381,11 +2382,174 @@ function selectChoice(request, battleStream, sideId, stats = null, aiOptions = n
   return 'default';
 }
 
+// ---------------------------------------------------------------------------
+// Player bag healing (CHARTER.md v1, "전투 중 회복 판단").
+//
+// Only when the player AI's own damage estimate says the active Pokemon can be
+// knocked out this turn, each candidate (the normal choice, every usable bag
+// item, every healing move) is played out from a copy of the battle to the end
+// ROLLOUTS times, and the candidate with the highest win share is used. Ties
+// go to the normal choice, then the cheaper item. Inside a rollout the player
+// AI does not heal, so rollouts never nest.
+// ---------------------------------------------------------------------------
+
+const PLAYER_BAG_ITEMS = BAG_ITEMS_CONFIG.items;
+const RECOVERY_MOVE_IDS = new Set(['recover', 'roost', 'milkdrink', 'synthesis', 'slackoff', 'softboiled', 'moonlight', 'morningsun']);
+const PLAYER_ITEM_TOKEN = '__trainer_item__';
+
+function playerBagItemUseful(active, name) {
+  const item = PLAYER_BAG_ITEMS[name];
+  if (!item || item.betweenBattlesOnly || !active || active.fainted || !active.hp) return false;
+  if (item.healHp && active.hp < active.maxhp) return true;
+  if (item.cureStatus && active.status) return true;
+  return false;
+}
+
+function applyPlayerBagItem(battle, active, name) {
+  const item = PLAYER_BAG_ITEMS[name];
+  if (item.healHp === 'full') {
+    const healed = active.heal(active.maxhp);
+    if (healed) battle.add('-heal', active, active.getHealth, `[from] item: ${name}`);
+  } else if (Number(item.healHp) > 0) {
+    const healed = active.heal(Number(item.healHp));
+    if (healed) battle.add('-heal', active, active.getHealth, `[from] item: ${name}`);
+  }
+  if (item.cureStatus && active.status) active.cureStatus();
+  if (item.cureConfusion && active.volatiles?.confusion) active.removeVolatile('confusion');
+}
+
+// Showdown has no bag command in customgame: the effect is applied directly and
+// a "pass" spends the turn. Side#choosePass only accepts a pass from a healthy
+// active Pokemon while it is "commanding", so the marker is set just for the
+// choice and removed before the turn is committed (a marker left during the
+// commit makes the next request look already answered).
+function choosePassForItemTurn(battle, sideId) {
+  const side = battle.sides[sideId === 'p1' ? 0 : 1];
+  const active = side.active?.[0];
+  const prior = active.volatiles?.commanding;
+  active.volatiles.commanding = prior || { id: 'commanding' };
+  let ok;
+  try {
+    ok = side.choose('pass');
+  } finally {
+    if (prior) active.volatiles.commanding = prior;
+    else delete active.volatiles.commanding;
+  }
+  if (ok && battle.allChoicesDone()) battle.commitChoices();
+  return ok;
+}
+
+function rolloutSeed(base, turn, index) {
+  const mix = (Number(base) * 1000003 + Number(turn) * 9176 + index * 7919) >>> 0;
+  return [mix & 0xffff, (mix >>> 16) & 0xffff, (index * 40503 + 1) & 0xffff, (turn * 2654 + 17) & 0xffff];
+}
+
+function playOutBattle(serialized, firstP1, rollout, ctx) {
+  const battle = Battle.fromJSON(serialized);
+  battle.prng = new PRNG(rolloutSeed(ctx.seed, ctx.turn, rollout));
+  const p1Stats = { ...structuredClone(ctx.p1Stats), aiRngState: (ctx.p1Stats.aiRngState ^ (rollout * 2654435761)) >>> 0 };
+  const p2Stats = { ...structuredClone(ctx.p2Stats), aiRngState: (ctx.p2Stats.aiRngState ^ (rollout * 2246822519)) >>> 0 };
+  const view = { battle };
+  let pendingFirst = firstP1;
+  for (let step = 0; step < 4000 && !battle.ended; step += 1) {
+    let progressed = false;
+    for (const side of battle.sides) {
+      const request = side.activeRequest;
+      if (!request || request.wait || side.isChoiceDone()) continue;
+      const isP1 = side.id === 'p1';
+      let choice;
+      if (isP1 && pendingFirst) {
+        choice = pendingFirst;
+        pendingFirst = null;
+      } else {
+        choice = selectChoice(
+          request, view, side.id,
+          isP1 ? p1Stats : p2Stats,
+          isP1 ? ctx.p1RolloutOptions : ctx.p2Options,
+        );
+      }
+      if (choice && typeof choice === 'object' && choice.bagItem) {
+        applyPlayerBagItem(battle, side.active[0], choice.bagItem);
+        choosePassForItemTurn(battle, side.id);
+      } else if (choice === PLAYER_ITEM_TOKEN) {
+        choosePassForItemTurn(battle, side.id);
+      } else if (!battle.choose(side.id, choice || 'default')) {
+        battle.choose(side.id, 'default');
+      }
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+  return battle.winner === 'Player';
+}
+
+function choosePlayerBagAction(request, battle, stats, aiOptions) {
+  const bag = aiOptions?.bagHealing;
+  if (!bag?.items?.length || request.wait || request.forceSwitch || request.active?.length !== 1) return null;
+  const side = battle?.sides?.[0];
+  const active = side?.active?.[0];
+  const foeActive = battle?.sides?.[1]?.active?.find(Boolean);
+  if (!active || !foeActive || active.fainted || !active.hp) return null;
+  if (bestExpectedDamage(foeActive, active) < active.hp) return null;
+
+  const itemCandidates = bag.items.filter(name => playerBagItemUseful(active, name));
+  const moveCandidates = (request.active[0]?.moves || [])
+    .map((move, idx) => ({ move, idx }))
+    .filter(entry => !entry.move.disabled && RECOVERY_MOVE_IDS.has(dex.moves.get(entry.move.move).id))
+    .map(entry => `move ${entry.idx + 1}`);
+  if (!itemCandidates.length && !moveCandidates.length) return null;
+
+  const rolloutOptions = { ...aiOptions, bagHealing: null };
+  const baseChoice = selectChoice(request, { battle }, 'p1', structuredClone(stats), rolloutOptions);
+  const candidates = [
+    { label: 'normal', choice: baseChoice, cost: 0 },
+    ...moveCandidates.filter(choice => choice !== baseChoice).map(choice => ({ label: choice, choice, cost: 0 })),
+    ...itemCandidates.map(name => ({ label: name, choice: { bagItem: name }, cost: PLAYER_BAG_ITEMS[name].price })),
+  ];
+  const serialized = JSON.stringify(battle.toJSON());
+  const ctx = {
+    seed: bag.seed,
+    turn: Number(battle.turn || 0),
+    p1Stats: stats,
+    p2Stats: aiOptions.opponentStats,
+    p1RolloutOptions: rolloutOptions,
+    p2Options: aiOptions.opponentAiOptions,
+  };
+  const rollouts = Number(bag.rollouts);
+  let best = null;
+  for (const candidate of candidates) {
+    let wins = 0;
+    for (let index = 0; index < rollouts; index += 1) {
+      if (playOutBattle(serialized, candidate.choice, index, ctx)) wins += 1;
+    }
+    candidate.wins = wins;
+    if (!best || wins > best.wins || (wins === best.wins && candidate.cost < best.cost)) best = candidate;
+  }
+  stats.bagDecisions = Number(stats.bagDecisions || 0) + 1;
+  stats.bagRollouts = Number(stats.bagRollouts || 0) + candidates.length * rollouts;
+  return best;
+}
+
 async function runGreedyAi(playerStream, battleStream, sideId, stats, aiOptions = null) {
   for await (const chunk of playerStream) {
     for (const line of chunk.split('\n')) {
       if (!line.startsWith('|request|')) continue;
       const request = JSON.parse(line.slice('|request|'.length));
+      if (sideId === 'p1' && aiOptions?.bagHealing) {
+        const decision = choosePlayerBagAction(request, battleStream.battle, stats, aiOptions);
+        if (decision?.choice && typeof decision.choice === 'object') {
+          const battle = battleStream.battle;
+          const active = battle.sides[0].active[0];
+          applyPlayerBagItem(battle, active, decision.choice.bagItem);
+          stats.bagItemsUsed = [...(stats.bagItemsUsed || []), decision.choice.bagItem];
+          choosePassForItemTurn(battle, 'p1');
+          continue;
+        }
+        if (decision && decision.label !== 'normal') {
+          await playerStream.write(decision.choice);
+          continue;
+        }
+      }
       const choice = selectChoice(request, battleStream, sideId, stats, aiOptions);
       if (choice) {
         if (choice === '__trainer_item__') {
@@ -2475,6 +2639,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     trainerItemCount: options.p2TrainerItems === false ? 0 : Number(p2Profile?.items?.length || 0),
     trainerItemsUsed: [],
   };
+  const p1BagItems = Array.isArray(options.p1BagItems) ? options.p1BagItems.filter(name => PLAYER_BAG_ITEMS[name]) : [];
   const p1Task = runGreedyAi(
     streams.p1,
     battleStream,
@@ -2484,8 +2649,13 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       mode: p1Mode,
       traceMoves: Boolean(options.p1SmartTrace),
       opponentProfile: p2Profile,
+      bagHealing: p1Mode === 'smart' && p1BagItems.length
+        ? { items: p1BagItems, rollouts: Number(options.p1BagRollouts || BAG_ITEMS_CONFIG.inBattleHealing.rolloutsPerCandidate), seed: Number(seed) }
+        : null,
+      opponentStats: p2Stats,
+      opponentAiOptions: { mode: p2Mode, profile: p2Profile },
     },
-  ).catch(() => undefined);
+  ).catch(error => { p1AiError = error; });
   const p2Task = runGreedyAi(
     streams.p2,
     battleStream,
@@ -2495,6 +2665,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
   ).catch(() => undefined);
   let p1Faints = 0;
   let p2Faints = 0;
+  let p1AiError = null;
   const p1EndItemEvents = [];
   const resultPromise = (async () => {
     let winner = null;
@@ -2573,6 +2744,10 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       : Math.min(1, p2Faints / Math.max(1, p2Team.length)),
     p1Usage,
     p1EndItemEvents,
+    p1BagItemsUsed: [...(p1Stats.bagItemsUsed || [])],
+    p1BagDecisions: Number(p1Stats.bagDecisions || 0),
+    p1BagRollouts: Number(p1Stats.bagRollouts || 0),
+    p1AiError: p1AiError ? String(p1AiError?.stack || p1AiError) : null,
     p1AiMode: p1Mode,
     p1SmartDecisionTrace: options.p1SmartTrace ? [...p1Stats.smartMoveDecisionTrace] : [],
     p1VoluntarySwitches: p1Stats.voluntarySwitches,
@@ -2601,6 +2776,11 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let totalP1Faints = 0;
   let totalP2Faints = 0;
   let totalBattleProgress = 0;
+  const p1BagItemCounts = {};
+  let p1BagItemCost = 0;
+  let p1BagDecisions = 0;
+  let p1BagRollouts = 0;
+  const p1AiErrors = [];
   const p1Usage = {};
   const p1EndItemEventCounts = {};
   const p1WinningEndItemEventCounts = {};
@@ -2621,6 +2801,13 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     totalP1Faints += Number(result.p1Faints || 0);
     totalP2Faints += Number(result.p2Faints || 0);
     totalBattleProgress += Number(result.battleProgressScore || 0);
+    for (const name of result.p1BagItemsUsed || []) {
+      p1BagItemCounts[name] = Number(p1BagItemCounts[name] || 0) + 1;
+      p1BagItemCost += Number(PLAYER_BAG_ITEMS[name]?.price || 0);
+    }
+    p1BagDecisions += Number(result.p1BagDecisions || 0);
+    p1BagRollouts += Number(result.p1BagRollouts || 0);
+    if (result.p1AiError) p1AiErrors.push(result.p1AiError);
     for (const event of result.p1EndItemEvents || []) {
       const signature = JSON.stringify({
         item: String(event?.item || ''),
@@ -2705,6 +2892,12 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     p1Usage,
     p1EndItemEventCounts,
     p1WinningEndItemEventCounts,
+    // In-battle bag use; cost per battle attempt is what the item axis sums.
+    p1BagItemCounts,
+    p1BagItemCostPerBattle: p1BagItemCost / runs,
+    p1BagDecisionsPerBattle: p1BagDecisions / runs,
+    p1BagRolloutsPerBattle: p1BagRollouts / runs,
+    ...(p1AiErrors.length ? { p1AiErrors: p1AiErrors.slice(0, 3) } : {}),
     p1AiMode,
     p1SmartDecisionTrace,
     p2AiMode,
