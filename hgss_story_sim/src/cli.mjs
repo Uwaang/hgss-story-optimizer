@@ -7238,9 +7238,10 @@ async function cmdRouteExpStoryEvaluate() {
 
 
 
-// CHARTER.md: grind plans are built step by step. Each step adds one block of
-// --step-battles wild battles before one checkpoint, fought by one member
-// alone or by one member with another holding the Exp. Share. Every
+// CHARTER.md: grind plans are built step by step. Each step adds one block
+// before one checkpoint: --step-battles wild battles fought by one member
+// alone or by one member with another holding the Exp. Share, or a
+// party-wide block (see GRIND_PLAN_PARTY_BLOCK_STEPS). Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
 const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
@@ -7250,7 +7251,7 @@ const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step
 // plan; the pair is stored with the smaller key fighting.
 function grindPlanNormalBlock(block) {
   const holder = block.expShareHolder || null;
-  if (!holder || block.participants.length !== 1) return { ...block, participants: [...block.participants] };
+  if (!holder || block.participants.length !== 1) return { ...block, participants: [...block.participants].sort() };
   const [fighter, holds] = [block.participants[0], holder].sort();
   return { ...block, participants: [fighter], expShareHolder: holds };
 }
@@ -7284,6 +7285,11 @@ function grindPlanWithBlock(plan, label, rawBlock) {
 // Checkpoints a grind block may precede, in route order from the ledger,
 // skipping fights inside an Elite Four chain (the player cannot leave) and
 // checkpoints without a wild grind location.
+// Party-wide blocks (every joined member shares the EXP equally) come in
+// 1, 2, 4, 8 and 16 step sizes so one step can lift the whole party past a
+// wall (CHARTER.md, 2026-10-19). Individual blocks stay one step.
+const GRIND_PLAN_PARTY_BLOCK_STEPS = [1, 2, 4, 8, 16];
+
 function grindPlanChoices(ledger, stepBattles) {
   const choices = [];
   ledger.forEach((row, index) => {
@@ -7299,6 +7305,9 @@ function grindPlanChoices(ledger, stepBattles) {
           }
         }
       }
+    }
+    for (const steps of GRIND_PLAN_PARTY_BLOCK_STEPS) {
+      choices.push({ label: row.label, block: { battles: steps * stepBattles, participants: [...row.joined] } });
     }
   });
   return choices;
