@@ -4,22 +4,139 @@
     "Poke Mart stock depends on badge count (src/scrcmd_mart.c _020FBF22 + ScrCmd_MartBuy tiers).",
     "Prices and heal amounts from files/itemtool/itemdata/item_data.csv (price, partyUse HP column).",
     "Tier by badges: 0 -> 1, 1-2 -> 2, 3-4 -> 3, 5-6 -> 4, 7 -> 5, 8+ -> 6.",
-    "Revive is used only between battles (CHARTER.md v1)."
+    "Revive is used only between battles (CHARTER.md v1).",
+    "Single-status heals are marked betweenBattlesOnly because v1 only uses items between Elite Four battles; cures lists the Showdown status ids each item clears (item_data.csv slp/psn/brn/frz/prz columns)."
   ],
-  "tierByBadgeCount": [1, 2, 2, 3, 3, 4, 4, 5, 6],
+  "tierByBadgeCount": [
+    1,
+    2,
+    2,
+    3,
+    3,
+    4,
+    4,
+    5,
+    6
+  ],
   "items": {
-    "Potion": { "item": "ITEM_POTION", "tier": 1, "price": 300, "healHp": 20 },
-    "Super Potion": { "item": "ITEM_SUPER_POTION", "tier": 2, "price": 700, "healHp": 50 },
-    "Hyper Potion": { "item": "ITEM_HYPER_POTION", "tier": 4, "price": 1200, "healHp": 200 },
-    "Max Potion": { "item": "ITEM_MAX_POTION", "tier": 5, "price": 2500, "healHp": "full" },
-    "Full Restore": { "item": "ITEM_FULL_RESTORE", "tier": 6, "price": 3000, "healHp": "full", "cureStatus": true, "cureConfusion": true },
-    "Revive": { "item": "ITEM_REVIVE", "tier": 3, "price": 1500, "revive": "half", "betweenBattlesOnly": true },
-    "Full Heal": { "item": "ITEM_FULL_HEAL", "tier": 4, "price": 600, "cureStatus": true, "cureConfusion": true }
+    "Potion": {
+      "item": "ITEM_POTION",
+      "tier": 1,
+      "price": 300,
+      "healHp": 20
+    },
+    "Super Potion": {
+      "item": "ITEM_SUPER_POTION",
+      "tier": 2,
+      "price": 700,
+      "healHp": 50
+    },
+    "Hyper Potion": {
+      "item": "ITEM_HYPER_POTION",
+      "tier": 4,
+      "price": 1200,
+      "healHp": 200
+    },
+    "Max Potion": {
+      "item": "ITEM_MAX_POTION",
+      "tier": 5,
+      "price": 2500,
+      "healHp": "full"
+    },
+    "Full Restore": {
+      "item": "ITEM_FULL_RESTORE",
+      "tier": 6,
+      "price": 3000,
+      "healHp": "full",
+      "cureStatus": true,
+      "cureConfusion": true,
+      "cures": [
+        "psn",
+        "tox",
+        "par",
+        "slp",
+        "brn",
+        "frz"
+      ]
+    },
+    "Revive": {
+      "item": "ITEM_REVIVE",
+      "tier": 3,
+      "price": 1500,
+      "revive": "half",
+      "betweenBattlesOnly": true
+    },
+    "Full Heal": {
+      "item": "ITEM_FULL_HEAL",
+      "tier": 4,
+      "price": 600,
+      "cureStatus": true,
+      "cureConfusion": true,
+      "cures": [
+        "psn",
+        "tox",
+        "par",
+        "slp",
+        "brn",
+        "frz"
+      ]
+    },
+    "Antidote": {
+      "item": "ITEM_ANTIDOTE",
+      "tier": 1,
+      "price": 100,
+      "cures": [
+        "psn",
+        "tox"
+      ],
+      "betweenBattlesOnly": true
+    },
+    "Parlyz Heal": {
+      "item": "ITEM_PARLYZ_HEAL",
+      "tier": 1,
+      "price": 200,
+      "cures": [
+        "par"
+      ],
+      "betweenBattlesOnly": true
+    },
+    "Awakening": {
+      "item": "ITEM_AWAKENING",
+      "tier": 2,
+      "price": 250,
+      "cures": [
+        "slp"
+      ],
+      "betweenBattlesOnly": true
+    },
+    "Burn Heal": {
+      "item": "ITEM_BURN_HEAL",
+      "tier": 2,
+      "price": 250,
+      "cures": [
+        "brn"
+      ],
+      "betweenBattlesOnly": true
+    },
+    "Ice Heal": {
+      "item": "ITEM_ICE_HEAL",
+      "tier": 2,
+      "price": 250,
+      "cures": [
+        "frz"
+      ],
+      "betweenBattlesOnly": true
+    }
   },
   "inBattleHealing": {
     "trigger": "the player AI's own damage estimate says the active Pokemon can be knocked out this turn",
     "rolloutsPerCandidate": 8,
     "rolloutHorizon": "battle end",
     "tieBreak": "no item, then the cheaper item"
+  },
+  "betweenBattleHealing": {
+    "scope": "between Elite Four chain battles only; other checkpoints heal at a Pokemon Center for free",
+    "rule": "cheapest set of available mart items that restores every party member to full HP, clears status and revives the fainted (Revive restores half HP)",
+    "notModeled": "PP restoration (Ethers are not sold in marts)"
   }
 }

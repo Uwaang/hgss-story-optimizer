@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import Showdown from 'pokemon-showdown';
 const { Battle, BattleStream, Dex, PRNG, Teams, getPlayerStreams } = Showdown;
 import BAG_ITEMS_CONFIG from '../config/bag-items.hgss.json' with { type: 'json' };
+import { cheapestPartyRestore } from './bag-cost.mjs';
 import { constantToName, npcIvFromDifficulty } from './hgss-data.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, chooseHgssVoluntarySwitch, hgssMoveChoiceDistribution, trainerAiProfile } from './trainer-ai.mjs';
 
@@ -20,7 +21,7 @@ const NATURES_BY_ID = [
 const BATTLE_CACHE_PATH = process.env.HGSS_BATTLE_CACHE_PATH
   ? path.resolve(process.cwd(), process.env.HGSS_BATTLE_CACHE_PATH)
   : null;
-const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v5-p1-enditem');
+const BATTLE_CACHE_NAMESPACE = String(process.env.HGSS_BATTLE_CACHE_NAMESPACE || 'hgss-battle-cache-v6-endstate');
 const SMART_DYNAMIC_HP_POWER = String(process.env.HGSS_SMART_DYNAMIC_HP_POWER || '1') !== '0';
 const SMART_REQUEST_AWARE_SWITCH = String(process.env.HGSS_SMART_REQUEST_AWARE_SWITCH || '1') !== '0';
 let battleCacheLoaded = false;
@@ -2779,6 +2780,14 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
     `>player p2 ${JSON.stringify({ name: 'HGSS', team: Teams.pack(p2Team) })}`);
 
   const result = await resultPromise;
+  // Party state at the end of the battle (for between-battle healing cost).
+  const p1EndState = (battleStream.battle?.sides?.[0]?.pokemon || []).map(mon => ({
+    key: p1KeyByDisplayName.get(String(mon.name)) || String(mon.name),
+    hp: Number(mon.hp || 0),
+    maxhp: Number(mon.maxhp || 0),
+    status: String(mon.status || ''),
+    fainted: Boolean(mon.fainted) || Number(mon.hp || 0) === 0,
+  }));
   await streams.omniscient.writeEnd();
   await Promise.allSettled([p1Task, p2Task]);
   return {
@@ -2791,6 +2800,7 @@ export async function runBattle(p1Team, p2Team, seed = 1, options = {}) {
       : Math.min(1, p2Faints / Math.max(1, p2Team.length)),
     p1Usage,
     p1EndItemEvents,
+    p1EndState,
     p1BagItemsUsed: [...(p1Stats.bagItemsUsed || [])],
     p1BagDecisions: Number(p1Stats.bagDecisions || 0),
     p1BagRollouts: Number(p1Stats.bagRollouts || 0),
@@ -2828,6 +2838,13 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let p1BagDecisions = 0;
   let p1BagRollouts = 0;
   const p1AiErrors = [];
+  // Between-battle healing cost is bookkeeping on the finished battle, so it
+  // stays out of the battle cache key.
+  const restoreItems = Array.isArray(options.p1RestoreItems) ? options.p1RestoreItems : null;
+  const battleOptions = restoreItems ? (({ p1RestoreItems, ...rest }) => rest)(options) : options;
+  let restoreCost = 0;
+  let restoreUnavailable = 0;
+  const restoreItemCounts = {};
   const p1Usage = {};
   const p1EndItemEventCounts = {};
   const p1WinningEndItemEventCounts = {};
@@ -2838,7 +2855,17 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
   let p2AiFlagNames = [];
   let p2TrainerItems = [];
   for (let i = 0; i < runs; i += 1) {
-    const result = await cachedRunBattle(p1Team, p2Team, seedBase + i, options);
+    const result = await cachedRunBattle(p1Team, p2Team, seedBase + i, battleOptions);
+    if (restoreItems && result.winner === 'Player') {
+      const restore = cheapestPartyRestore(result.p1EndState || [], restoreItems);
+      if (!restore) restoreUnavailable += 1;
+      else {
+        restoreCost += restore.cost;
+        for (const [name, count] of Object.entries(restore.items)) {
+          restoreItemCounts[name] = Number(restoreItemCounts[name] || 0) + count;
+        }
+      }
+    }
     totalTurns += result.turns || 0;
     totalP1VoluntarySwitches += result.p1VoluntarySwitches || 0;
     totalP2VoluntarySwitches += result.p2VoluntarySwitches || 0;
@@ -2945,6 +2972,13 @@ export async function simulateMatchup(p1Team, p2Team, runs = 50, seedBase = 1, o
     p1BagDecisionsPerBattle: p1BagDecisions / runs,
     p1BagRolloutsPerBattle: p1BagRollouts / runs,
     ...(p1AiErrors.length ? { p1AiErrors: p1AiErrors.slice(0, 3) } : {}),
+    ...(restoreItems
+      ? {
+          restoreCostPerWin: wins ? restoreCost / Math.max(1, wins - restoreUnavailable) : null,
+          restoreItemCountsPerWin: Object.fromEntries(Object.entries(restoreItemCounts).map(([name, count]) => [name, count / Math.max(1, wins)])),
+          restoreUnavailableWins: restoreUnavailable,
+        }
+      : {}),
     p1AiMode,
     p1SmartDecisionTrace,
     p2AiMode,

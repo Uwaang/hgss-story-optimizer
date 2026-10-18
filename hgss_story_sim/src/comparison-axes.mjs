@@ -130,16 +130,54 @@ export function levelSpread(evaluation, { checkpoints = LEVEL_SPREAD_CHECKPOINTS
 
 // Bag items are not modeled yet (CHARTER.md v1, item 3); until they are this
 // axis is reported as unknown rather than zero.
-// Shop-price sum of bag items used per run through the route: in-battle use
-// (p1BagItemCostPerBattle on each checkpoint row) plus between-battle healing
-// (evaluation.betweenBattleItemCost, Elite Four chains). Unknown when the
-// evaluation did not model bag items.
+// Expected shop-price spending on Elite Four between-battle healing until a
+// chain is cleared. One attempt pays c_k after winning member k (k = 1..4,
+// no healing after the champion); attempts repeat until the whole chain is
+// won, so total = (sum_k (prod_{j<=k} p_j) * c_k) / prod_{j<=5} p_j.
+export function e4BetweenBattleItemCost(evaluation) {
+  const rows = activeRows(evaluation);
+  const byLabel = new Map(rows.map(row => [String(row.boss), row]));
+  let total = 0;
+  let modeled = false;
+  const chains = [];
+  for (const group of E4_CHAIN_GROUPS) {
+    const groupRows = group.labels.map(label => byLabel.get(label));
+    if (groupRows.some(row => !row)) continue;
+    const costs = groupRows.slice(0, -1).map(row => row.restoreCostPerWin);
+    if (costs.every(cost => cost === undefined)) continue;
+    modeled = true;
+    let reach = 1;
+    let perAttempt = 0;
+    // A member never won in the sample has no observed end state; its cost
+    // counts as 0 and is reported, so the total is a lower bound then.
+    const unobservedCostMembers = [];
+    groupRows.forEach((row, index) => {
+      reach *= checkpointClearProbability(row);
+      if (index < groupRows.length - 1) {
+        if (costs[index] === null || costs[index] === undefined) unobservedCostMembers.push(String(row.boss));
+        perAttempt += reach * Number(costs[index] || 0);
+      }
+    });
+    const chainProbability = reach;
+    const expected = perAttempt / chainProbability;
+    total += expected;
+    chains.push({ key: group.key, perAttempt, chainProbability, expected, unobservedCostMembers });
+  }
+  return modeled ? { total, chains } : null;
+}
+
+// Shop-price sum of bag items used per playthrough: in-battle use (only when
+// --bag-items=v1 modeled it) plus Elite Four between-battle healing. Unknown
+// when neither was modeled.
 export function bagItemsUsed(evaluation) {
   const rows = activeRows(evaluation);
-  const modeled = rows.some(row => Number.isFinite(Number(row?.p1BagItemCostPerBattle)) && row?.bagItemsModeled);
-  if (!modeled) return null;
-  const inBattle = rows.reduce((sum, row) => sum + Number(row.p1BagItemCostPerBattle || 0), 0);
-  return inBattle + Number(evaluation?.betweenBattleItemCost || 0);
+  const inBattleModeled = rows.some(row => row?.bagItemsModeled);
+  const e4 = e4BetweenBattleItemCost(evaluation);
+  if (!inBattleModeled && !e4) return null;
+  const inBattle = inBattleModeled
+    ? rows.reduce((sum, row) => sum + Number(row.p1BagItemCostPerBattle || 0), 0)
+    : 0;
+  return inBattle + (e4 ? e4.total : 0);
 }
 
 export function comparisonAxes(evaluation, options = {}) {
@@ -155,7 +193,7 @@ export function comparisonAxes(evaluation, options = {}) {
     expectedRetries: retries.total,
     levelCv: spread.max,
     bagItemsUsed: bagItemsUsed(evaluation),
-    detail: { retries, levelSpread: spread },
+    detail: { retries, levelSpread: spread, e4BetweenBattleItems: e4BetweenBattleItemCost(evaluation) },
   };
 }
 

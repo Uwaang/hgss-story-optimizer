@@ -29,6 +29,7 @@
     "comparison-axes-smoke": "node src/cli.mjs comparison-axes-smoke",
     "field-hm-smoke": "node src/cli.mjs field-hm-smoke",
     "bag-items-smoke": "node src/cli.mjs bag-items-smoke",
+    "e4-heal-cost-smoke": "node src/cli.mjs e4-heal-cost-smoke",
     "exp-allocator-smoke": "node src/cli.mjs exp-allocator-smoke",
     "team-order-smoke": "node src/cli.mjs team-order-smoke",
     "objective-smoke": "node src/cli.mjs objective-smoke",

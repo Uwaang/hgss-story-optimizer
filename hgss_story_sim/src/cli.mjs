@@ -7,9 +7,10 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, routeMovesetScore, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { comparisonAxes, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
+import { comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
 import BAG_ITEMS from '../config/bag-items.hgss.json' with { type: 'json' };
+import { cheapestRestore, martItemsForBadges } from './bag-cost.mjs';
 import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
   deriveLevelEvolutionStages,
@@ -1073,8 +1074,16 @@ const ROUTE_GYM_LABELS = new Set([
   'Lt. Surge', 'Sabrina', 'Erika', 'Janine', 'Misty', 'Brock', 'Blaine', 'Blue',
 ]);
 
+// Elite Four members after which the player must heal before the next
+// member of the same chain (no Pokemon Center inside the chain).
+const E4_HEAL_BEFORE_NEXT = new Set(['Will', 'Koga', 'Bruno', 'Karen', 'Will 2', 'Koga 2', 'Bruno 2', 'Karen 2']);
+
+function routeBadgesBefore(routeBosses, battleIndex) {
+  return routeBosses.slice(0, battleIndex).filter(boss => ROUTE_GYM_LABELS.has(String(boss.label))).length;
+}
+
 function playerBagItemsForCheckpoint(routeBosses, battleIndex) {
-  const badges = routeBosses.slice(0, battleIndex).filter(boss => ROUTE_GYM_LABELS.has(String(boss.label))).length;
+  const badges = routeBadgesBefore(routeBosses, battleIndex);
   const tiers = BAG_ITEMS.tierByBadgeCount;
   const tier = tiers[Math.min(badges, tiers.length - 1)];
   return Object.entries(BAG_ITEMS.items)
@@ -1291,11 +1300,15 @@ async function evaluateCandidatesWithMoveAccess(candidates, bosses, runs, moveAc
             key !== 'routeGrindProxy' &&
             key !== 'routeGrindProxyTarget' &&
             key !== 'hmPolicy' &&
-            key !== 'bagItems'
+            key !== 'bagItems' &&
+            key !== 'e4HealCost'
           )
         ),
         ...(battleOptions?.bagItems === 'v1'
           ? { p1BagItems: playerBagItemsForCheckpoint(routeBosses, battleIndex) }
+          : {}),
+        ...(battleOptions?.e4HealCost === 'items' && E4_HEAL_BEFORE_NEXT.has(String(boss.label))
+          ? { p1RestoreItems: martItemsForBadges(routeBadgesBefore(routeBosses, battleIndex)) }
           : {}),
       },
     );
@@ -3858,6 +3871,8 @@ async function loadStagedRouteContext() {
   const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
   const bagItems = String(arg('bag-items', 'off')).toLowerCase();
   if (!['off', 'v1'].includes(bagItems)) throw new Error('--bag-items must be off or v1');
+  const e4HealCost = String(arg('e4-heal-cost', 'off')).toLowerCase();
+  if (!['off', 'items'].includes(e4HealCost)) throw new Error('--e4-heal-cost must be off or items');
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -3904,12 +3919,14 @@ async function loadStagedRouteContext() {
     e4GroupedRouteRisk,
     hmPolicy,
     bagItems,
+    e4HealCost,
     routeGrindProxy,
     routeGrindProxyTarget,
   };
   return {
     hmPolicy,
     bagItems,
+    e4HealCost,
     routeProfile,
     version,
     starterName,
@@ -3961,6 +3978,7 @@ function stagedConfigSnapshot(ctx) {
     // Only stamped when active so earlier fingerprints stay valid.
     ...(ctx.hmPolicy && ctx.hmPolicy !== 'ignore' ? { hmPolicy: ctx.hmPolicy } : {}),
     ...(ctx.bagItems && ctx.bagItems !== 'off' ? { bagItems: ctx.bagItems } : {}),
+    ...(ctx.e4HealCost && ctx.e4HealCost !== 'off' ? { e4HealCost: ctx.e4HealCost } : {}),
     ...(Array.isArray(ctx.excludedOrigins) && ctx.excludedOrigins.length
       ? {
           excludedOrigins: ctx.excludedOrigins,
@@ -6911,6 +6929,8 @@ async function cmdRouteExpStoryEvaluate() {
   const hmPolicy = normalizeHmPolicy(arg('hm-policy', 'ignore'));
   const bagItems = String(arg('bag-items', 'off')).toLowerCase();
   if (!['off', 'v1'].includes(bagItems)) throw new Error('--bag-items must be off or v1');
+  const e4HealCost = String(arg('e4-heal-cost', 'off')).toLowerCase();
+  if (!['off', 'items'].includes(e4HealCost)) throw new Error('--e4-heal-cost must be off or items');
   const routeGrindProxy = arg('route-grind-proxy', 'false') === 'true';
   const routeGrindProxyTarget = Math.max(
     0.01,
@@ -7064,6 +7084,7 @@ async function cmdRouteExpStoryEvaluate() {
       e4GroupedRouteRisk,
       hmPolicy,
       bagItems,
+      e4HealCost,
       bossLabels: bossLabels.length ? bossLabels : null,
       routeGrindProxy,
       routeGrindProxyTarget,
@@ -7100,6 +7121,8 @@ async function cmdRouteExpStoryEvaluate() {
       joinedAfterMapExp: ledger.joinedAfterMapExp || [],
       mapSegments: ledger.mapSegments || [],
       trainerWindowSegments: ledger.trainerWindowSegments || [],
+      restoreCostPerWin: row.restoreCostPerWin ?? null,
+      restoreItemCountsPerWin: row.restoreItemCountsPerWin || null,
       bagItemCounts: row.p1BagItemCounts || {},
       bagItemCostPerBattle: Number(row.p1BagItemCostPerBattle || 0),
       bagDecisionsPerBattle: Number(row.p1BagDecisionsPerBattle || 0),
@@ -8510,6 +8533,34 @@ async function cmdExpSegmentSmoke() {
   }, null, 2));
 }
 
+
+// CHARTER.md v1: Elite Four between-battle healing cost.
+async function cmdE4HealCostSmoke() {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error('e4-heal-cost-smoke: ' + message);
+  };
+  const all = martItemsForBadges(8);
+  const cost = mon => cheapestRestore(mon, all)?.cost;
+  assert(cost({ hp: 100, maxhp: 150 }) === 700, '50 HP -> Super Potion 700');
+  assert(cost({ hp: 0, maxhp: 150 }) === 1500 + 1200, 'fainted 150 -> Revive + Hyper Potion');
+  assert(cost({ hp: 150, maxhp: 150, status: 'psn' }) === 100, 'poison only -> Antidote');
+  assert(cost({ hp: 150, maxhp: 150 }) === 0, 'healthy -> free');
+  assert(cost({ hp: 1, maxhp: 400, status: 'par' }) === 2600, '399 HP + paralysis -> 2 Hyper Potions (cheaper than Max Potion) + Parlyz Heal');
+  const early = martItemsForBadges(0);
+  assert(!early.includes('Revive') && cheapestRestore({ hp: 0, maxhp: 50 }, early) === null, 'no Revive before 3 badges');
+
+  // Expected spending until a chain is cleared.
+  const rows = ['Will', 'Koga', 'Bruno', 'Karen', 'Lance'].map((boss, index) => ({
+    boss, wins: 8, losses: 0, ties: 0, runs: 8, ...(index < 4 ? { restoreCostPerWin: 1000 } : {}),
+  }));
+  const p = 9 / 10;
+  const expected = (1000 * (p + p ** 2 + p ** 3 + p ** 4)) / p ** 5;
+  const got = e4BetweenBattleItemCost({ rows });
+  assert(Math.abs(got.total - expected) < 1e-6, `chain cost ${got.total} != ${expected}`);
+  assert(Math.abs(comparisonAxes({ rows, expSchedule: { battles: [] } }).bagItemsUsed - expected) < 1e-6, 'item axis must use the chain cost');
+  assert(comparisonAxes({ rows: rows.map(({ restoreCostPerWin, ...rest }) => rest) }).bagItemsUsed === null, 'unmodeled stays unknown');
+  console.log(JSON.stringify({ ok: true, chainCost: got }, null, 2));
+}
 
 // CHARTER.md v1: in-battle bag healing by rollouts.
 async function cmdBagItemsSmoke() {
@@ -18359,6 +18410,7 @@ const commands = {
   'comparison-axes-smoke': cmdComparisonAxesSmoke,
   'field-hm-smoke': cmdFieldHmSmoke,
   'bag-items-smoke': cmdBagItemsSmoke,
+  'e4-heal-cost-smoke': cmdE4HealCostSmoke,
   'exp-scheduler-v1-evolution-trigger-smoke': cmdExpSchedulerV1EvolutionTriggerSmoke,
   'exp-scheduler-v1-pareto-smoke': cmdExpSchedulerV1ParetoSmoke,
   'exp-scheduler-v1-frontier-expand': cmdExpSchedulerV1FrontierExpand,
