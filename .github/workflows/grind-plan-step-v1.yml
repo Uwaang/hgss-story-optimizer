@@ -34,6 +34,7 @@ permissions:
 env:
   GITHUB_TOKEN: ${{ github.token }}
   HGSS_FETCH_ATTEMPTS: '6'
+  NODE_OPTIONS: --max-old-space-size=12288
 
 jobs:
   shard:

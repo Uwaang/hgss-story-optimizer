@@ -6,8 +6,11 @@ name: grind-plan-chain-v1
 # last one holds the final state and summary.json.
 #
 # Resume: set RESUME_RUN_ID / RESUME_ARTIFACT to a previous run's saved step
-# artifact; its unevaluated children are prepared again with the current
-# rules. Leave them empty to start from the no-grind plan.
+# artifact (gp-step-<n>). With RESUME_MERGE_STEP=<n> the shard outputs that
+# run already produced for that step (gp-out-<n>-*) are merged first;
+# otherwise its unevaluated children are prepared again. Either way the next
+# step is prepared with the current rules. Leave them empty to start from the
+# no-grind plan.
 
 on:
   push:
@@ -21,8 +24,12 @@ permissions:
 env:
   GITHUB_TOKEN: ${{ github.token }}
   HGSS_FETCH_ATTEMPTS: '6'
-  RESUME_RUN_ID: ''
-  RESUME_ARTIFACT: ''
+  NODE_OPTIONS: --max-old-space-size=12288
+  # Run 39128698178 (rules before ties) failed merging step 14 on the state
+  # size; its step-14 shard outputs are complete.
+  RESUME_RUN_ID: '39128698178'
+  RESUME_ARTIFACT: gp-step-14
+  RESUME_MERGE_STEP: '14'
 
 jobs:
   init:
@@ -46,10 +53,23 @@ jobs:
           path: hgss_story_sim/results/resume
           run-id: ${{ env.RESUME_RUN_ID }}
           github-token: ${{ github.token }}
+      - name: Download the resume step outputs
+        if: env.RESUME_MERGE_STEP != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gp-out-${{ env.RESUME_MERGE_STEP }}-*
+          path: hgss_story_sim/results/resume-outs
+          merge-multiple: true
+          run-id: ${{ env.RESUME_RUN_ID }}
+          github-token: ${{ github.token }}
       - name: Prepare the first step
         id: prepare
         run: |
-          if [ -n "$RESUME_RUN_ID" ]; then
+          if [ -n "$RESUME_MERGE_STEP" ]; then
+            INPUTS="$(find results/resume-outs -name 'out-*.json' -type f | sort | paste -sd, -)"
+            node src/cli.mjs grind-plan-merge               --state=results/resume/state.json --pending=results/resume/pending.json               --inputs="$INPUTS" --state-out=results/resume-merged.json               --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+            RESUME="--state=results/resume-merged.json"
+          elif [ -n "$RESUME_RUN_ID" ]; then
             RESUME="--state=results/resume/state.json --undo-pending=results/resume/pending.json"
           else
             RESUME=""

@@ -7485,7 +7485,17 @@ function mergeGrindPlanStep(state, prepared, results, stats) {
     bestRetries: Math.min(...frontier.map(plan => plan.axes.expectedRetries)),
     maxGrindOnFrontier: Math.max(...frontier.map(plan => plan.axes.grindBattles)),
   });
+  pruneGrindPlanLedgers(state, frontier);
   return state.steps.at(-1);
+}
+
+// The route ledger is only read when a plan is expanded. A plan that is
+// dominated, already expanded, not expandable or a tie never will be
+// (dominance only grows as plans are added), so its ledger is dropped; it was
+// ~88% of the saved state by step 14.
+function pruneGrindPlanLedgers(state, frontier = grindPlanFrontier(state)) {
+  const keep = new Set(grindPlanMarkTies(frontier).filter(plan => plan.expandable && !plan.expanded).map(plan => plan.id));
+  for (const plan of state.plans) if (!keep.has(plan.id)) delete plan.ledger;
 }
 
 function grindPlanSummary(state, extra = {}) {
@@ -7498,6 +7508,19 @@ function grindPlanSummary(state, extra = {}) {
     steps: state.steps,
     frontier: grindPlanFrontier(state).map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan, ...(plan.tieOf ? { tieOf: plan.tieOf } : {}) })),
   };
+}
+
+// Saved state keeps the checkpoint ledger only for nondominated plans, the
+// only ones that can be expanded (again, when resuming): a dominated plan
+// never returns to the frontier because its dominator stays. Canonical keys
+// are rebuilt on load. Without this the state passed V8's string limit
+// (~500 MB at 50k plans, Actions step 14).
+function serializeGrindPlanState(state) {
+  const keep = new Set(grindPlanFrontier(state).map(plan => plan.id));
+  return JSON.stringify({
+    ...state,
+    plans: state.plans.map(({ canonical, ledger, ...plan }) => (keep.has(plan.id) ? { ...plan, ledger } : plan)),
+  });
 }
 
 async function readGrindPlanState(statePath, stepBattles) {
@@ -7526,7 +7549,7 @@ async function cmdGrindPlanBuild() {
   const stateDir = path.dirname(path.resolve(statePath));
   await fs.mkdir(stateDir, { recursive: true });
   const state = await readGrindPlanState(statePath, stepBattles);
-  const save = () => fs.writeFile(statePath, JSON.stringify(state));
+  const save = () => fs.writeFile(statePath, serializeGrindPlanState(state));
   const started = Date.now();
   while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
     const prepared = prepareGrindPlanStep(state);
@@ -7580,7 +7603,7 @@ async function cmdGrindPlanPrepare() {
     const slice = children.slice(index * size, (index + 1) * size).map(({ id, plan }) => ({ id, plan }));
     await fs.writeFile(path.join(outDir, `batch-${index}.json`), JSON.stringify(slice));
   }
-  await fs.writeFile(path.join(outDir, 'state.json'), JSON.stringify(state));
+  await fs.writeFile(path.join(outDir, 'state.json'), serializeGrindPlanState(state));
   await fs.writeFile(path.join(outDir, 'pending.json'), JSON.stringify(prepared));
   const shards = Array.from({ length: shardCount }, (_, index) => index);
   await fs.writeFile(path.join(outDir, 'shards.json'), JSON.stringify(shards));
@@ -7630,7 +7653,7 @@ async function cmdGrindPlanMerge() {
       cacheMisses: outputs.reduce((sum, output) => sum + Number(output.cacheMisses || 0), 0),
     });
   }
-  await fs.writeFile(statePathOut, JSON.stringify(state));
+  await fs.writeFile(statePathOut, serializeGrindPlanState(state));
   const last = state.steps.at(-1) || null;
   console.log(JSON.stringify({ done: Boolean(state.done), steps: state.steps.length, last }));
 }
