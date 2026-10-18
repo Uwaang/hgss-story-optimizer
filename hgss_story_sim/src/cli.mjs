@@ -8452,6 +8452,10 @@ async function cmdComparisonAxesSmoke() {
   // Both grind plan shapes.
   assert(practicalGrindPlanTotalBattles({ Falkner: 5, Clair: 7 }) === 12, 'count plan total');
   assert(practicalGrindPlanTotalBattles({ Falkner: { a: 2, b: 3 }, Clair: 7 }) === 12, 'member plan total');
+  assert(
+    practicalGrindPlanTotalBattles({ Falkner: [{ battles: 4, participants: ['a', 'b'] }], Clair: { a: 8 } }) === 12,
+    'block plan total',
+  );
 
   // Team comparison: keep a team when any of its plans is nondominated.
   const plans = [
@@ -8504,13 +8508,59 @@ async function cmdComparisonAxesSmoke() {
   const targetedAxes = comparisonAxes({ rows: [], expSchedule: targeted });
   assert(targetedAxes.grindBattles === 30, 'axes grind battles from targeted plan');
 
-  let rejected = false;
-  try {
-    schedule({ Falkner: { [laprasKey]: 5 } });
-  } catch (error) {
-    rejected = /has not joined the party yet/.test(String(error?.message || error));
+  const rejects = (plan, pattern) => {
+    try {
+      schedule(plan);
+    } catch (error) {
+      return pattern.test(String(error?.message || error));
+    }
+    return false;
+  };
+  assert(
+    rejects({ Falkner: { [laprasKey]: 5 } }, /has not joined the party yet/),
+    'grinding a member before it joins must be rejected',
+  );
+
+  // Switch-in participation and Exp. Share (pret battle_command.c split).
+  const otherKey = candidateIdentity(team.find(mon => mon.species === 'Mareep'));
+  const clairExp = targetedRow.grindExpBefore;
+  const shared = schedule({ Clair: [{ battles: 30, participants: [starterKey, otherKey] }] })
+    .battles.find(battle => battle.label === 'Clair');
+  assert(shared.expectedGrindBattles === 30, 'switch-in block must record 30 battles');
+  for (const key of [starterKey, otherKey]) {
+    assert(
+      Math.abs(shared.grindAllocatedThisCheckpoint[key] - clairExp / 2) <= 1,
+      `switch-in participant ${key} should get half of ${clairExp}`,
+    );
   }
-  assert(rejected, 'grinding a member before it joins must be rejected');
+  const withShare = schedule({
+    Clair: [{ battles: 30, participants: [starterKey], expShareHolder: otherKey }],
+  }).battles.find(battle => battle.label === 'Clair');
+  assert(
+    Math.abs(withShare.grindAllocatedThisCheckpoint[starterKey] - clairExp / 2) <= 1 &&
+      Math.abs(withShare.grindAllocatedThisCheckpoint[otherKey] - clairExp / 2) <= 1,
+    'Exp. Share holder and participant should each get half',
+  );
+  const holderFought = schedule({
+    Clair: [{ battles: 30, participants: [starterKey, otherKey], expShareHolder: otherKey }],
+  }).battles.find(battle => battle.label === 'Clair');
+  assert(
+    Math.abs(holderFought.grindAllocatedThisCheckpoint[otherKey] - clairExp * 3 / 4) <= 1 &&
+      Math.abs(holderFought.grindAllocatedThisCheckpoint[starterKey] - clairExp / 4) <= 1,
+    'a holder that also fought gets both shares',
+  );
+  const early = route.find(boss => Number(boss.stage) < 6 && String(boss.label) !== 'Falkner');
+  assert(
+    rejects({ [early.label]: [{ battles: 5, participants: [starterKey], expShareHolder: starterKey }] }, /Exp. Share is not available/),
+    'Exp. Share before Lake of Rage must be rejected',
+  );
+  assert(
+    rejects({ Clair: [
+      { battles: 5, participants: [starterKey], expShareHolder: starterKey },
+      { battles: 5, participants: [starterKey], expShareHolder: otherKey },
+    ] }, /only 1 exists/),
+    'two Exp. Share holders at once must be rejected',
+  );
 
   console.log(JSON.stringify({
     ok: true,

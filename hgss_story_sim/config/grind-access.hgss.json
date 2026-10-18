@@ -1,0 +1,9 @@
+{
+  "source": "pret/pokeheartgold@9d8b7591f09b65804da2fb2dfd56f320633e0d36",
+  "expShare": {
+    "copies": 1,
+    "availableFromStage": 6,
+    "note": "Red Gyarados at Lake of Rage (T29) gives the Red Scale (scr_seq_0938_T29.s: FLAG_GOT_RED_SCALE); Mr. Pokemon's house on Route 30 trades it for the Exp. Share (scr_seq_0229_R30R0201.s: ITEM_EXP__SHARE). Lake of Rage opens at route stage 6, before Petrel (Mahogany Hideout). This is the only Exp. Share source in the scripts.",
+    "split": "src/battle/battle_command.c: with a holder, half of the EXP is split among participants and half among holders; a holder that also fought gets both shares."
+  }
+}

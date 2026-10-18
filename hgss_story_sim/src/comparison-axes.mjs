@@ -70,15 +70,19 @@ export function expectedRetries(evaluation, { chainProbabilityOverrides = {} } =
   return { total, chains, checkpoints };
 }
 
-// Total wild battles in a grind plan. Accepts both plan shapes:
-// { checkpoint: battles } and { checkpoint: { memberKey: battles } }.
+// Total wild battles in a grind plan. Accepts every plan shape:
+// { checkpoint: battles }, { checkpoint: { memberKey: battles } } and
+// { checkpoint: [{ battles, participants, expShareHolder }] }.
 export function grindPlanTotalBattles(plan) {
+  const count = value => Math.max(0, Math.floor(Number(value || 0)));
   let total = 0;
   for (const value of Object.values(plan || {})) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (Array.isArray(value)) {
+      total += value.reduce((sum, block) => sum + count(block?.battles), 0);
+    } else if (value && typeof value === 'object') {
       total += grindPlanTotalBattles(value);
     } else {
-      total += Math.max(0, Math.floor(Number(value || 0)));
+      total += count(value);
     }
   }
   return total;

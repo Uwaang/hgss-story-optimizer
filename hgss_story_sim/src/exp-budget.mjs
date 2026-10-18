@@ -1,4 +1,5 @@
 import { fetchText } from './hgss-data.mjs';
+import GRIND_ACCESS from '../config/grind-access.hgss.json' with { type: 'json' };
 
 const PRET_RAW_ROOT = 'https://raw.githubusercontent.com/pret/pokeheartgold';
 const PRET_API_ROOT = 'https://api.github.com/repos/pret/pokeheartgold';
@@ -1162,9 +1163,11 @@ export function buildTeamExpSchedule({
     throw new Error(`Unknown grind policy: ${grindPolicy}`);
   }
   const normalizedGrindBudget = Math.max(0, Math.floor(Number(grindBudget || 0)));
-  // A planned grind entry is either a battle count (EXP split by the
-  // allocator, kept for reproducing earlier runs) or, per CHARTER.md v1, a
-  // map of member key -> battles so the plan itself decides who earns it.
+  // A planned grind entry is one of (CHARTER.md v1):
+  //   battles                         EXP split by the allocator (legacy runs)
+  //   { memberKey: battles }          each member fights its battles alone
+  //   [{ battles, participants: [keys], expShareHolder?: key }]
+  //                                   switch-in participation and Exp. Share
   const normalizeGrindBattleCount = (key, value) => {
     const count = Math.max(0, Math.floor(Number(value || 0)));
     if (!Number.isFinite(count)) {
@@ -1172,19 +1175,36 @@ export function buildTeamExpSchedule({
     }
     return count;
   };
+  const normalizeGrindBlock = (key, block) => {
+    const participants = [...new Set((block?.participants || []).map(String))].sort();
+    if (!participants.length) {
+      throw new Error(`Planned grind block for ${key} needs at least one participant`);
+    }
+    const holder = block?.expShareHolder ? String(block.expShareHolder) : null;
+    return {
+      battles: normalizeGrindBattleCount(key, block?.battles),
+      participants,
+      expShareHolder: holder,
+    };
+  };
   const normalizedGrindPlanBattles = Object.fromEntries(
     Object.entries(grindPlanBattles || {}).map(([key, value]) => {
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        const byMember = Object.fromEntries(
-          Object.entries(value)
-            .map(([memberKey, battles]) => [
-              String(memberKey),
-              normalizeGrindBattleCount(`${key}/${memberKey}`, battles),
-            ])
-            .filter(([, battles]) => battles > 0)
-            .sort(([a], [b]) => a.localeCompare(b))
-        );
-        return [String(key), byMember];
+      if (Array.isArray(value)) {
+        return [
+          String(key),
+          value.map(block => normalizeGrindBlock(key, block)).filter(block => block.battles > 0),
+        ];
+      }
+      if (value && typeof value === 'object') {
+        const blocks = Object.entries(value)
+          .map(([memberKey, battles]) => ({
+            battles: normalizeGrindBattleCount(`${key}/${memberKey}`, battles),
+            participants: [String(memberKey)],
+            expShareHolder: null,
+          }))
+          .filter(block => block.battles > 0)
+          .sort((a, b) => a.participants[0].localeCompare(b.participants[0]));
+        return [String(key), blocks];
       }
       return [String(key), normalizeGrindBattleCount(key, value)];
     })
@@ -1599,9 +1619,12 @@ export function buildTeamExpSchedule({
 
   // Gives planned grind EXP to the named members directly, bypassing the
   // allocator. Gen 4 wild EXP does not scale with the recipient's level, so a
-  // battle is worth the source's expected EXP whoever earns it.
+  // battle is worth the source's expected EXP whoever earns it. Split rule
+  // (pret battle_command.c): participants share the EXP evenly; with an
+  // Exp. Share holder, participants share half and the holder gets half, and
+  // a holder that also fought gets both.
   function grantPlannedGrindToMembers(
-    battlesByKey,
+    blocks,
     expPerBattle,
     boss,
     battleIndex,
@@ -1609,11 +1632,7 @@ export function buildTeamExpSchedule({
   ) {
     refreshEvolutionStates(boss, evolutionCheckpointIndex);
     const beforeLevels = new Map(states.map(state => [state.key, Number(state.level)]));
-    const byKey = {};
-    let allocated = 0;
-    let unallocated = 0;
-    let battles = 0;
-    for (const [key, count] of Object.entries(battlesByKey)) {
+    const memberState = key => {
       const state = states.find(item => item.key === key);
       if (!state) {
         throw new Error(
@@ -1623,7 +1642,42 @@ export function buildTeamExpSchedule({
       if (state.unknown) {
         throw new Error(`Planned grind before ${boss.label} names ${key}, whose entry level is unknown`);
       }
-      const requested = Math.max(0, Math.floor(count * Number(expPerBattle)));
+      return state;
+    };
+    const holders = new Set(blocks.map(block => block.expShareHolder).filter(Boolean));
+    if (holders.size) {
+      const access = GRIND_ACCESS.expShare;
+      if (Number(boss.stage) < Number(access.availableFromStage)) {
+        throw new Error(
+          `Exp. Share is not available before stage ${access.availableFromStage} (${boss.label} is stage ${boss.stage})`
+        );
+      }
+      if (holders.size > Number(access.copies)) {
+        throw new Error(`Planned grind before ${boss.label} uses ${holders.size} Exp. Share holders; only ${access.copies} exists`);
+      }
+    }
+    const requestedByKey = new Map();
+    const credit = (key, amount) => {
+      memberState(key);
+      requestedByKey.set(key, Number(requestedByKey.get(key) || 0) + amount);
+    };
+    let battles = 0;
+    for (const block of blocks) {
+      const total = block.battles * Number(expPerBattle);
+      battles += block.battles;
+      if (block.expShareHolder) {
+        for (const key of block.participants) credit(key, total / 2 / block.participants.length);
+        credit(block.expShareHolder, total / 2);
+      } else {
+        for (const key of block.participants) credit(key, total / block.participants.length);
+      }
+    }
+    const byKey = {};
+    let allocated = 0;
+    let unallocated = 0;
+    for (const [key, amount] of [...requestedByKey.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const state = memberState(key);
+      const requested = Math.max(0, Math.floor(amount));
       const before = Number(state.exp || 0);
       const cap = expAtLevel(state.growthRate, 100);
       state.exp = cap === null ? before + requested : Math.min(cap, before + requested);
@@ -1631,7 +1685,6 @@ export function buildTeamExpSchedule({
       const delta = state.exp - before;
       allocated += delta;
       unallocated += requested - delta;
-      battles += count;
       if (delta > 0) {
         byKey[key] = delta;
         grindAllocatedByKey.set(key, Number(grindAllocatedByKey.get(key) || 0) + delta);
@@ -1893,20 +1946,18 @@ export function buildTeamExpSchedule({
         normalizedGrindPlanBattles[String(boss.key)] ??
         normalizedGrindPlanBattles[String(battleIndex)] ??
         0;
-      const plannedByMember = plannedEntry && typeof plannedEntry === 'object'
-        ? plannedEntry
-        : null;
-      const plannedBattles = plannedByMember
-        ? Object.values(plannedByMember).reduce((sum, count) => sum + count, 0)
+      const plannedBlocks = Array.isArray(plannedEntry) ? plannedEntry : null;
+      const plannedBattles = plannedBlocks
+        ? plannedBlocks.reduce((sum, block) => sum + block.battles, 0)
         : Number(plannedEntry);
-      if (plannedByMember && plannedBattles > 0) {
+      if (plannedBlocks && plannedBattles > 0) {
         if (!(wild?.expectedExpPerBattle > 0)) {
           throw new Error(
             `Planned grind before ${boss.label} requires a modeled wild EXP source`
           );
         }
         const applied = grantPlannedGrindToMembers(
-          plannedByMember,
+          plannedBlocks,
           wild.expectedExpPerBattle,
           boss,
           battleIndex,
