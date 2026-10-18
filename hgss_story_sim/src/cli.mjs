@@ -10,6 +10,7 @@ import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisitio
 import { bagItemsUsed, comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
 import BAG_ITEMS from '../config/bag-items.hgss.json' with { type: 'json' };
+import GRIND_ACCESS_CONFIG from '../config/grind-access.hgss.json' with { type: 'json' };
 import { cheapestRestore, martItemsForBadges } from './bag-cost.mjs';
 import { allocateBossAwareSoftExp, allocateBreakpointAwareExp, buildExpWorld, buildTeamExpSchedule, trainerBattleExp } from './exp-budget.mjs';
 import {
@@ -6912,7 +6913,9 @@ async function cmdRouteExpDataAudit() {
   }, null, 2));
 }
 
-async function cmdRouteExpStoryEvaluate() {
+// Shared setup for route-exp-story-evaluate and the grind plan builder: flags,
+// pret data and the requested team.
+async function loadRouteExpEvaluationSetup() {
   const routeProfile = normalizeStoryRouteProfile(arg('route-profile', 'standard'));
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -7017,6 +7020,49 @@ async function cmdRouteExpStoryEvaluate() {
     candidate.species.toLowerCase() === starterName.toLowerCase()
   );
   if (!starter) throw new Error('Requested team must contain the selected starter');
+  return { routeProfile, version, starterName, evolutionPolicy, expProfile, grindPolicy, entryLevelPolicy, sameStageJoinPolicy, expAllocator, resourceProfile, spendPolicy, runs, e4GroupedRouteRisk, hmPolicy, bagItems, e4HealCost, routeGrindProxy, routeGrindProxyTarget, bossLabels, buildScope, recipientTargetName, recipientActivateBoss, recipientScheduleB64, allowPartialTeam, story, pool, moveAccess, expContext, team, starter };
+}
+
+function routeExpEvaluationOptions(setup) {
+  return {
+    p1AiMode: 'smart',
+    routeBuildOptimization: true,
+    routeBuildScope: setup.buildScope,
+    e4GroupedRouteRisk: setup.e4GroupedRouteRisk,
+    hmPolicy: setup.hmPolicy,
+    bagItems: setup.bagItems,
+    e4HealCost: setup.e4HealCost,
+    bossLabels: setup.bossLabels.length ? setup.bossLabels : null,
+    routeGrindProxy: setup.routeGrindProxy,
+    routeGrindProxyTarget: setup.routeGrindProxyTarget,
+  };
+}
+
+// Grind plan members may be named by species or candidate key.
+function resolveGrindPlanMembers(team, raw) {
+  const keyFor = name => {
+    const match = team.find(candidate => candidateIdentity(candidate) === name || candidate.species === name);
+    if (!match) throw new Error('--grind-plan-json names a member not in the team: ' + name);
+    return candidateIdentity(match);
+  };
+  return Object.fromEntries(Object.entries(raw).map(([checkpoint, entry]) => {
+    if (Array.isArray(entry)) {
+      return [checkpoint, entry.map(block => ({
+        ...block,
+        participants: (block.participants || []).map(keyFor),
+        ...(block.expShareHolder ? { expShareHolder: keyFor(block.expShareHolder) } : {}),
+      }))];
+    }
+    if (entry && typeof entry === 'object') {
+      return [checkpoint, Object.fromEntries(Object.entries(entry).map(([name, battles]) => [keyFor(name), battles]))];
+    }
+    return [checkpoint, entry];
+  }));
+}
+
+async function cmdRouteExpStoryEvaluate() {
+  const setup = await loadRouteExpEvaluationSetup();
+  const { routeProfile, version, starterName, evolutionPolicy, expProfile, grindPolicy, entryLevelPolicy, sameStageJoinPolicy, expAllocator, resourceProfile, spendPolicy, runs, e4GroupedRouteRisk, hmPolicy, bagItems, e4HealCost, routeGrindProxy, routeGrindProxyTarget, bossLabels, buildScope, recipientTargetName, recipientActivateBoss, recipientScheduleB64, allowPartialTeam, story, pool, moveAccess, expContext, team, starter } = setup;
 
   let effectiveExpContext = expContext;
   let resolvedRecipientSchedule = {};
@@ -7043,30 +7089,11 @@ async function cmdRouteExpStoryEvaluate() {
   }
 
   // --grind-plan-json: a planned grind ({checkpoint: battles | {member: battles}
-  // | [{battles, participants, expShareHolder}]}); members may be named by
-  // species or candidate key.
+  // | [{battles, participants, expShareHolder}]}).
   const grindPlanJson = String(arg('grind-plan-json', '')).trim();
   if (grindPlanJson) {
     if (grindPolicy !== 'planned') throw new Error('--grind-plan-json requires --grind-policy=planned');
-    const keyFor = name => {
-      const match = team.find(candidate => candidateIdentity(candidate) === name || candidate.species === name);
-      if (!match) throw new Error('--grind-plan-json names a member not in the team: ' + name);
-      return candidateIdentity(match);
-    };
-    const raw = JSON.parse(grindPlanJson);
-    const plan = Object.fromEntries(Object.entries(raw).map(([checkpoint, entry]) => {
-      if (Array.isArray(entry)) {
-        return [checkpoint, entry.map(block => ({
-          ...block,
-          participants: (block.participants || []).map(keyFor),
-          ...(block.expShareHolder ? { expShareHolder: keyFor(block.expShareHolder) } : {}),
-        }))];
-      }
-      if (entry && typeof entry === 'object') {
-        return [checkpoint, Object.fromEntries(Object.entries(entry).map(([name, battles]) => [keyFor(name), battles]))];
-      }
-      return [checkpoint, entry];
-    }));
+    const plan = resolveGrindPlanMembers(team, JSON.parse(grindPlanJson));
     effectiveExpContext = { ...effectiveExpContext, grindPlanBattles: plan };
   }
 
@@ -7077,18 +7104,7 @@ async function cmdRouteExpStoryEvaluate() {
     moveAccess,
     effectiveExpContext,
     grindPolicy,
-    {
-      p1AiMode: 'smart',
-      routeBuildOptimization: true,
-      routeBuildScope: buildScope,
-      e4GroupedRouteRisk,
-      hmPolicy,
-      bagItems,
-      e4HealCost,
-      bossLabels: bossLabels.length ? bossLabels : null,
-      routeGrindProxy,
-      routeGrindProxyTarget,
-    },
+    routeExpEvaluationOptions(setup),
   );
 
   await flushBattleCache();
@@ -7221,6 +7237,252 @@ async function cmdRouteExpStoryEvaluate() {
 }
 
 
+
+// CHARTER.md: grind plans are built step by step. Each step adds one block of
+// --step-battles wild battles before one checkpoint, fought by one member
+// alone or by one member with another holding the Exp. Share. Every
+// nondominated plan that improved retries or level CV over its parent is
+// expanded; the rest are not (no numeric threshold).
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out']);
+
+function grindPlanCanonical(plan) {
+  const labels = Object.keys(plan).sort();
+  return JSON.stringify(labels.map(label => [label, [...plan[label]]
+    .map(block => [block.participants.join('+'), block.expShareHolder || '', block.battles])
+    .sort((a, b) => (a[0] + '|' + a[1]).localeCompare(b[0] + '|' + b[1]))]));
+}
+
+function grindPlanWithBlock(plan, label, block) {
+  const blocks = (plan[label] || []).map(item => ({ ...item, participants: [...item.participants] }));
+  const holder = block.expShareHolder || null;
+  // One Exp. Share exists (config/grind-access.hgss.json) and the evaluator
+  // allows one holder per checkpoint.
+  if (holder && blocks.some(item => item.expShareHolder && item.expShareHolder !== holder)) return null;
+  const same = blocks.find(item =>
+    item.participants.join('+') === block.participants.join('+') && (item.expShareHolder || null) === holder
+  );
+  if (same) same.battles += block.battles;
+  else blocks.push({ battles: block.battles, participants: [...block.participants], ...(holder ? { expShareHolder: holder } : {}) });
+  return { ...plan, [label]: blocks };
+}
+
+// Checkpoints a grind block may precede, in route order from the ledger,
+// skipping fights inside an Elite Four chain (the player cannot leave) and
+// checkpoints without a wild grind location.
+function grindPlanChoices(ledger, stepBattles) {
+  const choices = [];
+  ledger.forEach((row, index) => {
+    const previous = ledger[index - 1];
+    if (previous && E4_HEAL_BEFORE_NEXT.has(String(previous.label))) return;
+    if (!(row.bestWildExp > 0)) return;
+    for (const member of row.joined) {
+      choices.push({ label: row.label, block: { battles: stepBattles, participants: [member] } });
+      if (row.stage >= Number(GRIND_ACCESS_CONFIG.expShare.availableFromStage)) {
+        for (const holder of row.joined) {
+          if (holder !== member) {
+            choices.push({ label: row.label, block: { battles: stepBattles, participants: [member], expShareHolder: holder } });
+          }
+        }
+      }
+    }
+  });
+  return choices;
+}
+
+function grindPlanLedger(evaluation) {
+  return (evaluation.expSchedule?.battles || []).map(row => ({
+    label: String(row.label),
+    stage: Number(row.stage || 0),
+    joined: Object.entries(row.expBefore || {})
+      .filter(([, exp]) => exp !== null && Number.isFinite(Number(exp)))
+      .map(([key]) => key),
+    bestWildExp: Number(row.bestWildGrind?.expectedExpPerBattle || 0),
+  }));
+}
+
+async function cmdGrindPlanWorker() {
+  const setup = await loadRouteExpEvaluationSetup();
+  const batch = JSON.parse(await fs.readFile(String(arg('batch-in', '')), 'utf8'));
+  const results = [];
+  for (const item of batch) {
+    const started = Date.now();
+    try {
+      const evaluation = await evaluateCandidatesWithMoveAccess(
+        setup.team,
+        setup.story.bosses,
+        setup.runs,
+        setup.moveAccess,
+        { ...setup.expContext, grindPlanBattles: item.plan },
+        setup.grindPolicy,
+        routeExpEvaluationOptions(setup),
+      );
+      const axes = evaluation.comparisonAxes;
+      results.push({
+        id: item.id,
+        axes: { feasible: axes.feasible, grindBattles: axes.grindBattles, expectedRetries: axes.expectedRetries, levelCv: axes.levelCv },
+        ledger: grindPlanLedger(evaluation),
+        secs: (Date.now() - started) / 1000,
+      });
+    } catch (error) {
+      results.push({ id: item.id, error: String(error.message || error), secs: (Date.now() - started) / 1000 });
+    }
+  }
+  await flushBattleCache();
+  await fs.writeFile(String(arg('batch-out', '')), JSON.stringify({ results, battleCache: battleCacheStats() }));
+}
+
+async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
+  const { spawn } = await import('node:child_process');
+  const passArgs = process.argv.slice(3).filter(value => {
+    const match = /^--([^=]+)=/.exec(value);
+    return !match || !GRIND_PLAN_BUILDER_FLAGS.has(match[1]);
+  });
+  const count = Math.max(1, Math.min(workers, items.length));
+  const size = Math.ceil(items.length / count);
+  const jobs = [];
+  for (let index = 0; index < count; index += 1) {
+    const slice = items.slice(index * size, (index + 1) * size);
+    if (!slice.length) continue;
+    const batchIn = path.join(stateDir, `step-${step}-w${index}-in.json`);
+    const batchOut = path.join(stateDir, `step-${step}-w${index}-out.json`);
+    await fs.writeFile(batchIn, JSON.stringify(slice.map(({ id, plan }) => ({ id, plan }))));
+    jobs.push(new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        fileURLToPath(import.meta.url),
+        'grind-plan-worker',
+        ...passArgs,
+        `--batch-in=${batchIn}`,
+        `--batch-out=${batchOut}`,
+      ], {
+        env: { ...process.env, HGSS_BATTLE_CACHE_PATH: path.join(stateDir, `battle-cache-w${index}.json`) },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
+      child.on('exit', async code => {
+        if (code !== 0) return reject(new Error(`grind-plan-worker ${index} exited ${code}: ${stderr}`));
+        try {
+          resolve(JSON.parse(await fs.readFile(batchOut, 'utf8')));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }));
+  }
+  const outputs = await Promise.all(jobs);
+  return {
+    results: outputs.flatMap(output => output.results),
+    cacheHits: outputs.reduce((sum, output) => sum + Number(output.battleCache?.hits || 0), 0),
+    cacheMisses: outputs.reduce((sum, output) => sum + Number(output.battleCache?.misses || 0), 0),
+  };
+}
+
+async function cmdGrindPlanBuild() {
+  const statePath = String(arg('state', ''));
+  if (!statePath) throw new Error('grind-plan-build requires --state=path');
+  if (normalizeGrindPolicy(arg('grind-policy', 'none')) !== 'planned') {
+    throw new Error('grind-plan-build requires --grind-policy=planned');
+  }
+  const workers = Math.max(1, Math.floor(Number(arg('workers', '1'))));
+  const stepBattles = Math.max(1, Math.floor(Number(arg('step-battles', '25'))));
+  const maxSeconds = Number(arg('max-seconds', 'Infinity'));
+  const maxSteps = Number(arg('max-steps', 'Infinity'));
+  const stateDir = path.dirname(path.resolve(statePath));
+  await fs.mkdir(stateDir, { recursive: true });
+  let state;
+  try {
+    state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  } catch {
+    state = { schemaVersion: 1, stepBattles, args: process.argv.slice(3), plans: [], steps: [] };
+  }
+  const save = () => fs.writeFile(statePath, JSON.stringify(state));
+  const started = Date.now();
+  const seen = new Set(state.plans.map(plan => plan.canonical));
+  const evaluate = async (items, step) => {
+    const stepStarted = Date.now();
+    const output = await runGrindPlanWorkers(items, { workers, stateDir, step });
+    const byId = new Map(output.results.map(result => [result.id, result]));
+    for (const item of items) {
+      state.plans.push({ ...item, ...(byId.get(item.id) || { error: 'missing worker result' }) });
+    }
+    return {
+      secs: (Date.now() - stepStarted) / 1000,
+      cacheHits: output.cacheHits,
+      cacheMisses: output.cacheMisses,
+      errors: output.results.filter(result => result.error).length,
+    };
+  };
+  const axesOf = plan => plan.axes;
+  const frontierOf = () => nondominated(state.plans.filter(plan => plan.axes), { axesOf });
+
+  if (!state.plans.length) {
+    const base = { id: 'p0', parent: null, depth: 0, plan: {}, canonical: grindPlanCanonical({}), expandable: true, expanded: false };
+    seen.add(base.canonical);
+    const stats = await evaluate([base], 0);
+    state.steps.push({ step: 0, expandedPlans: 0, children: 1, ...stats, frontier: 1 });
+    await save();
+    console.error(JSON.stringify(state.steps.at(-1)));
+  }
+
+  while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
+    const step = state.steps.length;
+    const toExpand = frontierOf().filter(plan => plan.expandable && !plan.expanded);
+    if (!toExpand.length) {
+      state.done = true;
+      break;
+    }
+    const children = [];
+    for (const parent of toExpand) {
+      for (const choice of grindPlanChoices(parent.ledger, stepBattles)) {
+        const plan = grindPlanWithBlock(parent.plan, choice.label, choice.block);
+        if (!plan) continue;
+        const canonical = grindPlanCanonical(plan);
+        if (seen.has(canonical)) continue;
+        seen.add(canonical);
+        children.push({
+          id: `p${state.plans.length + children.length}`,
+          parent: parent.id,
+          depth: parent.depth + 1,
+          plan,
+          canonical,
+          expanded: false,
+        });
+      }
+      parent.expanded = true;
+    }
+    const stats = await evaluate(children, step);
+    const byId = new Map(state.plans.map(plan => [plan.id, plan]));
+    for (const child of children) {
+      const plan = byId.get(child.id);
+      const parent = byId.get(plan.parent);
+      plan.expandable = Boolean(plan.axes && plan.axes.feasible !== false && (
+        plan.axes.expectedRetries < parent.axes.expectedRetries || plan.axes.levelCv < parent.axes.levelCv
+      ));
+    }
+    const nextFrontier = frontierOf();
+    state.steps.push({
+      step,
+      expandedPlans: toExpand.length,
+      children: children.length,
+      ...stats,
+      frontier: nextFrontier.length,
+      frontierExpandable: nextFrontier.filter(plan => plan.expandable && !plan.expanded).length,
+      bestRetries: Math.min(...nextFrontier.map(plan => plan.axes.expectedRetries)),
+      maxGrindOnFrontier: Math.max(...nextFrontier.map(plan => plan.axes.grindBattles)),
+    });
+    await save();
+    console.error(JSON.stringify(state.steps.at(-1)));
+  }
+  await save();
+  console.log(JSON.stringify({
+    done: Boolean(state.done),
+    plansEvaluated: state.plans.length,
+    errors: state.plans.filter(plan => plan.error).length,
+    wallSecs: (Date.now() - started) / 1000,
+    steps: state.steps,
+    frontier: frontierOf().map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan })),
+  }, null, 2));
+}
 
 function parseRateTargets(value, fallback) {
   const parsed = String(value || fallback)
@@ -18405,6 +18667,8 @@ const commands = {
   'route-exp-story-final-stage': cmdRouteExpStoryFinalStage,
   'battle-cache-merge': cmdBattleCacheMerge,
   'route-exp-practical-grind': cmdRouteExpPracticalGrind,
+  'grind-plan-build': cmdGrindPlanBuild,
+  'grind-plan-worker': cmdGrindPlanWorker,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
