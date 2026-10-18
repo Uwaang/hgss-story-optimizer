@@ -7243,7 +7243,7 @@ async function cmdRouteExpStoryEvaluate() {
 // alone or by one member with another holding the Exp. Share. Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7392,28 +7392,21 @@ async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
   };
 }
 
-async function cmdGrindPlanBuild() {
-  const statePath = String(arg('state', ''));
-  if (!statePath) throw new Error('grind-plan-build requires --state=path');
-  if (normalizeGrindPolicy(arg('grind-policy', 'none')) !== 'planned') {
-    throw new Error('grind-plan-build requires --grind-policy=planned');
-  }
-  const workers = Math.max(1, Math.floor(Number(arg('workers', '1'))));
-  const stepBattles = Math.max(1, Math.floor(Number(arg('step-battles', '25'))));
-  const maxSeconds = Number(arg('max-seconds', 'Infinity'));
-  const maxSteps = Number(arg('max-steps', 'Infinity'));
-  const stateDir = path.dirname(path.resolve(statePath));
-  await fs.mkdir(stateDir, { recursive: true });
-  let state;
-  try {
-    state = JSON.parse(await fs.readFile(statePath, 'utf8'));
-  } catch {
-    state = { schemaVersion: 1, stepBattles, args: process.argv.slice(3), plans: [], steps: [] };
-  }
-  const save = () => fs.writeFile(statePath, JSON.stringify(state));
-  const started = Date.now();
-  // Plans saved before swap merging may hold both orders of a pair; keep the
-  // first and mark the rest as duplicates.
+// Builder state shared by the local loop (grind-plan-build) and the Actions
+// chain (grind-plan-prepare / grind-plan-shard / grind-plan-merge).
+const grindPlanAxesOf = plan => plan.axes;
+
+function grindPlanFrontier(state) {
+  return nondominated(state.plans.filter(plan => plan.axes && !plan.duplicateOf), { axesOf: grindPlanAxesOf });
+}
+
+function newGrindPlanState(stepBattles) {
+  return { schemaVersion: 1, stepBattles, args: process.argv.slice(3), plans: [], steps: [] };
+}
+
+// Plans saved before swap merging may hold both orders of a pair; keep the
+// first and mark the rest as duplicates.
+function grindPlanSeen(state) {
   const seen = new Map();
   for (const plan of state.plans) {
     plan.plan = grindPlanNormal(plan.plan);
@@ -7421,92 +7414,197 @@ async function cmdGrindPlanBuild() {
     if (seen.has(plan.canonical)) plan.duplicateOf = seen.get(plan.canonical);
     else seen.set(plan.canonical, plan.id);
   }
-  const evaluate = async (items, step) => {
-    const stepStarted = Date.now();
-    const output = await runGrindPlanWorkers(items, { workers, stateDir, step });
-    const byId = new Map(output.results.map(result => [result.id, result]));
-    for (const item of items) {
-      state.plans.push({ ...item, ...(byId.get(item.id) || { error: 'missing worker result' }) });
-    }
-    return {
-      secs: (Date.now() - stepStarted) / 1000,
-      cacheHits: output.cacheHits,
-      cacheMisses: output.cacheMisses,
-      errors: output.results.filter(result => result.error).length,
-    };
-  };
-  const axesOf = plan => plan.axes;
-  const frontierOf = () => nondominated(state.plans.filter(plan => plan.axes && !plan.duplicateOf), { axesOf });
+  return seen;
+}
 
+// Children of every nondominated plan still marked expandable. Marks those
+// parents expanded. Returns null when nothing is left to expand.
+function prepareGrindPlanStep(state) {
+  const seen = grindPlanSeen(state);
   if (!state.plans.length) {
     const base = { id: 'p0', parent: null, depth: 0, plan: {}, canonical: grindPlanCanonical({}), expandable: true, expanded: false };
-    seen.set(base.canonical, base.id);
-    const stats = await evaluate([base], 0);
-    state.steps.push({ step: 0, expandedPlans: 0, children: 1, ...stats, frontier: 1 });
-    await save();
-    console.error(JSON.stringify(state.steps.at(-1)));
+    return { step: 0, expandedPlans: 0, children: [base] };
   }
+  const toExpand = grindPlanFrontier(state).filter(plan => plan.expandable && !plan.expanded);
+  if (!toExpand.length) return null;
+  const children = [];
+  for (const parent of toExpand) {
+    for (const choice of grindPlanChoices(parent.ledger, state.stepBattles)) {
+      const plan = grindPlanWithBlock(parent.plan, choice.label, choice.block);
+      if (!plan) continue;
+      const canonical = grindPlanCanonical(plan);
+      if (seen.has(canonical)) continue;
+      const id = `p${state.plans.length + children.length}`;
+      seen.set(canonical, id);
+      children.push({ id, parent: parent.id, depth: parent.depth + 1, plan, canonical, expanded: false });
+    }
+    parent.expanded = true;
+  }
+  return { step: state.steps.length, expandedPlans: toExpand.length, children };
+}
 
-  while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
-    const step = state.steps.length;
-    const toExpand = frontierOf().filter(plan => plan.expandable && !plan.expanded);
-    if (!toExpand.length) {
-      state.done = true;
-      break;
-    }
-    const children = [];
-    for (const parent of toExpand) {
-      for (const choice of grindPlanChoices(parent.ledger, stepBattles)) {
-        const plan = grindPlanWithBlock(parent.plan, choice.label, choice.block);
-        if (!plan) continue;
-        const canonical = grindPlanCanonical(plan);
-        if (seen.has(canonical)) continue;
-        const id = `p${state.plans.length + children.length}`;
-        seen.set(canonical, id);
-        children.push({
-          id,
-          parent: parent.id,
-          depth: parent.depth + 1,
-          plan,
-          canonical,
-          expanded: false,
-        });
-      }
-      parent.expanded = true;
-    }
-    const stats = await evaluate(children, step);
-    const byId = new Map(state.plans.map(plan => [plan.id, plan]));
-    for (const child of children) {
-      const plan = byId.get(child.id);
-      const parent = byId.get(plan.parent);
-      plan.expandable = Boolean(plan.axes && plan.axes.feasible !== false && (
-        plan.axes.expectedRetries < parent.axes.expectedRetries || plan.axes.levelCv < parent.axes.levelCv
-      ));
-    }
-    const nextFrontier = frontierOf();
-    state.steps.push({
-      step,
-      expandedPlans: toExpand.length,
-      children: children.length,
-      ...stats,
-      frontier: nextFrontier.length,
-      frontierExpandable: nextFrontier.filter(plan => plan.expandable && !plan.expanded).length,
-      bestRetries: Math.min(...nextFrontier.map(plan => plan.axes.expectedRetries)),
-      maxGrindOnFrontier: Math.max(...nextFrontier.map(plan => plan.axes.grindBattles)),
-    });
-    await save();
-    console.error(JSON.stringify(state.steps.at(-1)));
+function mergeGrindPlanStep(state, prepared, results, stats) {
+  const byResult = new Map(results.map(result => [result.id, result]));
+  for (const child of prepared.children) {
+    state.plans.push({ ...child, ...(byResult.get(child.id) || { error: 'missing worker result' }) });
   }
-  await save();
-  console.log(JSON.stringify({
+  const byId = new Map(state.plans.map(plan => [plan.id, plan]));
+  for (const child of prepared.children) {
+    const plan = byId.get(child.id);
+    const parent = plan.parent ? byId.get(plan.parent) : null;
+    plan.expandable = Boolean(plan.axes && plan.axes.feasible !== false && (
+      !parent ||
+      plan.axes.expectedRetries < parent.axes.expectedRetries ||
+      plan.axes.levelCv < parent.axes.levelCv
+    ));
+  }
+  const frontier = grindPlanFrontier(state);
+  state.steps.push({
+    step: prepared.step,
+    expandedPlans: prepared.expandedPlans,
+    children: prepared.children.length,
+    ...stats,
+    errors: results.filter(result => result.error).length,
+    frontier: frontier.length,
+    frontierExpandable: frontier.filter(plan => plan.expandable && !plan.expanded).length,
+    bestRetries: Math.min(...frontier.map(plan => plan.axes.expectedRetries)),
+    maxGrindOnFrontier: Math.max(...frontier.map(plan => plan.axes.grindBattles)),
+  });
+  return state.steps.at(-1);
+}
+
+function grindPlanSummary(state, extra = {}) {
+  return {
     done: Boolean(state.done),
     plansEvaluated: state.plans.length,
     duplicatePlans: state.plans.filter(plan => plan.duplicateOf).length,
     errors: state.plans.filter(plan => plan.error).length,
-    wallSecs: (Date.now() - started) / 1000,
+    ...extra,
     steps: state.steps,
-    frontier: frontierOf().map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan })),
-  }, null, 2));
+    frontier: grindPlanFrontier(state).map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan })),
+  };
+}
+
+async function readGrindPlanState(statePath, stepBattles) {
+  try {
+    return JSON.parse(await fs.readFile(statePath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return newGrindPlanState(stepBattles);
+  }
+}
+
+function requirePlannedGrind(command) {
+  if (normalizeGrindPolicy(arg('grind-policy', 'none')) !== 'planned') {
+    throw new Error(command + ' requires --grind-policy=planned');
+  }
+}
+
+async function cmdGrindPlanBuild() {
+  const statePath = String(arg('state', ''));
+  if (!statePath) throw new Error('grind-plan-build requires --state=path');
+  requirePlannedGrind('grind-plan-build');
+  const workers = Math.max(1, Math.floor(Number(arg('workers', '1'))));
+  const stepBattles = Math.max(1, Math.floor(Number(arg('step-battles', '25'))));
+  const maxSeconds = Number(arg('max-seconds', 'Infinity'));
+  const maxSteps = Number(arg('max-steps', 'Infinity'));
+  const stateDir = path.dirname(path.resolve(statePath));
+  await fs.mkdir(stateDir, { recursive: true });
+  const state = await readGrindPlanState(statePath, stepBattles);
+  const save = () => fs.writeFile(statePath, JSON.stringify(state));
+  const started = Date.now();
+  while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
+    const prepared = prepareGrindPlanStep(state);
+    if (!prepared) {
+      state.done = true;
+      break;
+    }
+    const stepStarted = Date.now();
+    const output = await runGrindPlanWorkers(prepared.children, { workers, stateDir, step: prepared.step });
+    const row = mergeGrindPlanStep(state, prepared, output.results, {
+      secs: (Date.now() - stepStarted) / 1000,
+      cacheHits: output.cacheHits,
+      cacheMisses: output.cacheMisses,
+    });
+    await save();
+    console.error(JSON.stringify(row));
+  }
+  await save();
+  console.log(JSON.stringify(grindPlanSummary(state, { wallSecs: (Date.now() - started) / 1000 }), null, 2));
+}
+
+// Actions chain, one workflow run per step:
+//   prepare: state -> pending children split into --shard-count batch files
+//   shard:   one batch -> results (local parallel workers)
+//   merge:   state + pending + results -> next state
+async function cmdGrindPlanPrepare() {
+  const statePath = String(arg('state', ''));
+  const outDir = String(arg('out-dir', ''));
+  if (!outDir) throw new Error('grind-plan-prepare requires --out-dir');
+  requirePlannedGrind('grind-plan-prepare');
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '1'))));
+  const stepBattles = Math.max(1, Math.floor(Number(arg('step-battles', '25'))));
+  const state = statePath ? await readGrindPlanState(statePath, stepBattles) : newGrindPlanState(stepBattles);
+  await fs.mkdir(outDir, { recursive: true });
+  const prepared = prepareGrindPlanStep(state);
+  if (!prepared) state.done = true;
+  const children = prepared ? prepared.children : [];
+  const size = Math.ceil(children.length / shardCount) || 0;
+  for (let index = 0; index < shardCount; index += 1) {
+    const slice = children.slice(index * size, (index + 1) * size).map(({ id, plan }) => ({ id, plan }));
+    await fs.writeFile(path.join(outDir, `batch-${index}.json`), JSON.stringify(slice));
+  }
+  await fs.writeFile(path.join(outDir, 'state.json'), JSON.stringify(state));
+  await fs.writeFile(path.join(outDir, 'pending.json'), JSON.stringify(prepared));
+  console.log(JSON.stringify({ done: Boolean(state.done), step: prepared?.step ?? null, children: children.length, shardSize: size }));
+}
+
+async function cmdGrindPlanShard() {
+  const batchIn = String(arg('batch-in', ''));
+  const batchOut = String(arg('batch-out', ''));
+  if (!batchIn || !batchOut) throw new Error('grind-plan-shard requires --batch-in and --batch-out');
+  const workers = Math.max(1, Math.floor(Number(arg('workers', '1'))));
+  const items = JSON.parse(await fs.readFile(batchIn, 'utf8'));
+  const workDir = path.join(path.dirname(path.resolve(batchOut)), 'work');
+  await fs.mkdir(workDir, { recursive: true });
+  const started = Date.now();
+  const output = items.length
+    ? await runGrindPlanWorkers(items, { workers, stateDir: workDir, step: 'shard' })
+    : { results: [], cacheHits: 0, cacheMisses: 0 };
+  await fs.writeFile(batchOut, JSON.stringify({ ...output, secs: (Date.now() - started) / 1000 }));
+  console.log(JSON.stringify({ items: items.length, secs: (Date.now() - started) / 1000, errors: output.results.filter(result => result.error).length }));
+}
+
+async function cmdGrindPlanSummary() {
+  const state = JSON.parse(await fs.readFile(String(arg('state', '')), 'utf8'));
+  grindPlanSeen(state);
+  console.log(JSON.stringify(grindPlanSummary(state), null, 2));
+}
+
+async function cmdGrindPlanMerge() {
+  const statePath = String(arg('state', ''));
+  const pendingPath = String(arg('pending', ''));
+  const statePathOut = String(arg('state-out', statePath));
+  const inputs = String(arg('inputs', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const stepSecs = Number(arg('step-secs', '0'));
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  const prepared = JSON.parse(await fs.readFile(pendingPath, 'utf8'));
+  if (!prepared) {
+    state.done = true;
+  } else {
+    const outputs = await Promise.all(inputs.map(async file => JSON.parse(await fs.readFile(file, 'utf8'))));
+    const results = outputs.flatMap(output => output.results);
+    mergeGrindPlanStep(state, prepared, results, {
+      secs: stepSecs,
+      shardSecsMax: Math.max(0, ...outputs.map(output => Number(output.secs || 0))),
+      shardSecsSum: outputs.reduce((sum, output) => sum + Number(output.secs || 0), 0),
+      cacheHits: outputs.reduce((sum, output) => sum + Number(output.cacheHits || 0), 0),
+      cacheMisses: outputs.reduce((sum, output) => sum + Number(output.cacheMisses || 0), 0),
+    });
+  }
+  await fs.writeFile(statePathOut, JSON.stringify(state));
+  const last = state.steps.at(-1) || null;
+  console.log(JSON.stringify({ done: Boolean(state.done), steps: state.steps.length, last }));
 }
 
 function parseRateTargets(value, fallback) {
@@ -18694,6 +18792,10 @@ const commands = {
   'route-exp-practical-grind': cmdRouteExpPracticalGrind,
   'grind-plan-build': cmdGrindPlanBuild,
   'grind-plan-worker': cmdGrindPlanWorker,
+  'grind-plan-prepare': cmdGrindPlanPrepare,
+  'grind-plan-shard': cmdGrindPlanShard,
+  'grind-plan-merge': cmdGrindPlanMerge,
+  'grind-plan-summary': cmdGrindPlanSummary,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,

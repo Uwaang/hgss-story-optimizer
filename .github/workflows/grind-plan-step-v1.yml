@@ -1,0 +1,109 @@
+name: grind-plan-step-v1
+
+# One step of the CHARTER.md grind plan builder: evaluate the pending children
+# of artifact gp-step-<step> in 20 shards, merge them into the state and
+# prepare the next step's children as gp-step-<step+1>.
+
+on:
+  workflow_call:
+    inputs:
+      step:
+        required: true
+        type: number
+      next_step:
+        required: true
+        type: number
+      args:
+        required: true
+        type: string
+    outputs:
+      done:
+        value: ${{ jobs.merge.outputs.done }}
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: '6'
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: gp-step-${{ inputs.step }}
+          path: hgss_story_sim/results/in
+      - name: Evaluate shard
+        run: |
+          node src/cli.mjs grind-plan-shard \
+            --batch-in=results/in/batch-${{ matrix.shard }}.json \
+            --batch-out=results/out-${{ matrix.shard }}.json \
+            --workers=4 ${{ inputs.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gp-out-${{ inputs.step }}-${{ matrix.shard }}
+          path: hgss_story_sim/results/out-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      done: ${{ steps.prepare.outputs.done }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: gp-step-${{ inputs.step }}
+          path: hgss_story_sim/results/in
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gp-out-${{ inputs.step }}-*
+          path: hgss_story_sim/results/outs
+          merge-multiple: true
+      - name: Merge and prepare the next step
+        id: prepare
+        run: |
+          INPUTS="$(find results/outs -name 'out-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs grind-plan-merge \
+            --state=results/in/state.json --pending=results/in/pending.json \
+            --inputs="$INPUTS" --state-out=results/state.json ${{ inputs.args }}
+          node src/cli.mjs grind-plan-prepare \
+            --state=results/state.json --out-dir=results/next --shard-count=20 \
+            ${{ inputs.args }} | tee results/prepare.json
+          node src/cli.mjs grind-plan-summary --state=results/next/state.json > results/next/summary.json
+          echo "done=$(jq -r .done results/prepare.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Grind plan step ${{ inputs.step }}"
+            echo '```json'
+            jq -c '.steps[-1]' results/next/summary.json
+            jq -c '{done, plansEvaluated, duplicatePlans, errors, frontier: (.frontier | length)}' results/next/summary.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gp-step-${{ inputs.next_step }}
+          path: hgss_story_sim/results/next
+          if-no-files-found: error

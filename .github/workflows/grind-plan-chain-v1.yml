@@ -1,0 +1,349 @@
+name: grind-plan-chain-v1
+
+# CHARTER.md grind plan builder for one team, run to the stop rule (no
+# nondominated plan left that improved retries or level CV over its parent)
+# or 30 steps. Step 0 is the no-grind plan. Every step leaves its state in
+# artifact gp-step-<n>; the last one holds the final state and summary.json.
+
+on:
+  push:
+    branches:
+      - exp/grind-plan-chain-v1
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: '6'
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Prepare step 0
+        run: |
+          node src/cli.mjs grind-plan-prepare --out-dir=results/next --shard-count=20             --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gp-step-0
+          path: hgss_story_sim/results/next
+          if-no-files-found: error
+
+  step0:
+    needs: init
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 0
+      next_step: 1
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step1:
+    needs: step0
+    if: needs.step0.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 1
+      next_step: 2
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step2:
+    needs: step1
+    if: needs.step1.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 2
+      next_step: 3
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step3:
+    needs: step2
+    if: needs.step2.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 3
+      next_step: 4
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step4:
+    needs: step3
+    if: needs.step3.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 4
+      next_step: 5
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step5:
+    needs: step4
+    if: needs.step4.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 5
+      next_step: 6
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step6:
+    needs: step5
+    if: needs.step5.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 6
+      next_step: 7
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step7:
+    needs: step6
+    if: needs.step6.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 7
+      next_step: 8
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step8:
+    needs: step7
+    if: needs.step7.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 8
+      next_step: 9
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step9:
+    needs: step8
+    if: needs.step8.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 9
+      next_step: 10
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step10:
+    needs: step9
+    if: needs.step9.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 10
+      next_step: 11
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step11:
+    needs: step10
+    if: needs.step10.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 11
+      next_step: 12
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step12:
+    needs: step11
+    if: needs.step11.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 12
+      next_step: 13
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step13:
+    needs: step12
+    if: needs.step12.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 13
+      next_step: 14
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step14:
+    needs: step13
+    if: needs.step13.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 14
+      next_step: 15
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step15:
+    needs: step14
+    if: needs.step14.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 15
+      next_step: 16
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step16:
+    needs: step15
+    if: needs.step15.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 16
+      next_step: 17
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step17:
+    needs: step16
+    if: needs.step16.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 17
+      next_step: 18
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step18:
+    needs: step17
+    if: needs.step17.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 18
+      next_step: 19
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step19:
+    needs: step18
+    if: needs.step18.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 19
+      next_step: 20
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step20:
+    needs: step19
+    if: needs.step19.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 20
+      next_step: 21
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step21:
+    needs: step20
+    if: needs.step20.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 21
+      next_step: 22
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step22:
+    needs: step21
+    if: needs.step21.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 22
+      next_step: 23
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step23:
+    needs: step22
+    if: needs.step22.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 23
+      next_step: 24
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step24:
+    needs: step23
+    if: needs.step23.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 24
+      next_step: 25
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step25:
+    needs: step24
+    if: needs.step24.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 25
+      next_step: 26
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step26:
+    needs: step25
+    if: needs.step25.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 26
+      next_step: 27
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step27:
+    needs: step26
+    if: needs.step26.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 27
+      next_step: 28
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step28:
+    needs: step27
+    if: needs.step27.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 28
+      next_step: 29
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step29:
+    needs: step28
+    if: needs.step28.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 29
+      next_step: 30
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
+
+  step30:
+    needs: step29
+    if: needs.step29.outputs.done != 'true'
+    uses: ./.github/workflows/grind-plan-step-v1.yml
+    with:
+      step: 30
+      next_step: 31
+      args: >-
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25
