@@ -7245,6 +7245,20 @@ async function cmdRouteExpStoryEvaluate() {
 // expanded; the rest are not (no numeric threshold).
 const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out']);
 
+// One member fighting with another holding the Exp. Share gives each half the
+// EXP (src/battle/battle_command.c), so swapping the two roles is the same
+// plan; the pair is stored with the smaller key fighting.
+function grindPlanNormalBlock(block) {
+  const holder = block.expShareHolder || null;
+  if (!holder || block.participants.length !== 1) return { ...block, participants: [...block.participants] };
+  const [fighter, holds] = [block.participants[0], holder].sort();
+  return { ...block, participants: [fighter], expShareHolder: holds };
+}
+
+function grindPlanNormal(plan) {
+  return Object.fromEntries(Object.entries(plan).map(([label, blocks]) => [label, blocks.map(grindPlanNormalBlock)]));
+}
+
 function grindPlanCanonical(plan) {
   const labels = Object.keys(plan).sort();
   return JSON.stringify(labels.map(label => [label, [...plan[label]]
@@ -7252,8 +7266,9 @@ function grindPlanCanonical(plan) {
     .sort((a, b) => (a[0] + '|' + a[1]).localeCompare(b[0] + '|' + b[1]))]));
 }
 
-function grindPlanWithBlock(plan, label, block) {
-  const blocks = (plan[label] || []).map(item => ({ ...item, participants: [...item.participants] }));
+function grindPlanWithBlock(plan, label, rawBlock) {
+  const block = grindPlanNormalBlock(rawBlock);
+  const blocks = (plan[label] || []).map(grindPlanNormalBlock);
   const holder = block.expShareHolder || null;
   // One Exp. Share exists (config/grind-access.hgss.json) and the evaluator
   // allows one holder per checkpoint.
@@ -7279,7 +7294,7 @@ function grindPlanChoices(ledger, stepBattles) {
       choices.push({ label: row.label, block: { battles: stepBattles, participants: [member] } });
       if (row.stage >= Number(GRIND_ACCESS_CONFIG.expShare.availableFromStage)) {
         for (const holder of row.joined) {
-          if (holder !== member) {
+          if (holder > member) {
             choices.push({ label: row.label, block: { battles: stepBattles, participants: [member], expShareHolder: holder } });
           }
         }
@@ -7397,7 +7412,15 @@ async function cmdGrindPlanBuild() {
   }
   const save = () => fs.writeFile(statePath, JSON.stringify(state));
   const started = Date.now();
-  const seen = new Set(state.plans.map(plan => plan.canonical));
+  // Plans saved before swap merging may hold both orders of a pair; keep the
+  // first and mark the rest as duplicates.
+  const seen = new Map();
+  for (const plan of state.plans) {
+    plan.plan = grindPlanNormal(plan.plan);
+    plan.canonical = grindPlanCanonical(plan.plan);
+    if (seen.has(plan.canonical)) plan.duplicateOf = seen.get(plan.canonical);
+    else seen.set(plan.canonical, plan.id);
+  }
   const evaluate = async (items, step) => {
     const stepStarted = Date.now();
     const output = await runGrindPlanWorkers(items, { workers, stateDir, step });
@@ -7413,11 +7436,11 @@ async function cmdGrindPlanBuild() {
     };
   };
   const axesOf = plan => plan.axes;
-  const frontierOf = () => nondominated(state.plans.filter(plan => plan.axes), { axesOf });
+  const frontierOf = () => nondominated(state.plans.filter(plan => plan.axes && !plan.duplicateOf), { axesOf });
 
   if (!state.plans.length) {
     const base = { id: 'p0', parent: null, depth: 0, plan: {}, canonical: grindPlanCanonical({}), expandable: true, expanded: false };
-    seen.add(base.canonical);
+    seen.set(base.canonical, base.id);
     const stats = await evaluate([base], 0);
     state.steps.push({ step: 0, expandedPlans: 0, children: 1, ...stats, frontier: 1 });
     await save();
@@ -7438,9 +7461,10 @@ async function cmdGrindPlanBuild() {
         if (!plan) continue;
         const canonical = grindPlanCanonical(plan);
         if (seen.has(canonical)) continue;
-        seen.add(canonical);
+        const id = `p${state.plans.length + children.length}`;
+        seen.set(canonical, id);
         children.push({
-          id: `p${state.plans.length + children.length}`,
+          id,
           parent: parent.id,
           depth: parent.depth + 1,
           plan,
@@ -7477,6 +7501,7 @@ async function cmdGrindPlanBuild() {
   console.log(JSON.stringify({
     done: Boolean(state.done),
     plansEvaluated: state.plans.length,
+    duplicatePlans: state.plans.filter(plan => plan.duplicateOf).length,
     errors: state.plans.filter(plan => plan.error).length,
     wallSecs: (Date.now() - started) / 1000,
     steps: state.steps,
