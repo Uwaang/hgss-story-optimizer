@@ -7454,7 +7454,7 @@ function prepareGrindPlanStep(state) {
     return { step: 0, expandedPlans: 0, children: [base] };
   }
   const toExpand = grindPlanMarkTies(grindPlanFrontier(state)).filter(plan => plan.expandable && !plan.expanded);
-  if (state.recheckRuns && grindPlanFrontier(state).some(plan => !plan.rechecked)) {
+  if (state.recheckRuns && toExpand.some(plan => !plan.rechecked)) {
     throw new Error('grind plan candidates must be rechecked before expansion (grind-plan-recheck)');
   }
   if (!toExpand.length) return null;
@@ -7556,49 +7556,49 @@ function requirePlannedGrind(command) {
   }
 }
 
-// CHARTER.md 2026-10-19: every plan that enters the nondominated set is
-// measured again at --recheck-runs (e.g. 40: its first runs are the same
-// seeds as the screening runs, so this adds runs) and its axes become the
-// rechecked ones. Retries depend on the sample size ((wins+1)/(runs+2) makes a
-// 0-win wall cost 9 retries at 8 runs and 41 at 40), so plans in the set are
-// only compared at the same size; expansion compares with the parent, which
-// was rechecked the same way. Rechecking changes the set, so it repeats until
-// every plan in it has been rechecked.
+// CHARTER.md 2026-10-19 (rule 1, A): the nondominated set is always compared
+// on the screening runs, so every plan is measured with the same sample size
+// (retries depend on it: a 0-win wall costs 9 at 8 runs, 41 at 40). Only a
+// plan about to be expanded is measured again at --recheck-runs (e.g. 40; its
+// first runs share seeds with the screening runs, so this adds runs), and it
+// is expanded only if those axes beat its parent's, which was rechecked the
+// same way. Rechecking does not change the set, so one round covers it.
+function grindPlanParentAxes(plan) {
+  return plan.recheckAxes || plan.axes;
+}
+
 async function recheckGrindPlans(state, recheckRuns, evaluate) {
   state.recheckRuns = recheckRuns;
   const started = Date.now();
-  let rounds = 0;
-  let rechecked = 0;
+  const candidates = grindPlanMarkTies(grindPlanFrontier(state))
+    .filter(plan => plan.expandable && !plan.expanded && !plan.rechecked);
   let errors = 0;
-  while (true) {
-    const candidates = grindPlanFrontier(state).filter(plan => !plan.rechecked);
-    if (!candidates.length) break;
-    rounds += 1;
-    const output = await evaluate(candidates.map(plan => ({ id: plan.id, plan: plan.plan, runs: recheckRuns })), rounds);
+  let passed = 0;
+  if (candidates.length) {
+    const output = await evaluate(candidates.map(plan => ({ id: plan.id, plan: plan.plan, runs: recheckRuns })), 1);
     const byResult = new Map(output.results.map(result => [result.id, result]));
     const byId = new Map(state.plans.map(plan => [plan.id, plan]));
     for (const plan of candidates) {
       const result = byResult.get(plan.id);
       plan.rechecked = true;
-      rechecked += 1;
       if (!result?.axes) {
         plan.recheckError = result?.error || 'missing recheck result';
         plan.expandable = false;
         errors += 1;
         continue;
       }
-      plan.screenAxes = plan.axes;
-      plan.axes = result.axes;
-      plan.ledger = result.ledger;
+      plan.recheckAxes = result.axes;
       const parent = plan.parent ? byId.get(plan.parent) : null;
-      plan.expandable = Boolean(plan.axes.feasible !== false && (
-        !parent ||
-        plan.axes.expectedRetries < parent.axes.expectedRetries ||
-        plan.axes.levelCv < parent.axes.levelCv
+      const before = parent ? grindPlanParentAxes(parent) : null;
+      plan.expandable = Boolean(result.axes.feasible !== false && (
+        !before ||
+        result.axes.expectedRetries < before.expectedRetries ||
+        result.axes.levelCv < before.levelCv
       ));
+      if (plan.expandable) passed += 1;
     }
   }
-  const row = { step: state.steps.length, rounds, rechecked, errors, secs: (Date.now() - started) / 1000 };
+  const row = { step: state.steps.length, rechecked: candidates.length, passed, errors, secs: (Date.now() - started) / 1000 };
   state.rechecks = [...(state.rechecks || []), row];
   return row;
 }
