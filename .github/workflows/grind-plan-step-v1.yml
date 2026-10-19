@@ -71,7 +71,7 @@ jobs:
   merge:
     needs: shard
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     outputs:
       done: ${{ steps.prepare.outputs.done }}
       shards: ${{ steps.prepare.outputs.shards }}
@@ -99,6 +99,9 @@ jobs:
           node src/cli.mjs grind-plan-merge \
             --state=results/in/state.json --pending=results/in/pending.json \
             --inputs="$INPUTS" --state-out=results/state.json ${{ inputs.args }}
+          if echo "${{ inputs.args }}" | grep -q -- '--recheck-runs='; then
+            node src/cli.mjs grind-plan-recheck               --state=results/state.json --state-out=results/state.json               --workers=4 ${{ inputs.args }} | tee results/recheck.json
+          fi
           node src/cli.mjs grind-plan-prepare \
             --state=results/state.json --out-dir=results/next             --shard-count=20 --target-shard-children=600 \
             ${{ inputs.args }} | tee results/prepare.json
@@ -109,6 +112,7 @@ jobs:
             echo "### Grind plan step ${{ inputs.step }}"
             echo '```json'
             jq -c '.steps[-1]' results/next/summary.json
+            jq -c '.rechecks[-1] // empty' results/next/summary.json
             jq -c '{done, plansEvaluated, duplicatePlans, errors, frontier: (.frontier | length)}' results/next/summary.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

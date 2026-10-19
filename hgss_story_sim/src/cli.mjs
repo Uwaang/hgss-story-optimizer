@@ -7244,7 +7244,7 @@ async function cmdRouteExpStoryEvaluate() {
 // party-wide block (see GRIND_PLAN_PARTY_BLOCK_STEPS). Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7334,7 +7334,7 @@ async function cmdGrindPlanWorker() {
       const evaluation = await evaluateCandidatesWithMoveAccess(
         setup.team,
         setup.story.bosses,
-        setup.runs,
+        Number(item.runs) || setup.runs,
         setup.moveAccess,
         { ...setup.expContext, grindPlanBattles: item.plan },
         setup.grindPolicy,
@@ -7369,7 +7369,7 @@ async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
     if (!slice.length) continue;
     const batchIn = path.join(stateDir, `step-${step}-w${index}-in.json`);
     const batchOut = path.join(stateDir, `step-${step}-w${index}-out.json`);
-    await fs.writeFile(batchIn, JSON.stringify(slice.map(({ id, plan }) => ({ id, plan }))));
+    await fs.writeFile(batchIn, JSON.stringify(slice.map(({ id, plan, runs }) => ({ id, plan, ...(runs ? { runs } : {}) }))));
     jobs.push(new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [
         fileURLToPath(import.meta.url),
@@ -7432,10 +7432,15 @@ function grindPlanSeen(state) {
 function grindPlanMarkTies(frontier) {
   const representative = new Map();
   const order = plan => Number(String(plan.id).slice(1));
+  // Recomputed every time: rechecking changes axes, so old ties may split.
   for (const plan of [...frontier].sort((a, b) => order(a) - order(b))) {
     const key = JSON.stringify([plan.axes.grindBattles, plan.axes.expectedRetries, plan.axes.levelCv]);
-    if (!representative.has(key)) representative.set(key, plan.id);
-    else if (!plan.tieOf) plan.tieOf = representative.get(key);
+    if (!representative.has(key)) {
+      representative.set(key, plan.id);
+      delete plan.tieOf;
+    } else {
+      plan.tieOf = representative.get(key);
+    }
   }
   return frontier.filter(plan => !plan.tieOf);
 }
@@ -7449,6 +7454,9 @@ function prepareGrindPlanStep(state) {
     return { step: 0, expandedPlans: 0, children: [base] };
   }
   const toExpand = grindPlanMarkTies(grindPlanFrontier(state)).filter(plan => plan.expandable && !plan.expanded);
+  if (state.recheckRuns && grindPlanFrontier(state).some(plan => !plan.rechecked)) {
+    throw new Error('grind plan candidates must be rechecked before expansion (grind-plan-recheck)');
+  }
   if (!toExpand.length) return null;
   const children = [];
   for (const parent of toExpand) {
@@ -7515,6 +7523,7 @@ function grindPlanSummary(state, extra = {}) {
     errors: state.plans.filter(plan => plan.error).length,
     ...extra,
     steps: state.steps,
+    rechecks: state.rechecks || [],
     frontier: grindPlanFrontier(state).map(plan => ({ id: plan.id, depth: plan.depth, axes: plan.axes, plan: plan.plan, ...(plan.tieOf ? { tieOf: plan.tieOf } : {}) })),
   };
 }
@@ -7547,6 +7556,74 @@ function requirePlannedGrind(command) {
   }
 }
 
+// CHARTER.md 2026-10-19: every plan that enters the nondominated set is
+// measured again at --recheck-runs (e.g. 40: its first runs are the same
+// seeds as the screening runs, so this adds runs) and its axes become the
+// rechecked ones. Retries depend on the sample size ((wins+1)/(runs+2) makes a
+// 0-win wall cost 9 retries at 8 runs and 41 at 40), so plans in the set are
+// only compared at the same size; expansion compares with the parent, which
+// was rechecked the same way. Rechecking changes the set, so it repeats until
+// every plan in it has been rechecked.
+async function recheckGrindPlans(state, recheckRuns, evaluate) {
+  state.recheckRuns = recheckRuns;
+  const started = Date.now();
+  let rounds = 0;
+  let rechecked = 0;
+  let errors = 0;
+  while (true) {
+    const candidates = grindPlanFrontier(state).filter(plan => !plan.rechecked);
+    if (!candidates.length) break;
+    rounds += 1;
+    const output = await evaluate(candidates.map(plan => ({ id: plan.id, plan: plan.plan, runs: recheckRuns })), rounds);
+    const byResult = new Map(output.results.map(result => [result.id, result]));
+    const byId = new Map(state.plans.map(plan => [plan.id, plan]));
+    for (const plan of candidates) {
+      const result = byResult.get(plan.id);
+      plan.rechecked = true;
+      rechecked += 1;
+      if (!result?.axes) {
+        plan.recheckError = result?.error || 'missing recheck result';
+        plan.expandable = false;
+        errors += 1;
+        continue;
+      }
+      plan.screenAxes = plan.axes;
+      plan.axes = result.axes;
+      plan.ledger = result.ledger;
+      const parent = plan.parent ? byId.get(plan.parent) : null;
+      plan.expandable = Boolean(plan.axes.feasible !== false && (
+        !parent ||
+        plan.axes.expectedRetries < parent.axes.expectedRetries ||
+        plan.axes.levelCv < parent.axes.levelCv
+      ));
+    }
+  }
+  const row = { step: state.steps.length, rounds, rechecked, errors, secs: (Date.now() - started) / 1000 };
+  state.rechecks = [...(state.rechecks || []), row];
+  return row;
+}
+
+function grindPlanRecheckRuns() {
+  const value = Math.floor(Number(arg('recheck-runs', '0')));
+  return value > 0 ? value : 0;
+}
+
+async function cmdGrindPlanRecheck() {
+  const statePath = String(arg('state', ''));
+  const statePathOut = String(arg('state-out', statePath));
+  const recheckRuns = grindPlanRecheckRuns();
+  if (!recheckRuns) throw new Error('grind-plan-recheck requires --recheck-runs');
+  const workers = Math.max(1, Math.floor(Number(arg('workers', '1'))));
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  grindPlanSeen(state);
+  const workDir = path.join(path.dirname(path.resolve(statePathOut)), 'recheck-work');
+  await fs.mkdir(workDir, { recursive: true });
+  const row = await recheckGrindPlans(state, recheckRuns, (items, round) =>
+    runGrindPlanWorkers(items, { workers, stateDir: workDir, step: `recheck-${round}` }));
+  await fs.writeFile(statePathOut, serializeGrindPlanState(state));
+  console.log(JSON.stringify(row));
+}
+
 async function cmdGrindPlanBuild() {
   const statePath = String(arg('state', ''));
   if (!statePath) throw new Error('grind-plan-build requires --state=path');
@@ -7560,7 +7637,13 @@ async function cmdGrindPlanBuild() {
   const state = await readGrindPlanState(statePath, stepBattles);
   const save = () => fs.writeFile(statePath, serializeGrindPlanState(state));
   const started = Date.now();
+  const recheckRuns = grindPlanRecheckRuns();
   while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
+    if (recheckRuns && state.plans.length) {
+      const recheck = await recheckGrindPlans(state, recheckRuns, (items, round) =>
+        runGrindPlanWorkers(items, { workers, stateDir, step: `recheck-${state.steps.length}-${round}` }));
+      console.error(JSON.stringify({ recheck }));
+    }
     const prepared = prepareGrindPlanStep(state);
     if (!prepared) {
       state.done = true;
@@ -7602,6 +7685,7 @@ async function cmdGrindPlanPrepare() {
     const parents = new Set((pending?.children || []).map(child => child.parent).filter(Boolean));
     for (const plan of state.plans) if (parents.has(plan.id)) plan.expanded = false;
   }
+  if (grindPlanRecheckRuns()) state.recheckRuns = grindPlanRecheckRuns();
   await fs.mkdir(outDir, { recursive: true });
   const prepared = prepareGrindPlanStep(state);
   if (!prepared) state.done = true;
@@ -18856,6 +18940,7 @@ const commands = {
   'grind-plan-shard': cmdGrindPlanShard,
   'grind-plan-merge': cmdGrindPlanMerge,
   'grind-plan-summary': cmdGrindPlanSummary,
+  'grind-plan-recheck': cmdGrindPlanRecheck,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
