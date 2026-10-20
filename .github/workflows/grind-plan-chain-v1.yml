@@ -25,7 +25,8 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
   HGSS_FETCH_ATTEMPTS: '6'
   NODE_OPTIONS: --max-old-space-size=12288
-  # Fresh run from step 0 with the 40-run recheck (CHARTER.md 2026-10-19).
+  # Fresh run from step 0 with the 40-run recheck (CHARTER.md 2026-10-19) and
+  # resolution boxes on the nondominated set (2026-10-20).
   RESUME_RUN_ID: ''
   RESUME_ARTIFACT: ''
   RESUME_MERGE_STEP: ''
@@ -66,14 +67,14 @@ jobs:
         run: |
           if [ -n "$RESUME_MERGE_STEP" ]; then
             INPUTS="$(find results/resume-outs -name 'out-*.json' -type f | sort | paste -sd, -)"
-            node src/cli.mjs grind-plan-merge               --state=results/resume/state.json --pending=results/resume/pending.json               --inputs="$INPUTS" --state-out=results/resume-merged.json               --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+            node src/cli.mjs grind-plan-merge               --state=results/resume/state.json --pending=results/resume/pending.json               --inputs="$INPUTS" --state-out=results/resume-merged.json               --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
             RESUME="--state=results/resume-merged.json"
           elif [ -n "$RESUME_RUN_ID" ]; then
             RESUME="--state=results/resume/state.json --undo-pending=results/resume/pending.json"
           else
             RESUME=""
           fi
-          node src/cli.mjs grind-plan-prepare $RESUME --out-dir=results/next             --shard-count=20 --target-shard-children=600             --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 | tee results/prepare.json
+          node src/cli.mjs grind-plan-prepare $RESUME --out-dir=results/next             --shard-count=20 --target-shard-children=600             --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01 | tee results/prepare.json
           echo "shards=$(jq -c .shards results/prepare.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
@@ -89,7 +90,7 @@ jobs:
       next_step: 1
       shards: ${{ needs.init.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step1:
     needs: step0
@@ -100,7 +101,7 @@ jobs:
       next_step: 2
       shards: ${{ needs.step0.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step2:
     needs: step1
@@ -111,7 +112,7 @@ jobs:
       next_step: 3
       shards: ${{ needs.step1.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step3:
     needs: step2
@@ -122,7 +123,7 @@ jobs:
       next_step: 4
       shards: ${{ needs.step2.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step4:
     needs: step3
@@ -133,7 +134,7 @@ jobs:
       next_step: 5
       shards: ${{ needs.step3.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step5:
     needs: step4
@@ -144,7 +145,7 @@ jobs:
       next_step: 6
       shards: ${{ needs.step4.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step6:
     needs: step5
@@ -155,7 +156,7 @@ jobs:
       next_step: 7
       shards: ${{ needs.step5.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step7:
     needs: step6
@@ -166,7 +167,7 @@ jobs:
       next_step: 8
       shards: ${{ needs.step6.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step8:
     needs: step7
@@ -177,7 +178,7 @@ jobs:
       next_step: 9
       shards: ${{ needs.step7.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step9:
     needs: step8
@@ -188,7 +189,7 @@ jobs:
       next_step: 10
       shards: ${{ needs.step8.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step10:
     needs: step9
@@ -199,7 +200,7 @@ jobs:
       next_step: 11
       shards: ${{ needs.step9.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step11:
     needs: step10
@@ -210,7 +211,7 @@ jobs:
       next_step: 12
       shards: ${{ needs.step10.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step12:
     needs: step11
@@ -221,7 +222,7 @@ jobs:
       next_step: 13
       shards: ${{ needs.step11.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step13:
     needs: step12
@@ -232,7 +233,7 @@ jobs:
       next_step: 14
       shards: ${{ needs.step12.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step14:
     needs: step13
@@ -243,7 +244,7 @@ jobs:
       next_step: 15
       shards: ${{ needs.step13.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step15:
     needs: step14
@@ -254,7 +255,7 @@ jobs:
       next_step: 16
       shards: ${{ needs.step14.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step16:
     needs: step15
@@ -265,7 +266,7 @@ jobs:
       next_step: 17
       shards: ${{ needs.step15.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step17:
     needs: step16
@@ -276,7 +277,7 @@ jobs:
       next_step: 18
       shards: ${{ needs.step16.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step18:
     needs: step17
@@ -287,7 +288,7 @@ jobs:
       next_step: 19
       shards: ${{ needs.step17.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step19:
     needs: step18
@@ -298,7 +299,7 @@ jobs:
       next_step: 20
       shards: ${{ needs.step18.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step20:
     needs: step19
@@ -309,7 +310,7 @@ jobs:
       next_step: 21
       shards: ${{ needs.step19.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step21:
     needs: step20
@@ -320,7 +321,7 @@ jobs:
       next_step: 22
       shards: ${{ needs.step20.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step22:
     needs: step21
@@ -331,7 +332,7 @@ jobs:
       next_step: 23
       shards: ${{ needs.step21.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step23:
     needs: step22
@@ -342,7 +343,7 @@ jobs:
       next_step: 24
       shards: ${{ needs.step22.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step24:
     needs: step23
@@ -353,7 +354,7 @@ jobs:
       next_step: 25
       shards: ${{ needs.step23.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step25:
     needs: step24
@@ -364,7 +365,7 @@ jobs:
       next_step: 26
       shards: ${{ needs.step24.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step26:
     needs: step25
@@ -375,7 +376,7 @@ jobs:
       next_step: 27
       shards: ${{ needs.step25.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step27:
     needs: step26
@@ -386,7 +387,7 @@ jobs:
       next_step: 28
       shards: ${{ needs.step26.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step28:
     needs: step27
@@ -397,7 +398,7 @@ jobs:
       next_step: 29
       shards: ${{ needs.step27.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step29:
     needs: step28
@@ -408,7 +409,7 @@ jobs:
       next_step: 30
       shards: ${{ needs.step28.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01
 
   step30:
     needs: step29
@@ -419,4 +420,4 @@ jobs:
       next_step: 31
       shards: ${{ needs.step29.outputs.shards }}
       args: >-
-        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40
+        --route-profile=complete --team=Cyndaquil,Mareep,Geodude,Zubat,Lapras,Wooper --runs=8 --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true --hm-policy=required --grind-policy=planned --step-battles=25 --recheck-runs=40 --box-retries-ratio=0.1 --box-cv=0.01

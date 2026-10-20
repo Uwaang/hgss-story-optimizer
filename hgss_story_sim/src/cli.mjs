@@ -7244,7 +7244,7 @@ async function cmdRouteExpStoryEvaluate() {
 // party-wide block (see GRIND_PLAN_PARTY_BLOCK_STEPS). Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['box-retries-ratio', 'box-cv', 'recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7403,10 +7403,33 @@ async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
 
 // Builder state shared by the local loop (grind-plan-build) and the Actions
 // chain (grind-plan-prepare / grind-plan-shard / grind-plan-merge).
-const grindPlanAxesOf = plan => plan.axes;
+// CHARTER.md 2026-10-20: the nondominated set is compared on measurement
+// resolution boxes (state.box): retries on a log scale of ratio
+// box.retriesRatio, level CV in steps of box.cv; grind battles already move
+// in --step-battles units. Plans in the same box count as one (the first id
+// is expanded, the rest are listed with tieOf). Without state.box the exact
+// values are used.
+function grindPlanBoxAxes(axes, box) {
+  if (!box) return axes;
+  return {
+    feasible: axes.feasible,
+    grindBattles: axes.grindBattles,
+    expectedRetries: Math.floor(Math.log1p(Math.max(0, axes.expectedRetries)) / Math.log1p(box.retriesRatio)),
+    levelCv: Math.floor(axes.levelCv / box.cv),
+  };
+}
 
 function grindPlanFrontier(state) {
-  return nondominated(state.plans.filter(plan => plan.axes && !plan.duplicateOf), { axesOf: grindPlanAxesOf });
+  const box = state.box || null;
+  return nondominated(state.plans.filter(plan => plan.axes && !plan.duplicateOf), {
+    axesOf: plan => grindPlanBoxAxes(plan.axes, box),
+  }).map(plan => Object.assign(plan, { _box: box }));
+}
+
+function grindPlanBoxFromArgs() {
+  const retriesRatio = Number(arg('box-retries-ratio', '0'));
+  const cv = Number(arg('box-cv', '0'));
+  return retriesRatio > 0 && cv > 0 ? { retriesRatio, cv } : null;
 }
 
 function newGrindPlanState(stepBattles) {
@@ -7434,7 +7457,8 @@ function grindPlanMarkTies(frontier) {
   const order = plan => Number(String(plan.id).slice(1));
   // Recomputed every time: rechecking changes axes, so old ties may split.
   for (const plan of [...frontier].sort((a, b) => order(a) - order(b))) {
-    const key = JSON.stringify([plan.axes.grindBattles, plan.axes.expectedRetries, plan.axes.levelCv]);
+    const boxed = grindPlanBoxAxes(plan.axes, plan._box || null);
+    const key = JSON.stringify([boxed.grindBattles, boxed.expectedRetries, boxed.levelCv]);
     if (!representative.has(key)) {
       representative.set(key, plan.id);
       delete plan.tieOf;
@@ -7537,7 +7561,7 @@ function serializeGrindPlanState(state) {
   const keep = new Set(grindPlanFrontier(state).map(plan => plan.id));
   return JSON.stringify({
     ...state,
-    plans: state.plans.map(({ canonical, ledger, ...plan }) => (keep.has(plan.id) ? { ...plan, ledger } : plan)),
+    plans: state.plans.map(({ canonical, ledger, _box, ...plan }) => (keep.has(plan.id) ? { ...plan, ledger } : plan)),
   });
 }
 
@@ -7638,6 +7662,7 @@ async function cmdGrindPlanBuild() {
   const save = () => fs.writeFile(statePath, serializeGrindPlanState(state));
   const started = Date.now();
   const recheckRuns = grindPlanRecheckRuns();
+  if (grindPlanBoxFromArgs()) state.box = grindPlanBoxFromArgs();
   while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
     if (recheckRuns && state.plans.length) {
       const recheck = await recheckGrindPlans(state, recheckRuns, (items, round) =>
@@ -7686,6 +7711,7 @@ async function cmdGrindPlanPrepare() {
     for (const plan of state.plans) if (parents.has(plan.id)) plan.expanded = false;
   }
   if (grindPlanRecheckRuns()) state.recheckRuns = grindPlanRecheckRuns();
+  if (grindPlanBoxFromArgs()) state.box = grindPlanBoxFromArgs();
   await fs.mkdir(outDir, { recursive: true });
   const prepared = prepareGrindPlanStep(state);
   if (!prepared) state.done = true;
