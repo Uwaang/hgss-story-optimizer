@@ -7244,7 +7244,7 @@ async function cmdRouteExpStoryEvaluate() {
 // party-wide block (see GRIND_PLAN_PARTY_BLOCK_STEPS). Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['box-retries-ratio', 'box-cv', 'recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['choice-set', 'party-steps', 'box-retries-ratio', 'box-cv', 'recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7290,13 +7290,17 @@ function grindPlanWithBlock(plan, label, rawBlock) {
 // wall (CHARTER.md, 2026-10-19). Individual blocks stay one step.
 const GRIND_PLAN_PARTY_BLOCK_STEPS = [1, 2, 4, 8, 16];
 
-function grindPlanChoices(ledger, stepBattles) {
+// choiceSet (CHARTER.md 2026-11-01 funnel): 'full' adds every block above;
+// 'party' only the party-wide blocks, in partySteps multiples of the step.
+function grindPlanChoices(ledger, stepBattles, choiceSet = null) {
   const choices = [];
+  const partyOnly = choiceSet?.mode === 'party';
+  const partySteps = choiceSet?.partySteps?.length ? choiceSet.partySteps : GRIND_PLAN_PARTY_BLOCK_STEPS;
   ledger.forEach((row, index) => {
     const previous = ledger[index - 1];
     if (previous && E4_HEAL_BEFORE_NEXT.has(String(previous.label))) return;
     if (!(row.bestWildExp > 0)) return;
-    for (const member of row.joined) {
+    for (const member of partyOnly ? [] : row.joined) {
       choices.push({ label: row.label, block: { battles: stepBattles, participants: [member] } });
       if (row.stage >= Number(GRIND_ACCESS_CONFIG.expShare.availableFromStage)) {
         for (const holder of row.joined) {
@@ -7306,7 +7310,7 @@ function grindPlanChoices(ledger, stepBattles) {
         }
       }
     }
-    for (const steps of GRIND_PLAN_PARTY_BLOCK_STEPS) {
+    for (const steps of partySteps) {
       choices.push({ label: row.label, block: { battles: steps * stepBattles, participants: [...row.joined] } });
     }
   });
@@ -7426,6 +7430,14 @@ function grindPlanFrontier(state) {
   }).map(plan => Object.assign(plan, { _box: box }));
 }
 
+function grindPlanChoiceSetFromArgs() {
+  const mode = String(arg('choice-set', '')).toLowerCase();
+  if (!mode) return null;
+  if (!['full', 'party'].includes(mode)) throw new Error('--choice-set must be full or party');
+  const partySteps = String(arg('party-steps', '')).split(',').map(Number).filter(value => value > 0);
+  return { mode, partySteps };
+}
+
 function grindPlanBoxFromArgs() {
   const retriesRatio = Number(arg('box-retries-ratio', '0'));
   const cv = Number(arg('box-cv', '0'));
@@ -7484,7 +7496,7 @@ function prepareGrindPlanStep(state) {
   if (!toExpand.length) return null;
   const children = [];
   for (const parent of toExpand) {
-    for (const choice of grindPlanChoices(parent.ledger, state.stepBattles)) {
+    for (const choice of grindPlanChoices(parent.ledger, state.stepBattles, state.choiceSet)) {
       const plan = grindPlanWithBlock(parent.plan, choice.label, choice.block);
       if (!plan) continue;
       const canonical = grindPlanCanonical(plan);
@@ -7663,6 +7675,7 @@ async function cmdGrindPlanBuild() {
   const started = Date.now();
   const recheckRuns = grindPlanRecheckRuns();
   if (grindPlanBoxFromArgs()) state.box = grindPlanBoxFromArgs();
+  if (grindPlanChoiceSetFromArgs()) state.choiceSet = grindPlanChoiceSetFromArgs();
   while (state.steps.length <= maxSteps && (Date.now() - started) / 1000 < maxSeconds) {
     if (recheckRuns && state.plans.length) {
       const recheck = await recheckGrindPlans(state, recheckRuns, (items, round) =>
@@ -7712,6 +7725,7 @@ async function cmdGrindPlanPrepare() {
   }
   if (grindPlanRecheckRuns()) state.recheckRuns = grindPlanRecheckRuns();
   if (grindPlanBoxFromArgs()) state.box = grindPlanBoxFromArgs();
+  if (grindPlanChoiceSetFromArgs()) state.choiceSet = grindPlanChoiceSetFromArgs();
   await fs.mkdir(outDir, { recursive: true });
   const prepared = prepareGrindPlanStep(state);
   if (!prepared) state.done = true;
