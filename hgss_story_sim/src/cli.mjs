@@ -7364,10 +7364,10 @@ async function cmdGrindPlanWorker() {
 
 // CHARTER.md 2026-11-07: cheap team measurement for team generation. Every
 // checkpoint that allows a grind block gets the same party-wide block, at each
-// of --uniform-battles (default 0,100,400); one plan per amount.
+// of --uniform-battles (default 25,50,100,200); one plan per amount.
 async function cmdGrindUniformEvaluate() {
   const setup = await loadRouteExpEvaluationSetup();
-  const amounts = String(arg('uniform-battles', '0,100,400')).split(',').map(Number).filter(value => value >= 0);
+  const amounts = String(arg('uniform-battles', '25,50,100,200')).split(',').map(Number).filter(value => value >= 0);
   const evaluate = plan => evaluateCandidatesWithMoveAccess(
     setup.team,
     setup.story.bosses,
