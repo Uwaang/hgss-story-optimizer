@@ -1544,6 +1544,9 @@ async function cmdValidate() {
       version,
       candidateCount: pool.candidates.length,
       valid: pool.candidates.length >= 6,
+      ...(arg('list', 'false') === 'true'
+        ? { candidates: (await loadCanonicalPool(version, story, String(arg('evolution-policy', 'trade-aware')).toLowerCase())).candidates.map(candidate => ({ key: candidateIdentity(candidate), species: candidate.species, exclusiveGroup: candidate.exclusiveGroup || null })) }
+        : {}),
     }, null, 2));
     return;
   }
@@ -7357,6 +7360,44 @@ async function cmdGrindPlanWorker() {
   }
   await flushBattleCache();
   await fs.writeFile(String(arg('batch-out', '')), JSON.stringify({ results, battleCache: battleCacheStats() }));
+}
+
+// CHARTER.md 2026-11-07: cheap team measurement for team generation. Every
+// checkpoint that allows a grind block gets the same party-wide block, at each
+// of --uniform-battles (default 0,100,400); one plan per amount.
+async function cmdGrindUniformEvaluate() {
+  const setup = await loadRouteExpEvaluationSetup();
+  const amounts = String(arg('uniform-battles', '0,100,400')).split(',').map(Number).filter(value => value >= 0);
+  const evaluate = plan => evaluateCandidatesWithMoveAccess(
+    setup.team,
+    setup.story.bosses,
+    setup.runs,
+    setup.moveAccess,
+    { ...setup.expContext, grindPlanBattles: plan },
+    setup.grindPolicy,
+    routeExpEvaluationOptions(setup),
+  );
+  const started = Date.now();
+  const base = await evaluate({});
+  const labels = grindPlanChoices(grindPlanLedger(base), 1, { mode: 'party', partySteps: [1] });
+  const plans = [];
+  for (const battles of amounts) {
+    const evaluation = battles > 0
+      ? await evaluate(Object.fromEntries(labels.map(({ label, block }) => [label, [{ battles, participants: block.participants }]])))
+      : base;
+    const axes = evaluation.comparisonAxes;
+    plans.push({
+      uniformBattles: battles,
+      axes: { feasible: axes.feasible, grindBattles: axes.grindBattles, expectedRetries: axes.expectedRetries, levelCv: axes.levelCv },
+    });
+  }
+  await flushBattleCache();
+  console.log(JSON.stringify({
+    team: setup.team.map(member => member.key || member.species || member.name),
+    checkpoints: labels.length,
+    plans,
+    secs: (Date.now() - started) / 1000,
+  }));
 }
 
 async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
@@ -18981,6 +19022,7 @@ const commands = {
   'grind-plan-merge': cmdGrindPlanMerge,
   'grind-plan-summary': cmdGrindPlanSummary,
   'grind-plan-recheck': cmdGrindPlanRecheck,
+  'grind-uniform-evaluate': cmdGrindUniformEvaluate,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
