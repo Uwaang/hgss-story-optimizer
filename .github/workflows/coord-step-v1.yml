@@ -1,0 +1,117 @@
+name: coord-step-v1
+
+# One step of the CHARTER.md coordinate search (2026-11-07): measure every
+# team the active starts need for their current slot (artifact
+# coord-step-<step>), merge the results, move the starts and prepare the next
+# slot as coord-step-<step+1>.
+
+on:
+  workflow_call:
+    inputs:
+      step:
+        required: true
+        type: number
+      next_step:
+        required: true
+        type: number
+      shards:
+        description: JSON array of shard indices from the previous prepare
+        required: true
+        type: string
+      args:
+        required: true
+        type: string
+    outputs:
+      done:
+        value: ${{ jobs.merge.outputs.done }}
+      shards:
+        value: ${{ jobs.merge.outputs.shards }}
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: '6'
+  NODE_OPTIONS: --max-old-space-size=12288
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ${{ fromJSON(inputs.shards) }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: coord-step-${{ inputs.step }}
+          path: hgss_story_sim/results/in
+      - name: Measure shard
+        run: |
+          node src/cli.mjs coord-shard \
+            --batch-in=results/in/batch-${{ matrix.shard }}.json \
+            --batch-out=results/out-${{ matrix.shard }}.json \
+            --workers=4 ${{ inputs.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coord-out-${{ inputs.step }}-${{ matrix.shard }}
+          path: hgss_story_sim/results/out-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  merge:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      done: ${{ steps.prepare.outputs.done }}
+      shards: ${{ steps.prepare.outputs.shards }}
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: coord-step-${{ inputs.step }}
+          path: hgss_story_sim/results/in
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coord-out-${{ inputs.step }}-*
+          path: hgss_story_sim/results/outs
+          merge-multiple: true
+      - name: Merge and prepare the next step
+        id: prepare
+        run: |
+          INPUTS="$(find results/outs -name 'out-*.json' -type f | sort | paste -sd, -)"
+          node src/cli.mjs coord-merge --state=results/in/state.json \
+            --inputs="$INPUTS" --state-out=results/state.json ${{ inputs.args }} > results/merge.json
+          node src/cli.mjs coord-prepare --state=results/state.json --out-dir=results/next \
+            --shard-count=20 ${{ inputs.args }} | tee results/prepare.json
+          node src/cli.mjs coord-summary --state=results/next/state.json > results/next/summary.json
+          echo "done=$(jq -r .done results/prepare.json)" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq -c .shards results/prepare.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Coordinate search step ${{ inputs.step }}"
+            echo '```json'
+            jq -c '{steps, measured, errors, nondominated: (.nondominatedTeams | length)}' results/next/summary.json
+            jq -c '.starts[] | [.id, .done, .pass, .slot, .moves]' results/next/summary.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coord-step-${{ inputs.next_step }}
+          path: hgss_story_sim/results/next
+          if-no-files-found: error

@@ -7,7 +7,7 @@ import { extractBosses, loadPretTrainerData } from './hgss-data.mjs';
 import { applyPlayerRouteBuild, routeMovesetScore, battleCacheStats, battleMovePowerForState, candidateBossUtility, candidateMovePool, candidateMoveUtility, enumeratePlayerRouteMovesetsV2, flushBattleCache, hgssTrainerToShowdownTeam, materializeCandidateTeam, optimizePlayerHeldItemForBoss, optimizePlayerRouteBuild, optimizePlayerRouteMoves, planPurchasableMachines, planSingleUseMachines, runBattle, simulateMatchup } from './battle.mjs';
 import { chooseHgssMoveIndex, chooseHgssPostKoSwitch, chooseHgssTrainerItem, decodeHgssAiFlags, trainerAiProfile } from './trainer-ai.mjs';
 import { buildCanonicalCandidatePool, validateCandidateTeam } from './acquisition.mjs';
-import { bagItemsUsed, comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
+import { axesDominate, bagItemsUsed, comparisonAxes, e4BetweenBattleItemCost, grindPlanTotalBattles, levelCoefficientOfVariation, nondominated, teamsWithNondominatedPlan } from './comparison-axes.mjs';
 import { createFieldHmRouteState, normalizeHmPolicy } from './field-hm.mjs';
 import BAG_ITEMS from '../config/bag-items.hgss.json' with { type: 'json' };
 import GRIND_ACCESS_CONFIG from '../config/grind-access.hgss.json' with { type: 'json' };
@@ -6918,7 +6918,7 @@ async function cmdRouteExpDataAudit() {
 
 // Shared setup for route-exp-story-evaluate and the grind plan builder: flags,
 // pret data and the requested team.
-async function loadRouteExpEvaluationSetup() {
+async function loadRouteExpEvaluationSetup(overrides = {}) {
   const routeProfile = normalizeStoryRouteProfile(arg('route-profile', 'standard'));
   const version = String(arg('version', 'HEARTGOLD')).toUpperCase();
   const starterName = String(arg('starter', 'Cyndaquil'));
@@ -6950,13 +6950,13 @@ async function loadRouteExpEvaluationSetup() {
   if (!['route', 'boss'].includes(buildScope)) {
     throw new Error('route-exp-story-evaluate --build-scope must be route or boss');
   }
-  const teamNames = String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
-  const teamKeys = String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamNames = overrides.teamKeys ? [] : String(arg('team', '')).split(',').map(value => value.trim()).filter(Boolean);
+  const teamKeys = overrides.teamKeys || String(arg('team-keys', '')).split(',').map(value => value.trim()).filter(Boolean);
   const teamPreset = String(arg('team-preset', '')).trim().toLowerCase();
   const recipientTargetName = String(arg('recipient-target', '')).trim();
   const recipientActivateBoss = String(arg('recipient-activate', '')).trim();
   const recipientScheduleB64 = String(arg('recipient-schedule-base64', '')).trim();
-  const allowPartialTeam = arg('allow-partial-team', 'false') === 'true';
+  const allowPartialTeam = overrides.allowPartialTeam || arg('allow-partial-team', 'false') === 'true';
 
   if (expProfile === 'ace') {
     throw new Error('route-exp-story-evaluate requires a route EXP profile, not ace');
@@ -7247,7 +7247,7 @@ async function cmdRouteExpStoryEvaluate() {
 // party-wide block (see GRIND_PLAN_PARTY_BLOCK_STEPS). Every
 // nondominated plan that improved retries or level CV over its parent is
 // expanded; the rest are not (no numeric threshold).
-const GRIND_PLAN_BUILDER_FLAGS = new Set(['choice-set', 'party-steps', 'box-retries-ratio', 'box-cv', 'recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
+const GRIND_PLAN_BUILDER_FLAGS = new Set(['starts', 'seed', 'pool-limit', 'choice-set', 'party-steps', 'box-retries-ratio', 'box-cv', 'recheck-runs', 'state', 'state-out', 'workers', 'step-battles', 'max-seconds', 'max-steps', 'batch-in', 'batch-out', 'out-dir', 'shard-count', 'pending', 'inputs', 'step-secs', 'target-shard-children', 'undo-pending']);
 
 // One member fighting with another holding the Exp. Share gives each half the
 // EXP (src/battle/battle_command.c), so swapping the two roles is the same
@@ -7365,11 +7365,9 @@ async function cmdGrindPlanWorker() {
 // CHARTER.md 2026-11-07: cheap team measurement for team generation. Every
 // checkpoint that allows a grind block gets the same party-wide block, at each
 // of --uniform-battles (default 25,50,100,200); one plan per amount.
-async function cmdGrindUniformEvaluate() {
-  const setup = await loadRouteExpEvaluationSetup();
-  const amounts = String(arg('uniform-battles', '25,50,100,200')).split(',').map(Number).filter(value => value >= 0);
+async function measureUniformTeam(setup, team, amounts) {
   const evaluate = plan => evaluateCandidatesWithMoveAccess(
-    setup.team,
+    team,
     setup.story.bosses,
     setup.runs,
     setup.moveAccess,
@@ -7377,7 +7375,6 @@ async function cmdGrindUniformEvaluate() {
     setup.grindPolicy,
     routeExpEvaluationOptions(setup),
   );
-  const started = Date.now();
   const base = await evaluate({});
   const labels = grindPlanChoices(grindPlanLedger(base), 1, { mode: 'party', partySteps: [1] });
   const plans = [];
@@ -7391,16 +7388,209 @@ async function cmdGrindUniformEvaluate() {
       axes: { feasible: axes.feasible, grindBattles: axes.grindBattles, expectedRetries: axes.expectedRetries, levelCv: axes.levelCv },
     });
   }
+  return { checkpoints: labels.length, plans };
+}
+
+function uniformBattlesFromArgs() {
+  return String(arg('uniform-battles', '25,50,100,200')).split(',').map(Number).filter(value => value >= 0);
+}
+
+async function cmdGrindUniformEvaluate() {
+  const setup = await loadRouteExpEvaluationSetup();
+  const started = Date.now();
+  const measured = await measureUniformTeam(setup, setup.team, uniformBattlesFromArgs());
   await flushBattleCache();
   console.log(JSON.stringify({
     team: setup.team.map(member => member.key || member.species || member.name),
-    checkpoints: labels.length,
-    plans,
+    ...measured,
     secs: (Date.now() - started) / 1000,
   }));
 }
 
-async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
+// CHARTER.md 2026-11-07: team generation by coordinate search from fixed
+// starts. Slots 2..6 in turn; every legal replacement in the slot is measured
+// with the uniform grind plans. A start moves to a replacement whose plans
+// dominate all of its current plans (measurement boxes); when several do, one
+// is drawn with the seed. A start ends after a pass with no move. Every
+// measured team is kept in state.archive.
+function coordTeamKey(keys) {
+  return [keys[0], ...keys.slice(1).sort()].join(',');
+}
+
+function coordRandom(text) {
+  let h = 2166136261;
+  for (const char of text) h = Math.imul(h ^ char.charCodeAt(0), 16777619);
+  let t = (h + 0x6D2B79F5) | 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+// a dominates b when every playable plan of b is dominated by a plan of a.
+function coordTeamDominates(a, b, box) {
+  const playable = entry => (entry?.plans || [])
+    .filter(plan => plan.axes?.feasible !== false)
+    .map(plan => grindPlanBoxAxes(plan.axes, box));
+  const ours = playable(a);
+  const theirs = playable(b);
+  if (!ours.length) return false;
+  if (!theirs.length) return true;
+  return theirs.every(other => ours.some(mine => axesDominate(mine, other)));
+}
+
+function coordReplacements(state, start) {
+  const slot = start.slot;
+  const used = new Set(start.team.filter((_, index) => index !== slot).map(key => state.families[key]));
+  return state.pool
+    .filter(key => key !== start.team[slot] && !used.has(state.families[key]))
+    .map(key => start.team.map((member, index) => (index === slot ? key : member)));
+}
+
+async function cmdCoordInit() {
+  const starts = JSON.parse(await fs.readFile(String(arg('starts', '')), 'utf8'));
+  const setup = await loadRouteExpEvaluationSetup({ teamKeys: starts[0], allowPartialTeam: true });
+  const starterKey = candidateIdentity(setup.starter);
+  const state = {
+    version: 'coord-v1',
+    seed: String(arg('seed', '20261107')),
+    box: grindPlanBoxFromArgs(),
+    // --pool-limit is for local checks only.
+    pool: setup.pool.candidates.filter(candidate => candidate.exclusiveGroup !== 'starter').map(candidateIdentity)
+      .slice(0, Number(arg('pool-limit', '0')) || undefined),
+    families: Object.fromEntries(setup.pool.candidates.map(candidate => [candidateIdentity(candidate), candidateFamilyIdentity(candidate)])),
+    starts: starts.map((team, index) => {
+      if (team[0] !== starterKey) throw new Error('start ' + index + ' must begin with ' + starterKey);
+      return { id: index, team, slot: 1, pass: 1, moved: false, done: false, moves: [] };
+    }),
+    archive: {},
+    steps: 0,
+  };
+  await fs.writeFile(String(arg('state-out', '')), JSON.stringify(state));
+  console.log(JSON.stringify({ starts: state.starts.length, pool: state.pool.length }));
+}
+
+async function cmdCoordPrepare() {
+  const state = JSON.parse(await fs.readFile(String(arg('state', '')), 'utf8'));
+  const outDir = String(arg('out-dir', ''));
+  const shardCount = Math.max(1, Math.floor(Number(arg('shard-count', '20'))));
+  await fs.mkdir(outDir, { recursive: true });
+  const pending = new Map();
+  for (const start of state.starts.filter(item => !item.done)) {
+    for (const team of [start.team, ...coordReplacements(state, start)]) {
+      const key = coordTeamKey(team);
+      if (!state.archive[key] && !pending.has(key)) pending.set(key, team);
+    }
+  }
+  const items = [...pending.entries()].map(([id, team]) => ({ id, team }));
+  const done = state.starts.every(item => item.done);
+  const size = Math.max(1, Math.ceil(items.length / shardCount));
+  const shards = [];
+  for (let index = 0; index === 0 || index * size < items.length; index += 1) {
+    await fs.writeFile(path.join(outDir, `batch-${index}.json`), JSON.stringify(items.slice(index * size, (index + 1) * size)));
+    shards.push(index);
+  }
+  await fs.writeFile(path.join(outDir, 'state.json'), JSON.stringify(state));
+  console.log(JSON.stringify({ done, teams: items.length, shards: done ? [] : shards }));
+}
+
+async function cmdCoordWorker() {
+  const batch = JSON.parse(await fs.readFile(String(arg('batch-in', '')), 'utf8'));
+  const results = [];
+  if (batch.length) {
+    const setup = await loadRouteExpEvaluationSetup({ teamKeys: batch[0].team, allowPartialTeam: true });
+    const byKey = new Map(setup.pool.candidates.map(candidate => [candidateIdentity(candidate), candidate]));
+    const amounts = uniformBattlesFromArgs();
+    for (const item of batch) {
+      const started = Date.now();
+      try {
+        const team = item.team.map(key => byKey.get(key));
+        if (team.some(member => !member) || !validateCandidateTeam(team) || !teamRespectsExclusiveGroups(team)) {
+          throw new Error('invalid team');
+        }
+        results.push({ id: item.id, team: item.team, ...(await measureUniformTeam(setup, team, amounts)), secs: (Date.now() - started) / 1000 });
+      } catch (error) {
+        results.push({ id: item.id, team: item.team, error: String(error.message || error), secs: (Date.now() - started) / 1000 });
+      }
+    }
+    await flushBattleCache();
+  }
+  await fs.writeFile(String(arg('batch-out', '')), JSON.stringify({ results, battleCache: battleCacheStats() }));
+}
+
+async function cmdCoordShard() {
+  const batchOut = String(arg('batch-out', ''));
+  const items = JSON.parse(await fs.readFile(String(arg('batch-in', '')), 'utf8'));
+  const workDir = path.join(path.dirname(path.resolve(batchOut)), 'work');
+  await fs.mkdir(workDir, { recursive: true });
+  const started = Date.now();
+  const output = items.length
+    ? await runGrindPlanWorkers(items, {
+      workers: Math.max(1, Math.floor(Number(arg('workers', '1')))),
+      stateDir: workDir,
+      step: 'coord',
+      command: 'coord-worker',
+      pick: ({ id, team }) => ({ id, team }),
+    })
+    : { results: [] };
+  await fs.writeFile(batchOut, JSON.stringify({ results: output.results, secs: (Date.now() - started) / 1000 }));
+  console.log(JSON.stringify({ items: items.length, secs: (Date.now() - started) / 1000, errors: output.results.filter(result => result.error).length }));
+}
+
+async function cmdCoordMerge() {
+  const state = JSON.parse(await fs.readFile(String(arg('state', '')), 'utf8'));
+  for (const file of String(arg('inputs', '')).split(',').filter(Boolean)) {
+    for (const result of JSON.parse(await fs.readFile(file, 'utf8')).results) {
+      state.archive[result.id] = result.error
+        ? { team: result.team, error: result.error }
+        : { team: result.team, plans: result.plans, checkpoints: result.checkpoints };
+    }
+  }
+  state.steps += 1;
+  for (const start of state.starts.filter(item => !item.done)) {
+    const current = state.archive[coordTeamKey(start.team)];
+    if (!current) throw new Error('start ' + start.id + ' current team was not measured');
+    const better = coordReplacements(state, start).filter(team => {
+      const entry = state.archive[coordTeamKey(team)];
+      if (!entry) throw new Error('replacement not measured: ' + coordTeamKey(team));
+      return !entry.error && coordTeamDominates(entry, current, state.box);
+    });
+    if (better.length) {
+      const pick = better[Math.floor(coordRandom([state.seed, start.id, start.pass, start.slot].join('|')) * better.length)];
+      start.moves.push({ pass: start.pass, slot: start.slot, from: start.team[start.slot], to: pick[start.slot], options: better.length });
+      start.team = pick;
+      start.moved = true;
+    }
+    start.slot += 1;
+    if (start.slot >= start.team.length) {
+      if (!start.moved) start.done = true;
+      start.slot = 1;
+      start.pass += 1;
+      start.moved = false;
+    }
+  }
+  await fs.writeFile(String(arg('state-out', '')), JSON.stringify(state));
+  console.log(JSON.stringify(coordSummary(state)));
+}
+
+function coordSummary(state) {
+  const entries = Object.entries(state.archive).filter(([, entry]) => !entry.error);
+  const plans = entries.flatMap(([key, entry]) => entry.plans.map(plan => ({ teamKey: key, axes: plan.axes })));
+  return {
+    done: state.starts.every(start => start.done),
+    steps: state.steps,
+    measured: Object.keys(state.archive).length,
+    errors: Object.values(state.archive).filter(entry => entry.error).length,
+    starts: state.starts.map(start => ({ id: start.id, done: start.done, pass: start.pass, slot: start.slot, moves: start.moves.length, team: start.team })),
+    nondominatedTeams: teamsWithNondominatedPlan(plans, { axesOf: plan => grindPlanBoxAxes(plan.axes, state.box) }),
+  };
+}
+
+async function cmdCoordSummary() {
+  const state = JSON.parse(await fs.readFile(String(arg('state', '')), 'utf8'));
+  console.log(JSON.stringify(coordSummary(state), null, 2));
+}
+
+async function runGrindPlanWorkers(items, { workers, stateDir, step, command = 'grind-plan-worker', pick = ({ id, plan, runs }) => ({ id, plan, ...(runs ? { runs } : {}) }) }) {
   const { spawn } = await import('node:child_process');
   const passArgs = process.argv.slice(3).filter(value => {
     const match = /^--([^=]+)=/.exec(value);
@@ -7414,11 +7604,11 @@ async function runGrindPlanWorkers(items, { workers, stateDir, step }) {
     if (!slice.length) continue;
     const batchIn = path.join(stateDir, `step-${step}-w${index}-in.json`);
     const batchOut = path.join(stateDir, `step-${step}-w${index}-out.json`);
-    await fs.writeFile(batchIn, JSON.stringify(slice.map(({ id, plan, runs }) => ({ id, plan, ...(runs ? { runs } : {}) }))));
+    await fs.writeFile(batchIn, JSON.stringify(slice.map(pick)));
     jobs.push(new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [
         fileURLToPath(import.meta.url),
-        'grind-plan-worker',
+        command,
         ...passArgs,
         `--batch-in=${batchIn}`,
         `--batch-out=${batchOut}`,
@@ -19023,6 +19213,12 @@ const commands = {
   'grind-plan-summary': cmdGrindPlanSummary,
   'grind-plan-recheck': cmdGrindPlanRecheck,
   'grind-uniform-evaluate': cmdGrindUniformEvaluate,
+  'coord-init': cmdCoordInit,
+  'coord-prepare': cmdCoordPrepare,
+  'coord-worker': cmdCoordWorker,
+  'coord-shard': cmdCoordShard,
+  'coord-merge': cmdCoordMerge,
+  'coord-summary': cmdCoordSummary,
   'exp-budget-smoke': cmdExpBudgetSmoke,
   'exp-segment-smoke': cmdExpSegmentSmoke,
   'exp-scheduler-v1-smoke': cmdExpSchedulerV1Smoke,
