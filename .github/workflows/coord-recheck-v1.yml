@@ -1,0 +1,53 @@
+name: coord-recheck-v1
+
+# CHARTER.md 2026-11-08: remeasure the teams in config/coord-recheck.v1.json at
+# 100 runs with the uniform grind plans, keeping per-boss clear rates. Each
+# shard leaves its results in artifact coord-recheck-<shard>.
+
+on:
+  push:
+    branches:
+      - exp/coord-recheck-v1
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: '6'
+  NODE_OPTIONS: --max-old-space-size=12288
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - name: Measure shard
+        run: |
+          mkdir -p results
+          jq --argjson i ${{ matrix.shard }} \
+            '[to_entries[] | select(.key % 20 == $i) | {id: (.value | join(",")), team: .value}]' \
+            config/coord-recheck.v1.json > results/batch.json
+          node src/cli.mjs coord-shard \
+            --batch-in=results/batch.json \
+            --batch-out=results/out-${{ matrix.shard }}.json \
+            --workers=4 --keep-detail=true --route-profile=complete --runs=100 \
+            --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true \
+            --hm-policy=required --grind-policy=planned --uniform-battles=25,50,100,200
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coord-recheck-${{ matrix.shard }}
+          path: hgss_story_sim/results/out-${{ matrix.shard }}.json
+          if-no-files-found: error

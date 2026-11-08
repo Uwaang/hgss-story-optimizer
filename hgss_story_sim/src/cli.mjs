@@ -7386,6 +7386,8 @@ async function measureUniformTeam(setup, team, amounts) {
     plans.push({
       uniformBattles: battles,
       axes: { feasible: axes.feasible, grindBattles: axes.grindBattles, expectedRetries: axes.expectedRetries, levelCv: axes.levelCv },
+      // Per-boss clear rates (p = (wins + 1) / (runs + 2)) for error ranges.
+      ...(arg('keep-detail', 'false') === 'true' ? { runs: setup.runs, retries: axes.detail?.retries || null } : {}),
     });
   }
   return { checkpoints: labels.length, plans };
