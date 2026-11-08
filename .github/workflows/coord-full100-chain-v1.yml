@@ -1,0 +1,101 @@
+name: coord-full100-chain-v1
+
+# CHARTER.md 2026-11-09: remeasure at 100 runs every team the coordinate search
+# run 42383584437 found playable, with per-boss clear rates. 9 rounds in a row;
+# a failed shard does not stop later rounds (rerun it with gh run rerun --failed).
+
+on:
+  push:
+    branches:
+      - exp/coord-full100-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: coord-step-15
+          path: source
+          run-id: 42383584437
+          github-token: ${{ github.token }}
+      - name: List the playable teams
+        run: |
+          mkdir -p out
+          jq -c '.archive | to_entries
+            | map(select(.value.plans and (.value.plans | any(.axes.feasible))))
+            | sort_by(.key) | map({id: .key, team: .value.team})' source/state.json > out/teams.json
+          jq 'length' out/teams.json
+          test "$(jq 'length' out/teams.json)" = "19823"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coord-full100-list
+          path: out/teams.json
+          if-no-files-found: error
+
+  round0:
+    needs: list
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 0
+
+  round1:
+    needs: [list, round0]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 1
+
+  round2:
+    needs: [list, round1]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 2
+
+  round3:
+    needs: [list, round2]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 3
+
+  round4:
+    needs: [list, round3]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 4
+
+  round5:
+    needs: [list, round4]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 5
+
+  round6:
+    needs: [list, round5]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 6
+
+  round7:
+    needs: [list, round6]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 7
+
+  round8:
+    needs: [list, round7]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    uses: ./.github/workflows/coord-full100-round-v1.yml
+    with:
+      round: 8

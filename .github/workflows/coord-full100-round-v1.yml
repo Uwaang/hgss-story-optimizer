@@ -1,0 +1,56 @@
+name: coord-full100-round-v1
+
+# One round of coord-full100-chain-v1: 20 shards of 120 teams each, every
+# shard fits the 6 h job limit (about 510 s per team, 4 workers).
+
+on:
+  workflow_call:
+    inputs:
+      round:
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  HGSS_FETCH_ATTEMPTS: '6'
+  NODE_OPTIONS: --max-old-space-size=12288
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    defaults:
+      run:
+        working-directory: hgss_story_sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm install
+      - uses: actions/download-artifact@v4
+        with:
+          name: coord-full100-list
+          path: hgss_story_sim/results/list
+      - name: Measure shard
+        run: |
+          FROM=$(( (${{ inputs.round }} * 20 + ${{ matrix.shard }}) * 120 ))
+          jq --argjson from "$FROM" '.[$from:($from + 120)]' results/list/teams.json > results/batch.json
+          node src/cli.mjs coord-shard \
+            --batch-in=results/batch.json \
+            --batch-out=results/out.json \
+            --workers=4 --keep-detail=true --route-profile=complete --runs=100 \
+            --entry-level=expected --exp-allocator=boss-aware-soft --e4-grouped-route-risk=true \
+            --hm-policy=required --grind-policy=planned --uniform-battles=25,50,100,200
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coord-full100-${{ inputs.round }}-${{ matrix.shard }}
+          path: hgss_story_sim/results/out.json
+          if-no-files-found: error
